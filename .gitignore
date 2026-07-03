@@ -1,0 +1,9 @@
+node_modules/
+dist/
+dist-server/
+coverage/
+.vite/
+repositories.yaml
+.env
+.env.*
+.DS_Store
