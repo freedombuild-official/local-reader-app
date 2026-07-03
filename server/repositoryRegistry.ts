@@ -1,19 +1,14 @@
 import { access, readFile, realpath } from "node:fs/promises";
-import path from "node:path";
-import { isAbsolute } from "node:path";
-import { parse } from "yaml";
 import { HttpError } from "./errors.js";
+import { parseRepositoryConfig } from "./repositoryConfig.js";
 import type { RepoListItem, RepositoryConfig } from "./types.js";
-
-type RawRegistry = {
-  repositories?: unknown;
-};
 
 export type RepositoryRegistryOptions = {
   configPath: string;
 };
 
 export type RepositoryRegistry = {
+  configPath?: string;
   listRepositoryItems: () => Promise<RepoListItem[]>;
   findRepository: (id: string) => Promise<RepositoryConfig>;
 };
@@ -29,16 +24,11 @@ export async function loadConfigRepositories(configPath: string): Promise<Reposi
     }
     throw error;
   });
-  const parsed = parse(raw) as RawRegistry;
-  if (!Array.isArray(parsed.repositories)) {
-    throw new HttpError(500, "repositories.yaml must contain a repositories array.");
-  }
-
-  return parsed.repositories.map((entry, index) => normalizeRepository(entry, index));
+  return parseRepositoryConfig(raw);
 }
 
 class FileBackedRepositoryRegistry implements RepositoryRegistry {
-  constructor(private readonly configPath: string) {}
+  constructor(public readonly configPath: string) {}
 
   async listRepositoryItems(): Promise<RepoListItem[]> {
     const repos = await loadConfigRepositories(this.configPath);
@@ -61,28 +51,6 @@ class FileBackedRepositoryRegistry implements RepositoryRegistry {
       exists: await pathExists(repo.root),
     };
   }
-}
-
-function normalizeRepository(entry: unknown, index: number): RepositoryConfig {
-  if (!entry || typeof entry !== "object") {
-    throw new HttpError(500, `repositories[${index}] must be an object.`);
-  }
-  const source = entry as Record<string, unknown>;
-  const id = requiredString(source.id, `repositories[${index}].id`);
-  const label = requiredString(source.label, `repositories[${index}].label`);
-  const root = requiredString(source.root, `repositories[${index}].root`);
-  if (!isAbsolute(root)) {
-    throw new HttpError(500, `${id}.root must be an absolute path.`);
-  }
-  const defaultPath = typeof source.defaultPath === "string" ? source.defaultPath.trim() : "";
-  const excludes = Array.isArray(source.excludes) ? source.excludes.filter((value): value is string => typeof value === "string") : [];
-  const fetchRemote = source.fetchRemote === true;
-  return { id, label, root, defaultPath, excludes, fetchRemote };
-}
-
-function requiredString(value: unknown, label: string): string {
-  if (typeof value !== "string" || !value.trim()) throw new HttpError(500, `${label} is required.`);
-  return value.trim();
 }
 
 async function pathExists(target: string): Promise<boolean> {

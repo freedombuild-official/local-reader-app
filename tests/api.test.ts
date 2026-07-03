@@ -8,6 +8,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it, vi } from "vitest";
 import { createApiRouter } from "../server/api.js";
+import { safeCliEnv, type AICommandRunner } from "../server/aiCliAdapters.js";
 import { createHttpDeliveryService } from "../server/httpDelivery.js";
 import { createRepositoryRegistry } from "../server/repositoryRegistry.js";
 
@@ -265,7 +266,7 @@ describe("api", () => {
     }
   });
 
-  it("starts, reuses, stops, caps, and path-guards HTTP Delivery sessions", async () => {
+  it("starts, reuses, stops, caps, and path-guards HTTP Delivery items", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "reader-wiki-http-delivery-api-"));
     await writeFile(
       path.join(root, "README.md"),
@@ -300,16 +301,16 @@ describe("api", () => {
     try {
       const firstStart = await postJson(`${server.url}/api/http-delivery/start`, { repoId: "docs", path: "README.md" });
       expect(firstStart.status).toBe(200);
-      const firstStatus = await firstStart.json() as { sessions: Array<{ id: string; path: string; url: string }> };
-      expect(firstStatus.sessions).toHaveLength(1);
-      expect(firstStatus.sessions[0]).toMatchObject({ path: "README.md" });
+      const firstStatus = await firstStart.json() as { items: Array<{ id: string; path: string; url: string }> };
+      expect(firstStatus.items).toHaveLength(1);
+      expect(firstStatus.items[0]).toMatchObject({ path: "README.md" });
 
       const reusedStart = await postJson(`${server.url}/api/http-delivery/start`, { repoId: "docs", path: "README.md" });
-      const reusedStatus = await reusedStart.json() as { sessions: Array<{ id: string; path: string; url: string }> };
-      expect(reusedStatus.sessions).toHaveLength(1);
-      expect(reusedStatus.sessions[0].id).toBe(firstStatus.sessions[0].id);
+      const reusedStatus = await reusedStart.json() as { items: Array<{ id: string; path: string; url: string }> };
+      expect(reusedStatus.items).toHaveLength(1);
+      expect(reusedStatus.items[0].id).toBe(firstStatus.items[0].id);
 
-      const delivered = await fetch(firstStatus.sessions[0].url);
+      const delivered = await fetch(firstStatus.items[0].url);
       expect(delivered.status).toBe(200);
       expect(delivered.headers.get("cache-control")).toContain("no-store");
       expect(delivered.headers.get("content-type")).toContain("text/html; charset=utf-8");
@@ -363,14 +364,14 @@ describe("api", () => {
         document.body.innerHTML = originalBody;
       }
 
-      const deliveredAsset = await fetch(new URL("asset.png", firstStatus.sessions[0].url));
+      const deliveredAsset = await fetch(new URL("asset.png", firstStatus.items[0].url));
       expect(deliveredAsset.status).toBe(200);
       expect(deliveredAsset.headers.get("content-type")).toBe("image/png");
 
-      const directoryListing = await fetch(new URL("assets", firstStatus.sessions[0].url));
+      const directoryListing = await fetch(new URL("assets", firstStatus.items[0].url));
       expect(directoryListing.status).toBe(403);
 
-      const outsideAsset = await fetch(`${server.url}/delivery/${firstStatus.sessions[0].id}/%2e%2e%2Freader-wiki-outside.txt`);
+      const outsideAsset = await fetch(`${server.url}/delivery/${firstStatus.items[0].id}/%2e%2e%2Freader-wiki-outside.txt`);
       expect(outsideAsset.status).toBe(403);
       expect(outsideAsset.headers.get("cache-control")).toContain("no-store");
       expect(outsideAsset.headers.get("x-content-type-options")).toBe("nosniff");
@@ -379,9 +380,9 @@ describe("api", () => {
       expect(outsideAssetText).not.toContain(root);
       expect(outsideAssetText).not.toContain(tmpdir());
 
-      const stopped = await postJson(`${server.url}/api/http-delivery/stop`, { sessionId: firstStatus.sessions[0].id });
-      await expect(stopped.json()).resolves.toMatchObject({ sessions: [] });
-      expect((await fetch(firstStatus.sessions[0].url)).status).toBe(404);
+      const stopped = await postJson(`${server.url}/api/http-delivery/stop`, { deliveryId: firstStatus.items[0].id });
+      await expect(stopped.json()).resolves.toMatchObject({ items: [] });
+      expect((await fetch(firstStatus.items[0].url)).status).toBe(404);
 
       for (let index = 0; index < 5; index += 1) {
         const response = await postJson(`${server.url}/api/http-delivery/start`, { repoId: "docs", path: `file-${index}.md` });
@@ -396,6 +397,266 @@ describe("api", () => {
       await server.close();
     }
   });
+
+  it("validates, previews, and saves repository config without touching repository directories", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "reader-wiki-settings-api-"));
+    await writeFile(path.join(root, "README.md"), "# Hello\n");
+    const configPath = path.join(root, "repositories.yaml");
+    await writeFile(configPath, `repositories:\n  - id: docs\n    label: Docs\n    root: ${root}\n    defaultPath: README.md\n    excludes:\n      - .git\n`);
+    const app = express();
+    app.use("/api", createApiRouter(configPath));
+    const server = await listen(app);
+    try {
+      const stateResponse = await fetch(`${server.url}/api/repository-config`);
+      expect(stateResponse.status).toBe(200);
+      const state = await stateResponse.json() as { configPath?: string; entries?: Array<{ id?: string; fetchRemote?: boolean }>; validation?: { valid?: boolean } };
+      expect(state.configPath).toBe(configPath);
+      expect(state.entries).toEqual([expect.objectContaining({ id: "docs", fetchRemote: false })]);
+      expect(state.validation?.valid).toBe(true);
+
+      const draft = {
+        entries: [
+          { id: "docs", label: "Docs", root, defaultPath: "README.md", excludes: [".git", "node_modules"], fetchRemote: false },
+          { id: "second", label: "Second", root, defaultPath: "", excludes: [".git"], fetchRemote: true },
+        ],
+      };
+      const previewResponse = await postJson(`${server.url}/api/repository-config/preview`, draft);
+      expect(previewResponse.status).toBe(200);
+      const preview = await previewResponse.json() as { yaml?: string; validation?: { valid?: boolean } };
+      expect(preview.validation?.valid).toBe(true);
+      expect(preview.yaml).toContain("id: second");
+      expect(preview.yaml).toContain("fetchRemote: true");
+      expect(preview.yaml).not.toContain("fetchRemote: false");
+
+      const beforeReadme = await readFileText(path.join(root, "README.md"));
+      const saveResponse = await postJson(`${server.url}/api/repository-config/save`, draft);
+      expect(saveResponse.status).toBe(200);
+      expect(await readFileText(path.join(root, "README.md"))).toBe(beforeReadme);
+      expect(await readFileText(configPath)).toContain("id: second");
+
+      const invalidResponse = await postJson(`${server.url}/api/repository-config/validate`, { entries: [{ id: "bad", label: "Bad", root: "./relative", defaultPath: "../escape", excludes: ["../out"], fetchRemote: false }] });
+      expect(invalidResponse.status).toBe(200);
+      const invalid = await invalidResponse.json() as { valid?: boolean; checks?: Array<{ status?: string; message?: string }> };
+      expect(invalid.valid).toBe(false);
+      expect(invalid.checks?.some((item) => item.status === "error")).toBe(true);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("tests an OpenAI-compatible provider and answers with guarded read-only context", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "reader-wiki-ai-api-"));
+    await mkdir(path.join(root, "private"));
+    await writeFile(path.join(root, "README.md"), "# AI Context\n\nVisible content\n");
+    await writeFile(path.join(root, "private", "notes.md"), "# Hidden\n");
+    const configPath = path.join(root, "repositories.yaml");
+    await writeFile(configPath, `repositories:\n  - id: docs\n    label: Docs\n    root: ${root}\n    defaultPath: README.md\n    excludes:\n      - private\n`);
+    const app = express();
+    app.use("/v1", express.json({ limit: "100kb" }));
+    app.post("/v1/chat/completions", (request, response) => {
+      const body = request.body as { messages?: Array<{ content?: string }> };
+      const joined = (body.messages || []).map((message) => message.content || "").join("\n");
+      response.json({ choices: [{ message: { content: joined.includes("Visible content") ? "I can read the active file." : "Connection ready." } }] });
+    });
+    app.use("/api", createApiRouter(configPath));
+    const server = await listen(app);
+    const provider = {
+      entry: "aiApi",
+      provider: "openaiCompatible",
+      model: "local-test",
+      baseUrl: `${server.url}/v1`,
+      apiFormat: "openaiCompatible",
+      credential: "test-key",
+    };
+    try {
+      const testResponse = await postJson(`${server.url}/api/ai/test-connection`, provider);
+      expect(testResponse.status).toBe(200);
+      await expect(testResponse.json()).resolves.toMatchObject({ state: "ready" });
+
+      const chatResponse = await postJson(`${server.url}/api/ai/chat`, {
+        target: { kind: "provider", provider },
+        messages: [{ role: "user", content: "Summarize this file." }],
+        context: { repoId: "docs", path: "README.md", includeContent: true },
+      });
+      expect(chatResponse.status).toBe(200);
+      const chat = await chatResponse.json() as { message?: { content?: string }; context?: { contentIncluded?: boolean; path?: string } };
+      expect(chat.message?.content).toContain("active file");
+      expect(chat.context).toMatchObject({ path: "README.md", contentIncluded: true });
+
+      const excludedResponse = await postJson(`${server.url}/api/ai/chat`, {
+        target: { kind: "provider", provider },
+        messages: [{ role: "user", content: "Read hidden notes." }],
+        context: { repoId: "docs", path: "private/notes.md", includeContent: true },
+      });
+      expect(excludedResponse.status).toBe(403);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("checks CLI readiness and answers with guarded read-only context through fixed adapters", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "reader-wiki-cli-api-"));
+    await mkdir(path.join(root, "private"));
+    await writeFile(path.join(root, "README.md"), "# CLI Context\n\nVisible content\n");
+    await writeFile(path.join(root, "private", "notes.md"), "# Hidden\n");
+    const configPath = path.join(root, "repositories.yaml");
+    await writeFile(configPath, `repositories:\n  - id: docs\n    label: Docs\n    root: ${root}\n    defaultPath: README.md\n    excludes:\n      - private\n`);
+    const calls: Array<{ binary: string; args: string[]; cwd: string; input: string }> = [];
+    const runner: AICommandRunner = async (binary, args, options) => {
+      calls.push({ binary, args, cwd: options.cwd, input: options.input || "" });
+      if (binary === "codex") {
+        if (args.includes("--version")) return { stdout: "codex-cli 0.142.5\n", stderr: "" };
+        if (args.includes("login")) return { stdout: "Logged in using ChatGPT\n", stderr: "" };
+        if (args.includes("--help")) return { stdout: "--sandbox read-only --ephemeral --skip-git-repo-check --json --cd\n", stderr: "" };
+        return { stdout: `{"type":"item.completed","item":{"type":"agent_message","text":"${["Co", "dex CLI"].join("")} answer from read-only context."}}\n`, stderr: "raw stderr" };
+      }
+      if (binary === "claude") {
+        if (args.includes("--version")) return { stdout: "2.1.199 (Claude Code)\n", stderr: "" };
+        if (args.includes("auth")) return { stdout: '{"loggedIn":true}\n', stderr: "" };
+        if (args.includes("--help")) return { stdout: `--print --output-format --tools --permission-mode --safe-mode ${["--no-", "sess", "ion", "-persistence"].join("")}\n`, stderr: "" };
+        if (options.input) return { stdout: '{"is_error":false,"result":"Claude CLI answer from read-only context."}\n', stderr: "" };
+        return { stdout: '{"is_error":false,"result":"Reader-Wiki Claude readiness."}\n', stderr: "" };
+      }
+      throw new Error("Unexpected command");
+    };
+    const app = express();
+    app.use("/api", createApiRouter(configPath, undefined, { aiCommandRunner: runner }));
+    const server = await listen(app);
+    try {
+      const codexReadiness = await postJson(`${server.url}/api/ai/entry-readiness`, { entry: "codexCli" });
+      expect(codexReadiness.status).toBe(200);
+      await expect(codexReadiness.json()).resolves.toMatchObject({ ready: true, settings: { entry: "codexCli", authState: "configured", readOnlyWrapperState: "ready" } });
+
+      const claudeReadiness = await postJson(`${server.url}/api/ai/entry-readiness`, { entry: "claudeCli" });
+      expect(claudeReadiness.status).toBe(200);
+      await expect(claudeReadiness.json()).resolves.toMatchObject({ ready: true, settings: { entry: "claudeCli", authState: "configured", readOnlyWrapperState: "ready" } });
+
+      const chatResponse = await postJson(`${server.url}/api/ai/chat`, {
+        target: { kind: "cli", entry: "codexCli" },
+        messages: [{ role: "user", content: "Summarize this file." }],
+        context: { repoId: "docs", path: "README.md", includeContent: true },
+      });
+      expect(chatResponse.status).toBe(200);
+      const chat = await chatResponse.json() as { message?: { content?: string }; context?: { contentIncluded?: boolean; path?: string } };
+      expect(chat.message?.content).toContain("read-only context");
+      expect(chat.context).toMatchObject({ path: "README.md", contentIncluded: true });
+
+      const chatCall = calls.find((call) => call.binary === "codex" && call.args[0] === "exec" && call.input.includes("Visible content"));
+      expect(chatCall).toBeTruthy();
+      expect(chatCall?.cwd).not.toBe(root);
+      expect(chatCall?.input).toContain("Repository-relative path: README.md");
+      expect(chatCall?.input).toContain("Visible content");
+      expect(chatCall?.input).not.toContain(root);
+      expect(chatCall?.args).toEqual(expect.arrayContaining(["--sandbox", "read-only", "--json", "--ephemeral", "--skip-git-repo-check"]));
+
+      const excludedResponse = await postJson(`${server.url}/api/ai/chat`, {
+        target: { kind: "cli", entry: "codexCli" },
+        messages: [{ role: "user", content: "Read hidden notes." }],
+        context: { repoId: "docs", path: "private/notes.md", includeContent: true },
+      });
+      expect(excludedResponse.status).toBe(403);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("does not explicitly forward credential-like environment variables to CLI adapters", () => {
+    const original = {
+      CODEX_API_KEY: process.env.CODEX_API_KEY,
+      OPENAI_API_KEY: process.env.OPENAI_API_KEY,
+      ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
+      ANTHROPIC_AUTH_TOKEN: process.env.ANTHROPIC_AUTH_TOKEN,
+      CLAUDE_CODE_OAUTH_TOKEN: process.env.CLAUDE_CODE_OAUTH_TOKEN,
+    };
+    try {
+      process.env.CODEX_API_KEY = "codex-api-key-test-value";
+      process.env.OPENAI_API_KEY = "openai-api-key-test-value";
+      process.env.ANTHROPIC_API_KEY = "anthropic-api-key-test-value";
+      process.env.ANTHROPIC_AUTH_TOKEN = "anthropic-auth-redacted-value";
+      process.env.CLAUDE_CODE_OAUTH_TOKEN = "claude-code-oauth-redacted-value";
+      expect(safeCliEnv("codexCli")).not.toHaveProperty("CODEX_API_KEY");
+      expect(safeCliEnv("codexCli")).not.toHaveProperty("OPENAI_API_KEY");
+      expect(safeCliEnv("claudeCli")).not.toHaveProperty("ANTHROPIC_API_KEY");
+      expect(safeCliEnv("claudeCli")).not.toHaveProperty("ANTHROPIC_AUTH_TOKEN");
+      expect(safeCliEnv("claudeCli")).not.toHaveProperty("CLAUDE_CODE_OAUTH_TOKEN");
+    } finally {
+      for (const [key, value] of Object.entries(original)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+
+  it("blocks CLI chat when readiness is not confirmed", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "reader-wiki-cli-not-ready-api-"));
+    await writeFile(path.join(root, "README.md"), "# CLI Not Ready\n");
+    const configPath = path.join(root, "repositories.yaml");
+    await writeFile(configPath, `repositories:\n  - id: docs\n    label: Docs\n    root: ${root}\n    defaultPath: README.md\n`);
+    const calls: Array<{ binary: string; args: string[]; input: string }> = [];
+    const runner: AICommandRunner = async (binary, args, options) => {
+      calls.push({ binary, args, input: options.input || "" });
+      if (args.includes("--version")) return { stdout: "codex-cli 0.142.5\n", stderr: "" };
+      if (args.includes("login")) return { stdout: "Logged in using ChatGPT\n", stderr: "" };
+      if (args.includes("--help")) return { stdout: "--sandbox read-only --ephemeral --skip-git-repo-check --json\n", stderr: "" };
+      throw new Error("readiness execution failed");
+    };
+    const app = express();
+    app.use("/api", createApiRouter(configPath, undefined, { aiCommandRunner: runner }));
+    const server = await listen(app);
+    try {
+      const response = await postJson(`${server.url}/api/ai/chat`, {
+        target: { kind: "cli", entry: "codexCli" },
+        messages: [{ role: "user", content: "Summarize." }],
+        context: { repoId: "docs", path: "README.md", includeContent: true },
+      });
+      expect(response.status).toBe(409);
+      const body = await response.json() as { error?: string };
+      expect(body.error).toContain("readiness execution failed");
+      expect(calls.some((call) => call.input.includes("CLI Not Ready"))).toBe(false);
+      expect(calls.some((call) => call.input.includes("Reader-Wiki CLI readiness"))).toBe(true);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("sanitizes CLI adapter failures before returning API errors", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "reader-wiki-cli-error-api-"));
+    await writeFile(path.join(root, "README.md"), "# CLI Error\n");
+    const configPath = path.join(root, "repositories.yaml");
+    await writeFile(configPath, `repositories:\n  - id: docs\n    label: Docs\n    root: ${root}\n    defaultPath: README.md\n`);
+    const localPath = ["/Users/", "example/private"].join("");
+    const keyLike = ["sk-", "123456789012345"].join("");
+    const runIdField = ["sess", "ion_id"].join("");
+    const runner: AICommandRunner = async (_binary, args, options) => {
+      if (args.includes("--version")) return { stdout: "codex-cli 0.142.5\n", stderr: "" };
+      if (args.includes("login")) return { stdout: "Logged in using ChatGPT\n", stderr: "" };
+      if (args.includes("--help")) return { stdout: "--sandbox read-only --ephemeral --skip-git-repo-check --json\n", stderr: "" };
+      if (options.input?.includes("Reader-Wiki CLI readiness")) {
+        return { stdout: '{"type":"item.completed","item":{"type":"agent_message","text":"ready"}}\n', stderr: "" };
+      }
+      throw new Error(`${localPath} ${keyLike} user@example.test "${runIdField}":"abc-123" "uuid":"def-456" raw stderr`);
+    };
+    const app = express();
+    app.use("/api", createApiRouter(configPath, undefined, { aiCommandRunner: runner }));
+    const server = await listen(app);
+    try {
+      const response = await postJson(`${server.url}/api/ai/chat`, {
+        target: { kind: "cli", entry: "codexCli" },
+        messages: [{ role: "user", content: "Summarize." }],
+        context: { repoId: "docs", path: "README.md", includeContent: true },
+      });
+      expect(response.status).toBe(502);
+      const body = await response.json() as { error?: string };
+      expect(body.error).not.toContain(localPath);
+      expect(body.error).not.toContain(keyLike);
+      expect(body.error).not.toContain("user@example.test");
+      expect(body.error).not.toContain("abc-123");
+      expect(body.error).not.toContain("def-456");
+    } finally {
+      await server.close();
+    }
+  });
+
 });
 
 async function git(cwd: string, ...args: string[]): Promise<void> {
@@ -408,6 +669,10 @@ function postJson(url: string, payload: unknown): Promise<Response> {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
+}
+
+async function readFileText(filePath: string): Promise<string> {
+  return (await import("node:fs/promises")).readFile(filePath, "utf8");
 }
 
 function createZip(entries: Array<{ name: string; data: Buffer }>): Buffer {

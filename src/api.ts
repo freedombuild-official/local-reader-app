@@ -1,4 +1,20 @@
-import type { FileResponse, HttpDeliveryStatus, RepoListItem, RepoOpenResponse, TreeNode } from "./types";
+import type {
+  AIChatRequest,
+  AIChatResponse,
+  AIConnectionStatus,
+  AICliEntryKind,
+  AIProviderSettings,
+  CliAIEntryReadiness,
+  FileResponse,
+  HttpDeliveryStatus,
+  RepoListItem,
+  RepoOpenResponse,
+  RepositoryConfigDraft,
+  RepositoryConfigPreview,
+  RepositoryConfigState,
+  RepositoryConfigValidation,
+  TreeNode,
+} from "./types";
 
 export async function fetchRepos(): Promise<RepoListItem[]> {
   const data = await requestJson<{ repositories: RepoListItem[] }>("/api/repos");
@@ -36,11 +52,64 @@ export async function startHttpDelivery(repoId: string, path: string): Promise<H
   });
 }
 
-export async function stopHttpDelivery(sessionId: string): Promise<HttpDeliveryStatus> {
+export async function stopHttpDelivery(deliveryId: string): Promise<HttpDeliveryStatus> {
   return requestJson<HttpDeliveryStatus>("/api/http-delivery/stop", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ sessionId }),
+    body: JSON.stringify({ deliveryId }),
+  });
+}
+
+export async function fetchRepositoryConfig(): Promise<RepositoryConfigState> {
+  return requestJson<RepositoryConfigState>("/api/repository-config");
+}
+
+export async function validateRepositoryConfig(draft: RepositoryConfigDraft): Promise<RepositoryConfigValidation> {
+  return requestJson<RepositoryConfigValidation>("/api/repository-config/validate", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(draft),
+  });
+}
+
+export async function previewRepositoryConfig(draft: RepositoryConfigDraft): Promise<RepositoryConfigPreview> {
+  return requestJson<RepositoryConfigPreview>("/api/repository-config/preview", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(draft),
+  });
+}
+
+export async function saveRepositoryConfig(draft: RepositoryConfigDraft): Promise<RepositoryConfigState> {
+  return requestJson<RepositoryConfigState>("/api/repository-config/save", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(draft),
+  });
+}
+
+export async function testAIProviderConnection(provider: AIProviderSettings): Promise<AIConnectionStatus> {
+  return requestJson<AIConnectionStatus>("/api/ai/test-connection", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(provider),
+  });
+}
+
+export async function fetchAIEntryReadiness(entry: AICliEntryKind): Promise<CliAIEntryReadiness> {
+  return requestJson<CliAIEntryReadiness>("/api/ai/entry-readiness", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ entry }),
+  });
+}
+
+export async function sendAIChatMessage(request: AIChatRequest, signal?: AbortSignal): Promise<AIChatResponse> {
+  return requestJson<AIChatResponse>("/api/ai/chat", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(request),
+    signal,
   });
 }
 

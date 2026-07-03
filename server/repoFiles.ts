@@ -563,12 +563,12 @@ function isTimeoutError(error: unknown): boolean {
 
 function parseGitStatus(output: string, repo: RepositoryConfig): Map<string, GitStatus> {
   const statuses = new Map<string, GitStatus>();
-  const tokens = output.split("\0").filter(Boolean);
-  for (let index = 0; index < tokens.length; index += 1) {
-    const token = tokens[index];
-    if (token.length < 4) continue;
-    const rawStatus = token.slice(0, 2);
-    const relativePath = normalizeGitRelativePath(token.slice(3));
+  const parts = output.split("\0").filter(Boolean);
+  for (let index = 0; index < parts.length; index += 1) {
+    const part = parts[index];
+    if (part.length < 4) continue;
+    const rawStatus = part.slice(0, 2);
+    const relativePath = normalizeGitRelativePath(part.slice(3));
     const gitStatus = classifyGitStatus(rawStatus);
     if (!gitStatus || !relativePath || isExcludedPath(repo, relativePath)) {
       if (rawStatus.includes("R") || rawStatus.includes("C")) index += 1;

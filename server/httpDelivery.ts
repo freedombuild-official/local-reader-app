@@ -7,7 +7,7 @@ import { HttpError, isHttpError } from "./errors.js";
 import { renderMarkdown } from "./markdown.js";
 import { isExcludedRealPath, isInsideRoot, relativePathFromRoot, resolveRepoPath, type ResolvedRepoPath } from "./pathGuard.js";
 import type { RepositoryRegistry } from "./repositoryRegistry.js";
-import type { HttpDeliverySessionStatus, RepositoryConfig } from "./types.js";
+import type { HttpDeliveryItemStatus, RepositoryConfig } from "./types.js";
 
 export const HTTP_DELIVERY_MAX_SESSIONS = 5;
 
@@ -142,23 +142,23 @@ const MARKDOWN_DELIVERY_CSP = [
   "form-action 'none'",
 ].join("; ");
 
-type InternalSession = HttpDeliverySessionStatus;
+type InternalSession = HttpDeliveryItemStatus;
 
 export type HttpDeliveryService = {
   router: Router;
-  status: () => { state: "idle" | "running"; sessions: HttpDeliverySessionStatus[] };
-  start: (payload: { repoId: string; path: string; baseUrl: string }) => Promise<{ state: "idle" | "running"; sessions: HttpDeliverySessionStatus[] }>;
-  stop: (sessionId: string) => { state: "idle" | "running"; sessions: HttpDeliverySessionStatus[] };
+  status: () => { state: "idle" | "running"; items: HttpDeliveryItemStatus[] };
+  start: (payload: { repoId: string; path: string; baseUrl: string }) => Promise<{ state: "idle" | "running"; items: HttpDeliveryItemStatus[] }>;
+  stop: (deliveryId: string) => { state: "idle" | "running"; items: HttpDeliveryItemStatus[] };
 };
 
 export function createHttpDeliveryService(registry: RepositoryRegistry): HttpDeliveryService {
-  const sessions = new Map<string, InternalSession>();
+  const items = new Map<string, InternalSession>();
   const router = Router();
 
   function publicStatus() {
     return {
-      state: sessions.size > 0 ? ("running" as const) : ("idle" as const),
-      sessions: Array.from(sessions.values()).sort((left, right) => left.startedAt.localeCompare(right.startedAt)),
+      state: items.size > 0 ? ("running" as const) : ("idle" as const),
+      items: Array.from(items.values()).sort((left, right) => left.startedAt.localeCompare(right.startedAt)),
     };
   }
 
@@ -168,13 +168,13 @@ export function createHttpDeliveryService(registry: RepositoryRegistry): HttpDel
     const fileStat = await stat(resolved.realPath);
     if (!fileStat.isFile()) throw new HttpError(400, "HTTP Delivery requires a file path.");
 
-    const existing = Array.from(sessions.values()).find((session) => session.repoId === repo.id && session.path === resolved.relativePath);
+    const existing = Array.from(items.values()).find((item) => item.repoId === repo.id && item.path === resolved.relativePath);
     if (existing) return publicStatus();
-    if (sessions.size >= HTTP_DELIVERY_MAX_SESSIONS) throw new HttpError(409, `HTTP Delivery supports up to ${HTTP_DELIVERY_MAX_SESSIONS} active files.`);
+    if (items.size >= HTTP_DELIVERY_MAX_SESSIONS) throw new HttpError(409, `HTTP Delivery supports up to ${HTTP_DELIVERY_MAX_SESSIONS} active files.`);
 
     const id = randomUUID();
     const url = `${payload.baseUrl.replace(/\/$/, "")}/delivery/${encodeURIComponent(id)}/${encodeURIComponent(path.basename(resolved.relativePath))}`;
-    sessions.set(id, {
+    items.set(id, {
       id,
       repoId: repo.id,
       path: resolved.relativePath,
@@ -184,17 +184,17 @@ export function createHttpDeliveryService(registry: RepositoryRegistry): HttpDel
     return publicStatus();
   }
 
-  function stop(sessionId: string) {
-    sessions.delete(sessionId);
+  function stop(deliveryId: string) {
+    items.delete(deliveryId);
     return publicStatus();
   }
 
   async function handleDeliveryRequest(request: Request, response: Response, next: NextFunction) {
     try {
-      const session = sessions.get(String(request.params.sessionId || ""));
-      if (!session) throw new HttpError(404, "HTTP Delivery session was not found.");
-      const repo = await registry.findRepository(session.repoId);
-      const resolved = await resolveRepoPath(repo, session.path);
+      const item = items.get(String(request.params.deliveryId || ""));
+      if (!item) throw new HttpError(404, "HTTP Delivery item was not found.");
+      const repo = await registry.findRepository(item.repoId);
+      const resolved = await resolveRepoPath(repo, item.path);
       const deliveryPath = String(request.params[0] || "");
       const deliveryFile = await resolveDeliveryFile(repo, resolved, deliveryPath);
       const fileStat = await stat(deliveryFile.realPath);
@@ -219,8 +219,8 @@ export function createHttpDeliveryService(registry: RepositoryRegistry): HttpDel
     }
   }
 
-  router.get("/:sessionId", handleDeliveryRequest);
-  router.get("/:sessionId/*", handleDeliveryRequest);
+  router.get("/:deliveryId", handleDeliveryRequest);
+  router.get("/:deliveryId/*", handleDeliveryRequest);
   router.use((error: unknown, _request: Request, response: Response, next: NextFunction) => {
     if (response.headersSent) {
       next(error);

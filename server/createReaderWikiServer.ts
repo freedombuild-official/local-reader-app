@@ -34,7 +34,7 @@ export async function startReaderWikiServer(options: ReaderWikiServerOptions = {
   const httpDelivery = createHttpDeliveryService(repositoryRegistry);
   const app = express();
 
-  app.use("/api", createApiRouter(repositoryRegistry, httpDelivery));
+  app.use("/api", createApiRouter(repositoryRegistry, httpDelivery, { configPath, packageRoot }));
   app.use("/delivery", httpDelivery.router);
 
   const hmrPort = options.dev ? await resolveHmrPort(options.hmrPort, options.host) : undefined;
@@ -66,6 +66,7 @@ async function createViteMiddleware({ packageRoot, hmrPort }: { packageRoot: str
   const { createServer } = await import("vite");
   return createServer({
     root: packageRoot,
+    configLoader: "runner",
     server: { middlewareMode: true, ...(hmrPort ? { hmr: { port: hmrPort } } : {}) },
     appType: "spa",
   });

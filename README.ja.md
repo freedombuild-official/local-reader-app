@@ -69,7 +69,7 @@ Reader-Wiki は、登録済みリポジトリ root 内にある Markdown、HTML�
 
 Markdown と HTML ファイルは `Rendered` と `Source` を切り替えられます。`Source` は読みやすいように長い行を折り返します。コード、YAML、テキストファイルは、行番号と横スクロール付きの `Raw` code viewer で表示します。Rendered Markdown はカード枠で囲まず、本文として表示します。codeblock は高コントラストで横スクロールできる style にしています。
 
-サイドパネルには `Outline` と `Memo` があります。`Outline` は `Table of Contents` として Markdown heading を表示し、項目をクリックすると中央 viewer の該当 heading へスクロールします。`Memo` はブラウザ UI 内の session-only scratchpad であり、リポジトリ内のファイルを保存・編集しません。Memo は `Raw` 編集、`Render` markdown preview、copy、download、delete の icon button に対応します。
+サイドパネルには `Outline` と `Memo` があります。`Outline` は `Table of Contents` として Markdown heading を表示し、項目をクリックすると中央 viewer の該当 heading へスクロールします。`Memo` はブラウザ UI 内だけの scratchpad であり、リポジトリ内のファイルを保存・編集しません。Memo は `Raw` 編集、`Render` markdown preview、copy、download、delete の icon button に対応します。
 
 ## 安全境界
 

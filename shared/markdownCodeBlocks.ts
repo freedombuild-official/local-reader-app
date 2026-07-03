@@ -24,19 +24,19 @@ const CODE_TOOLBAR_HTML = [
 type MarkdownRenderRule = NonNullable<MarkdownIt["renderer"]["rules"]["fence"]>;
 
 export function installCodeBlockRule(markdown: MarkdownIt): void {
-  markdown.renderer.rules.fence = (tokens, idx, options) => {
-    const token = tokens[idx];
-    const info = token.info ? unescapeAll(token.info).trim() : "";
+  markdown.renderer.rules.fence = (items, idx, options) => {
+    const item = items[idx];
+    const info = item.info ? unescapeAll(item.info).trim() : "";
     const langName = info ? info.split(/\s+/g)[0] : "";
-    const highlighted = options.highlight?.(token.content, langName, "") || escapeHtml(token.content);
+    const highlighted = options.highlight?.(item.content, langName, "") || escapeHtml(item.content);
     if (highlighted.startsWith("<pre")) return wrapMarkdownCodeBlock(highlighted);
     const langClass = langName ? ` class="${options.langPrefix}${escapeHtmlAttribute(langName)}"` : "";
     return wrapMarkdownCodeBlock(`<pre><code${langClass}>${highlighted}</code></pre>`);
   };
 
-  const renderIndentedCodeBlock: MarkdownRenderRule = (tokens, idx, _options, _env, slf) => {
-    const token = tokens[idx];
-    return wrapMarkdownCodeBlock(`<pre${slf.renderAttrs(token)}><code>${escapeHtml(token.content)}</code></pre>`);
+  const renderIndentedCodeBlock: MarkdownRenderRule = (items, idx, _options, _env, slf) => {
+    const item = items[idx];
+    return wrapMarkdownCodeBlock(`<pre${slf.renderAttrs(item)}><code>${escapeHtml(item.content)}</code></pre>`);
   };
   markdown.renderer.rules.code_block = renderIndentedCodeBlock;
 }

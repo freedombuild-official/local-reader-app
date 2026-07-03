@@ -1,15 +1,30 @@
 import path from "node:path";
 import { json as expressJson, type NextFunction, type Request, type Response, Router } from "express";
 import { HttpError, isHttpError } from "./errors.js";
+import { buildAIChatContext } from "./aiContext.js";
+import { requestCliAIChatCompletion, type AICommandRunner } from "./aiCliAdapters.js";
+import { probeCliEntryReadiness } from "./aiEntries.js";
+import { requestAIChatCompletion, testAIConnection } from "./aiProviders.js";
 import type { HttpDeliveryService } from "./httpDelivery.js";
 import { createRepositoryRegistry, type RepositoryRegistry } from "./repositoryRegistry.js";
+import { loadRepositoryConfigState, previewRepositoryConfig, saveRepositoryConfigDraft, validateRepositoryConfigDraft } from "./repositoryConfig.js";
 import { readGitStatusEntries, readRepoFile, readTree, readTreeSnapshot, resolveRepoImage, resolveRepoPdf, syncRepository } from "./repoFiles.js";
+import type { AIChatRequest, AIProviderSettings, RepositoryConfigDraft } from "./types.js";
 
-export function createApiRouter(registryOrConfigPath: RepositoryRegistry | string, httpDelivery?: HttpDeliveryService): Router {
+type ApiRouterOptions = {
+  configPath?: string;
+  packageRoot?: string;
+  aiCommandRunner?: AICommandRunner;
+};
+
+export function createApiRouter(registryOrConfigPath: RepositoryRegistry | string, httpDelivery?: HttpDeliveryService, options: ApiRouterOptions = {}): Router {
   const router = Router();
   const registry = typeof registryOrConfigPath === "string" ? createRepositoryRegistry({ configPath: registryOrConfigPath }) : registryOrConfigPath;
+  const configPath = path.resolve(options.configPath || (typeof registryOrConfigPath === "string" ? registryOrConfigPath : registry.configPath || path.join(process.cwd(), "repositories.yaml")));
   router.use("/http-delivery", expressJson({ limit: "20kb" }));
   router.use("/repo-open", expressJson({ limit: "20kb" }));
+  router.use("/repository-config", expressJson({ limit: "100kb" }));
+  router.use("/ai", expressJson({ limit: "140kb" }));
 
   router.get("/repos", async (_request, response, next) => {
     try {
@@ -52,6 +67,42 @@ export function createApiRouter(registryOrConfigPath: RepositoryRegistry | strin
     }
   });
 
+  router.get("/repository-config", async (_request, response, next) => {
+    try {
+      setNoStore(response);
+      response.json(await loadRepositoryConfigState(configPath, options.packageRoot));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post("/repository-config/validate", async (request, response, next) => {
+    try {
+      setNoStore(response);
+      response.json(await validateRepositoryConfigDraft(request.body as RepositoryConfigDraft, configPath));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post("/repository-config/preview", async (request, response, next) => {
+    try {
+      setNoStore(response);
+      response.json(await previewRepositoryConfig(request.body as RepositoryConfigDraft, configPath));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post("/repository-config/save", async (request, response, next) => {
+    try {
+      setNoStore(response);
+      response.json(await saveRepositoryConfigDraft(request.body as RepositoryConfigDraft, configPath));
+    } catch (error) {
+      next(error);
+    }
+  });
+
   router.get("/file", async (request, response, next) => {
     try {
       const repo = await registry.findRepository(String(request.query.repo || ""));
@@ -64,7 +115,43 @@ export function createApiRouter(registryOrConfigPath: RepositoryRegistry | strin
 
   router.get("/http-delivery/status", (_request, response) => {
     setNoStore(response);
-    response.json(httpDelivery?.status() || { state: "idle", sessions: [] });
+    response.json(httpDelivery?.status() || { state: "idle", items: [] });
+  });
+
+  router.post("/ai/test-connection", async (request, response, next) => {
+    try {
+      setNoStore(response);
+      response.json(await testAIConnection(request.body as AIProviderSettings));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post("/ai/entry-readiness", async (request, response, next) => {
+    try {
+      setNoStore(response);
+      const entry = String(request.body?.entry || "");
+      if (entry !== "codexCli" && entry !== "claudeCli") throw new HttpError(400, "Unknown CLI entry.");
+      response.json(await probeCliEntryReadiness(entry, options.aiCommandRunner));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post("/ai/chat", async (request, response, next) => {
+    try {
+      const body = request.body as AIChatRequest;
+      setNoStore(response);
+      const context = await buildAIChatContext(registry, body.context);
+      const target = body.target || (body.provider ? { kind: "provider" as const, provider: body.provider } : null);
+      if (!target) throw new HttpError(400, "Select an AI Chat target.");
+      const result = target.kind === "provider"
+        ? await requestAIChatCompletion({ provider: target.provider, messages: body.messages, context })
+        : await requestCheckedCliAIChatCompletion({ entry: target.entry, messages: body.messages, context, runner: options.aiCommandRunner });
+      response.json({ message: { role: "assistant", content: result.content }, context, status: result.status });
+    } catch (error) {
+      next(error);
+    }
   });
 
   router.post("/http-delivery/start", async (request, response, next) => {
@@ -81,7 +168,7 @@ export function createApiRouter(registryOrConfigPath: RepositoryRegistry | strin
     try {
       if (!httpDelivery) throw new HttpError(503, "HTTP Delivery is not available.");
       setNoStore(response);
-      response.json(httpDelivery.stop(String(request.body?.sessionId || "")));
+      response.json(httpDelivery.stop(String(request.body?.deliveryId || "")));
     } catch (error) {
       next(error);
     }
@@ -140,4 +227,10 @@ function requestBaseUrl(request: Request): string {
   const forwardedProto = String(request.headers["x-forwarded-proto"] || "").split(",")[0].trim();
   const protocol = forwardedProto || request.protocol || "http";
   return `${protocol}://${request.get("host") || "localhost"}`;
+}
+
+async function requestCheckedCliAIChatCompletion(request: Parameters<typeof requestCliAIChatCompletion>[0]) {
+  const readiness = await probeCliEntryReadiness(request.entry, request.runner);
+  if (!readiness.ready) throw new HttpError(409, readiness.status.message || "CLI readiness is not confirmed.");
+  return requestCliAIChatCompletion(request);
 }

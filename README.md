@@ -69,7 +69,7 @@ The browser UI has a repository tree, a central viewer, and a side panel. Openin
 
 Markdown and HTML files can switch between `Rendered` and `Source`; `Source` wraps long lines for reading. Code, YAML, and text files use a `Raw` code viewer with line numbers and horizontal scrolling. Rendered Markdown is shown as document content without a card frame, and code blocks use a high-contrast scrollable style.
 
-The side panel contains `Outline` and `Memo`. `Outline` shows a `Table of Contents`; clicking a Markdown heading scrolls the central viewer to that heading. `Memo` is a session-only scratchpad in the browser UI; it does not save or edit repository files. Memo supports `Raw` editing, `Render` markdown preview, and icon buttons for copy, download, and delete.
+The side panel contains `Outline` and `Memo`. `Outline` shows a `Table of Contents`; clicking a Markdown heading scrolls the central viewer to that heading. `Memo` is a browser-only scratchpad in the browser UI; it does not save or edit repository files. Memo supports `Raw` editing, `Render` markdown preview, and icon buttons for copy, download, and delete.
 
 ## Safety Boundary
 

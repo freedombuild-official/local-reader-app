@@ -16,21 +16,27 @@ import {
   FolderOpen,
   Image as ImageIcon,
   ListCollapse,
+  MessageSquare,
   Package,
   ScrollText,
+  Settings as SettingsIcon,
   ShieldCheck,
   Terminal,
   Trash2,
   type LucideIcon,
 } from "lucide-react";
 import { fetchFile, fetchHttpDeliveryStatus, fetchRepos, fetchTree, imageFileUrl, openRepository, pdfFileUrl, startHttpDelivery, stopHttpDelivery } from "./api";
-import type { DiffStatus, FileResponse, HttpDeliverySessionStatus, HttpDeliveryStatus, RepoListItem, RepoSyncStatus, TreeNode, TreeSnapshot } from "./types";
+import type { DiffStatus, FileResponse, HttpDeliveryItemStatus, HttpDeliveryStatus, RepoListItem, RepoSyncStatus, TreeNode, TreeSnapshot } from "./types";
+import { AIChatPanel } from "./AIChatPanel";
+import { SettingsView } from "./SettingsView";
+import { defaultAISettings, defaultBasicSettings, loadBasicSettings, persistBasicSettings, type AISettingsState, type BasicSettings } from "./settingsState";
 import { injectMarkdownCodeToolbarButtons, installCodeBlockRule } from "../shared/markdownCodeBlocks";
 import { installTableScrollRule } from "../shared/markdownTableScroll";
 
 type TreeCache = TreeSnapshot;
 type ViewMode = "rendered" | "source" | "raw";
-type RightPanelMode = "outline" | "memo";
+type AppView = "viewer" | "settings";
+type RightPanelMode = "outline" | "memo" | "aiChat";
 type MemoMode = "raw" | "render";
 type CopyState = "idle" | "copied" | "error";
 type RepoSyncViewStatus = RepoSyncStatus | { state: "syncing"; message: string; fetched: false };
@@ -76,6 +82,10 @@ installTableScrollRule(memoMarkdown);
 installCodeBlockRule(memoMarkdown);
 
 export function App() {
+  const [appView, setAppView] = useState<AppView>("viewer");
+  const [basicSettings, setBasicSettings] = useState<BasicSettings>(defaultBasicSettings);
+  const [basicSaveError, setBasicSaveError] = useState("");
+  const [aiSettings, setAISettings] = useState<AISettingsState>(defaultAISettings);
   const [repos, setRepos] = useState<RepoListItem[]>([]);
   const [activeRepoId, setActiveRepoId] = useState("");
   const [treeCache, setTreeCache] = useState<TreeCache>({});
@@ -91,7 +101,7 @@ export function App() {
   const [tabNotice, setTabNotice] = useState("");
   const [fileCopyState, setFileCopyState] = useState<CopyState>("idle");
   const [pathMenu, setPathMenu] = useState<PathContextMenu>(null);
-  const [httpDeliveryStatus, setHttpDeliveryStatus] = useState<HttpDeliveryStatus>({ state: "idle", sessions: [] });
+  const [httpDeliveryStatus, setHttpDeliveryStatus] = useState<HttpDeliveryStatus>({ state: "idle", items: [] });
   const [httpDeliveryError, setHttpDeliveryError] = useState("");
   const [httpDeliveryPendingPath, setHttpDeliveryPendingPath] = useState("");
   const [httpDeliveryStoppingIds, setHttpDeliveryStoppingIds] = useState<Set<string>>(() => new Set());
@@ -102,6 +112,12 @@ export function App() {
   const pathMenuRef = useRef<HTMLDivElement | null>(null);
   const viewerBodyRef = useRef<HTMLDivElement | null>(null);
   const repoLoadTokenRef = useRef(0);
+
+  useEffect(() => {
+    const loaded = loadBasicSettings();
+    setBasicSettings(loaded.settings);
+    setBasicSaveError(loaded.error);
+  }, []);
 
   const activeRepo = useMemo(() => repos.find((repo) => repo.id === activeRepoId) || null, [activeRepoId, repos]);
   const activeRepoSyncStatus = activeRepoId ? repoSyncByRepo[activeRepoId] || null : null;
@@ -116,18 +132,23 @@ export function App() {
   const canCopyActiveFile = Boolean(activeFile && isCopyableFileKind(activeFile.kind));
   const fileCopyLabel =
     fileCopyState === "copied" ? "File content copied" : fileCopyState === "error" ? "File content copy failed" : "Copy file content";
-  const currentHttpDeliverySession = useMemo(
-    () => httpDeliveryStatus.sessions.find((session) => session.repoId === activeRepoId && session.path === selectedPath) || null,
-    [activeRepoId, httpDeliveryStatus.sessions, selectedPath],
+  const currentHttpDeliveryItem = useMemo(
+    () => httpDeliveryStatus.items.find((item) => item.repoId === activeRepoId && item.path === selectedPath) || null,
+    [activeRepoId, httpDeliveryStatus.items, selectedPath],
   );
   const canDeliverActiveFile = Boolean(activeFile && selectedPath && activeFile.fileInfo.viewerStatus !== "deleted");
-  const httpDeliveryAtCapacity = httpDeliveryStatus.sessions.length >= HTTP_DELIVERY_MAX_SESSIONS;
-  const httpDeliveryButtonDisabled = Boolean(httpDeliveryPendingPath || (!currentHttpDeliverySession && httpDeliveryAtCapacity));
-  const httpDeliveryButtonLabel = currentHttpDeliverySession
+  const httpDeliveryAtCapacity = httpDeliveryStatus.items.length >= HTTP_DELIVERY_MAX_SESSIONS;
+  const httpDeliveryButtonDisabled = Boolean(httpDeliveryPendingPath || (!currentHttpDeliveryItem && httpDeliveryAtCapacity));
+  const httpDeliveryButtonLabel = currentHttpDeliveryItem
     ? "HTTP Delivery active"
     : httpDeliveryAtCapacity
       ? `HTTP Delivery supports up to ${HTTP_DELIVERY_MAX_SESSIONS} files`
       : "Start HTTP Delivery";
+
+  const updateBasicSettings = useCallback((settings: BasicSettings) => {
+    setBasicSettings(settings);
+    setBasicSaveError(persistBasicSettings(settings));
+  }, []);
 
   const loadTree = useCallback(async (repoId: string, path: string) => {
     const nodes = await fetchTree(repoId, path);
@@ -244,6 +265,15 @@ export function App() {
     },
     [activeTabByRepo, openFile, refreshFileTab, tabsByRepo],
   );
+
+  const reloadRepositoriesAfterSettingsSave = useCallback(async () => {
+    const nextRepos = await fetchRepos();
+    setRepos(nextRepos);
+    const stillActive = nextRepos.some((repo) => repo.id === activeRepoId);
+    if (!stillActive && nextRepos[0]) {
+      await selectRepo(nextRepos[0]);
+    }
+  }, [activeRepoId, selectRepo]);
 
   useEffect(() => {
     let cancelled = false;
@@ -441,8 +471,8 @@ export function App() {
     try {
       const status = await startHttpDelivery(repoId, path);
       setHttpDeliveryStatus(status);
-      const session = findHttpDeliverySession(status, repoId, path);
-      if (session) navigateHttpDeliveryTab(deliveryTab, session.url);
+      const item = findHttpDeliveryItem(status, repoId, path);
+      if (item) navigateHttpDeliveryTab(deliveryTab, item.url);
       else closePendingHttpDeliveryTab(deliveryTab);
     } catch (nextError) {
       closePendingHttpDeliveryTab(deliveryTab);
@@ -452,17 +482,17 @@ export function App() {
     }
   }
 
-  async function stopDeliverySession(sessionId: string) {
-    setHttpDeliveryStoppingIds((current) => new Set(current).add(sessionId));
+  async function stopDeliveryItem(deliveryId: string) {
+    setHttpDeliveryStoppingIds((current) => new Set(current).add(deliveryId));
     setHttpDeliveryError("");
     try {
-      setHttpDeliveryStatus(await stopHttpDelivery(sessionId));
+      setHttpDeliveryStatus(await stopHttpDelivery(deliveryId));
     } catch (nextError) {
       setHttpDeliveryError(nextError instanceof Error ? nextError.message : String(nextError));
     } finally {
       setHttpDeliveryStoppingIds((current) => {
         const next = new Set(current);
-        next.delete(sessionId);
+        next.delete(deliveryId);
         return next;
       });
     }
@@ -503,8 +533,24 @@ export function App() {
     target?.focus({ preventScroll: true });
   }
 
+  if (appView === "settings") {
+    return (
+      <SettingsView
+        basicSettings={basicSettings}
+        aiSettings={aiSettings}
+        basicSaveError={basicSaveError}
+        onBack={() => setAppView("viewer")}
+        onBasicSettingsChange={updateBasicSettings}
+        onAISettingsChange={setAISettings}
+        onRepositoriesChanged={reloadRepositoriesAfterSettingsSave}
+      />
+    );
+  }
+
+  const appShellClass = `app-shell font-${basicSettings.fontSize} layout-${basicSettings.layout} color-${basicSettings.colorMode}`;
+
   return (
-    <main className="app-shell">
+    <main className={appShellClass}>
       <aside className="sidebar" aria-label="Repositories and files">
         <button
           type="button"
@@ -544,7 +590,7 @@ export function App() {
             {visibleRepoSyncStatus.message}
           </p>
         ) : null}
-        <HttpDeliveryPanel status={httpDeliveryStatus} stoppingSessionIds={httpDeliveryStoppingIds} error={httpDeliveryError} onStop={(sessionId) => void stopDeliverySession(sessionId)} />
+        <HttpDeliveryPanel status={httpDeliveryStatus} stoppingItemIds={httpDeliveryStoppingIds} error={httpDeliveryError} onStop={(deliveryId) => void stopDeliveryItem(deliveryId)} />
         {repos.length === 0 && !loading ? <p className="state-text">No repositories are configured.</p> : null}
         {activeRepoId ? (
           <div className="tree-section" ref={treeSectionRef} onScroll={(event) => setTreeScrollTop(event.currentTarget.scrollTop)}>
@@ -586,6 +632,11 @@ export function App() {
             ) : null}
           </div>
         ) : null}
+        <div className="sidebar-settings-zone" aria-label="Reader-Wiki settings">
+          <button type="button" className="icon-button sidebar-settings-button" aria-label="Open Settings" title="Open Settings" onClick={() => setAppView("settings")}>
+            <SettingsIcon aria-hidden="true" focusable="false" />
+          </button>
+        </div>
       </aside>
 
       <section className="workspace" aria-label="Reader workspace">
@@ -616,9 +667,9 @@ export function App() {
               {canDeliverActiveFile ? (
                 <button
                   type="button"
-                  className={`viewer-copy-button http-delivery-open-button${currentHttpDeliverySession ? " active" : ""}`}
+                  className={`viewer-copy-button http-delivery-open-button${currentHttpDeliveryItem ? " active" : ""}`}
                   aria-label={httpDeliveryButtonLabel}
-                  title={currentHttpDeliverySession?.url || httpDeliveryButtonLabel}
+                  title={currentHttpDeliveryItem?.url || httpDeliveryButtonLabel}
                   disabled={httpDeliveryButtonDisabled}
                   onClick={() => startDeliveryWithNewTab(selectedPath)}
                 >
@@ -646,6 +697,11 @@ export function App() {
         memoMode={memoMode}
         onMemoTextChange={setMemoText}
         onMemoModeChange={setMemoMode}
+        showOutline={basicSettings.showOutline}
+        showSourceMetadata={basicSettings.showSourceMetadata}
+        aiSettings={aiSettings}
+        activeRepoId={activeRepoId}
+        onOpenSettings={() => setAppView("settings")}
       />
     </main>
   );
@@ -1119,32 +1175,32 @@ function MetadataFileState({ file }: { file: FileResponse }) {
   );
 }
 
-function HttpDeliveryPanel({ status, stoppingSessionIds, error, onStop }: {
+function HttpDeliveryPanel({ status, stoppingItemIds, error, onStop }: {
   status: HttpDeliveryStatus;
-  stoppingSessionIds: Set<string>;
+  stoppingItemIds: Set<string>;
   error: string;
-  onStop: (sessionId: string) => void;
+  onStop: (deliveryId: string) => void;
 }) {
   return (
     <section className="http-delivery-control" aria-label="HTTP Delivery">
       <div className="http-delivery-heading">
         <span className="http-delivery-label">HTTP Delivery</span>
-        <span className="http-delivery-count">{status.sessions.length}/{HTTP_DELIVERY_MAX_SESSIONS}</span>
+        <span className="http-delivery-count">{status.items.length}/{HTTP_DELIVERY_MAX_SESSIONS}</span>
       </div>
-      {status.sessions.length ? (
-        <ul className="http-delivery-session-list">
-          {status.sessions.map((session) => (
-            <li key={session.id} className="http-delivery-session-row">
-              <a className="http-delivery-session-text" href={session.url} target="_blank" rel="noreferrer" title={`${session.path}\n${session.url}`}>
-                {formatHttpDeliveryPath(session.path)}
+      {status.items.length ? (
+        <ul className="http-delivery-item-list">
+          {status.items.map((item) => (
+            <li key={item.id} className="http-delivery-item-row">
+              <a className="http-delivery-item-text" href={item.url} target="_blank" rel="noreferrer" title={`${item.path}\n${item.url}`}>
+                {formatHttpDeliveryPath(item.path)}
               </a>
               <button
                 type="button"
                 className="http-delivery-stop-button"
-                aria-label={`Stop HTTP Delivery for ${session.path}`}
+                aria-label={`Stop HTTP Delivery for ${item.path}`}
                 title="Stop HTTP Delivery"
-                disabled={stoppingSessionIds.has(session.id)}
-                onClick={() => onStop(session.id)}
+                disabled={stoppingItemIds.has(item.id)}
+                onClick={() => onStop(item.id)}
               >
                 <Trash2 aria-hidden="true" focusable="false" strokeWidth={1.8} />
               </button>
@@ -1159,7 +1215,7 @@ function HttpDeliveryPanel({ status, stoppingSessionIds, error, onStop }: {
   );
 }
 
-function RightPanel({ mode, onModeChange, file, outline, onHeadingSelect, memoText, memoMode, onMemoTextChange, onMemoModeChange }: {
+function RightPanel({ mode, onModeChange, file, outline, onHeadingSelect, memoText, memoMode, onMemoTextChange, onMemoModeChange, showOutline, showSourceMetadata, aiSettings, activeRepoId, onOpenSettings }: {
   mode: RightPanelMode;
   onModeChange: (mode: RightPanelMode) => void;
   file: FileResponse | null;
@@ -1169,6 +1225,11 @@ function RightPanel({ mode, onModeChange, file, outline, onHeadingSelect, memoTe
   memoMode: MemoMode;
   onMemoTextChange: (value: string) => void;
   onMemoModeChange: (mode: MemoMode) => void;
+  showOutline: boolean;
+  showSourceMetadata: boolean;
+  aiSettings: AISettingsState;
+  activeRepoId: string;
+  onOpenSettings: () => void;
 }) {
   return (
     <aside className="right-panel" aria-label="Reader side panel">
@@ -1180,21 +1241,28 @@ function RightPanel({ mode, onModeChange, file, outline, onHeadingSelect, memoTe
           <button type="button" role="tab" aria-selected={mode === "memo"} className={mode === "memo" ? "active" : ""} onClick={() => onModeChange("memo")}>
             Memo
           </button>
+          <button type="button" role="tab" aria-selected={mode === "aiChat"} className={mode === "aiChat" ? "active" : ""} onClick={() => onModeChange("aiChat")}>
+            AI Chat
+          </button>
         </div>
       </header>
       {mode === "outline" ? (
-        <OutlinePanel file={file} outline={outline} onHeadingSelect={onHeadingSelect} />
-      ) : (
+        <OutlinePanel file={file} outline={showOutline ? outline : []} showSourceMetadata={showSourceMetadata} onHeadingSelect={onHeadingSelect} />
+      ) : mode === "memo" ? (
         <MemoPanel memoText={memoText} memoMode={memoMode} onMemoTextChange={onMemoTextChange} onMemoModeChange={onMemoModeChange} />
+      ) : (
+        <section className="side-panel-body">
+          <AIChatPanel aiSettings={aiSettings} activeRepoId={activeRepoId} activeFile={file} onOpenSettings={onOpenSettings} onMarkdownClick={handleMarkdownClick} />
+        </section>
       )}
     </aside>
   );
 }
 
-function OutlinePanel({ file, outline, onHeadingSelect }: { file: FileResponse | null; outline: OutlineItem[]; onHeadingSelect: (headingId: string) => void }) {
+function OutlinePanel({ file, outline, showSourceMetadata, onHeadingSelect }: { file: FileResponse | null; outline: OutlineItem[]; showSourceMetadata: boolean; onHeadingSelect: (headingId: string) => void }) {
   return (
     <section className="side-panel-body">
-      <FileInformationPanel file={file} />
+      {showSourceMetadata ? <FileInformationPanel file={file} /> : null}
       <h2>Table of Contents</h2>
       {!file ? (
         <p className="state-text">No file selected.</p>
@@ -1454,8 +1522,8 @@ function formatHttpDeliveryPath(path: string): string {
   return path.length > 30 ? `.../${name}` : path;
 }
 
-function findHttpDeliverySession(status: HttpDeliveryStatus, repoId: string, path: string): HttpDeliverySessionStatus | null {
-  return status.sessions.find((session) => session.repoId === repoId && session.path === path) || null;
+function findHttpDeliveryItem(status: HttpDeliveryStatus, repoId: string, path: string): HttpDeliveryItemStatus | null {
+  return status.items.find((item) => item.repoId === repoId && item.path === path) || null;
 }
 
 type HttpDeliveryPendingRequest = {
@@ -1488,7 +1556,7 @@ function writeHttpDeliveryPendingDocument(tab: Window, request: HttpDeliveryPend
   try {
     const payload = safeJsonForInlineScript(request);
     tab.document.open();
-    tab.document.write(`<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Starting HTTP Delivery</title><style>:root{font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#1f2933;background:#ffffff}body{margin:0;display:grid;min-height:100vh;place-items:center}main{max-width:420px;padding:32px;text-align:center}h1{font-size:18px;margin:0 0 8px}p{color:#5b6670;font-size:13px;margin:0}</style></head><body><main><h1>Starting HTTP Delivery</h1><p>This tab will navigate when the local session is ready.</p></main><script>const request=${payload};async function start(){try{const response=await fetch(request.startUrl,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({repoId:request.repoId,path:request.path})});if(!response.ok)throw new Error("HTTP Delivery start failed.");const status=await response.json();const session=Array.isArray(status.sessions)?status.sessions.find((item)=>item&&item.repoId===request.repoId&&item.path===request.path):null;if(!session||!session.url)throw new Error("HTTP Delivery session was not found.");window.location.replace(session.url)}catch(error){document.body.textContent=error&&error.message?error.message:"HTTP Delivery failed."}}start();</script></body></html>`);
+    tab.document.write(`<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Starting HTTP Delivery</title><style>:root{font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#1f2933;background:#ffffff}body{margin:0;display:grid;min-height:100vh;place-items:center}main{max-width:420px;padding:32px;text-align:center}h1{font-size:18px;margin:0 0 8px}p{color:#5b6670;font-size:13px;margin:0}</style></head><body><main><h1>Starting HTTP Delivery</h1><p>This tab will navigate when the local item is ready.</p></main><script>const request=${payload};async function start(){try{const response=await fetch(request.startUrl,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({repoId:request.repoId,path:request.path})});if(!response.ok)throw new Error("HTTP Delivery start failed.");const status=await response.json();const item=Array.isArray(status.items)?status.items.find((item)=>item&&item.repoId===request.repoId&&item.path===request.path):null;if(!item||!item.url)throw new Error("HTTP Delivery item was not found.");window.location.replace(item.url)}catch(error){document.body.textContent=error&&error.message?error.message:"HTTP Delivery failed."}}start();</script></body></html>`);
     tab.document.close();
   } catch {
     // Some popup surfaces do not expose the new tab document. The opener still drives navigation.

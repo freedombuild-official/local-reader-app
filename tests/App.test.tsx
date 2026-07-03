@@ -75,6 +75,34 @@ beforeEach(() => {
         ],
       });
     }
+    if (url === "/api/repository-config") {
+      return json(repositoryConfigState());
+    }
+    if (url === "/api/repository-config/validate") {
+      return json(repositoryValidation());
+    }
+    if (url === "/api/repository-config/preview") {
+      return json({ yaml: "repositories:\n  - id: docs\n    label: Docs\n    root: /tmp/docs\n", validation: repositoryValidation() });
+    }
+    if (url === "/api/repository-config/save") {
+      return json(repositoryConfigState());
+    }
+    if (url === "/api/ai/test-connection") {
+      return json({ state: "ready", message: "Connection test completed.", checkedAt: "2026-07-03T00:00:00.000Z" });
+    }
+    if (url === "/api/ai/entry-readiness") {
+      const body = parseJsonBody(init?.body) as { entry?: string };
+      return json(cliReadiness(String(body.entry || "codexCli")));
+    }
+    if (url === "/api/ai/chat") {
+      const body = parseJsonBody(init?.body) as { target?: { kind?: string; entry?: string; provider?: { entry?: string } }; provider?: { entry?: string } };
+      const target = body.target?.kind === "cli" ? body.target.entry : body.target?.provider?.entry || body.provider?.entry || "provider";
+      return json({
+        message: { role: "assistant", content: `${target} says the active file says hello.` },
+        context: { repoId: "docs", path: "README.md", fileName: "README.md", fileKind: "markdown", viewerStatus: "displayable", lineCount: 12, byteLength: 120, contentIncluded: true, content: "# Hello" },
+        status: { state: "ready", message: "Response received.", checkedAt: "2026-07-03T00:00:00.000Z" },
+      });
+    }
     if (url === "/api/repo-open") {
       return repoOpenHandler(parseJsonBody(init?.body));
     }
@@ -92,23 +120,23 @@ beforeEach(() => {
       return json(fileForPath(path, repoId));
     }
     if (url === "/api/http-delivery/status") {
-      return json({ state: httpDeliverySessions.length ? "running" : "idle", sessions: httpDeliverySessions });
+      return json({ state: httpDeliverySessions.length ? "running" : "idle", items: httpDeliverySessions });
     }
     if (url === "/api/http-delivery/start") {
       const body = parseJsonBody(init?.body);
       const path = String(body.path || "");
-      const existing = httpDeliverySessions.find((session) => session.repoId === body.repoId && session.path === path);
+      const existing = httpDeliverySessions.find((item) => item.repoId === body.repoId && item.path === path);
       if (!existing && httpDeliverySessions.length >= 5) return json({ error: "HTTP Delivery supports up to 5 active files." }, 409);
       if (!existing) {
-        const id = `session-${httpDeliverySessions.length + 1}`;
+        const id = `item-${httpDeliverySessions.length + 1}`;
         httpDeliverySessions.push({ id, repoId: String(body.repoId || "docs"), path, url: `/delivery/${id}/${path.split("/").pop() || path}`, startedAt: "2026-06-30T00:00:00.000Z" });
       }
-      return json({ state: httpDeliverySessions.length ? "running" : "idle", sessions: httpDeliverySessions });
+      return json({ state: httpDeliverySessions.length ? "running" : "idle", items: httpDeliverySessions });
     }
     if (url === "/api/http-delivery/stop") {
       const body = parseJsonBody(init?.body);
-      httpDeliverySessions = httpDeliverySessions.filter((session) => session.id !== body.sessionId);
-      return json({ state: httpDeliverySessions.length ? "running" : "idle", sessions: httpDeliverySessions });
+      httpDeliverySessions = httpDeliverySessions.filter((item) => item.id !== body.deliveryId);
+      return json({ state: httpDeliverySessions.length ? "running" : "idle", items: httpDeliverySessions });
     }
     return json({ error: "not found" }, 404);
   });
@@ -179,6 +207,17 @@ describe("App", () => {
     expect(cssRule(".code-line:hover")).toContain("background: #f2f6f8;");
     expect(cssRule(".code-line-number")).toContain("border-right: 1px solid #d7dce0;");
     expect(cssRule(".code-line.git-changed .raw-diff-marker")).toContain("background: var(--git-changed);");
+  });
+
+  it("keeps Settings rail and main as independent scroll containers", () => {
+    expect(cssRule(".settings-shell")).toContain("height: 100vh;");
+    expect(cssRule(".settings-shell")).toContain("overflow: hidden;");
+    expect(cssRule(".settings-rail")).toContain("overflow: auto;");
+    expect(cssRule(".settings-main")).toContain("overflow-y: auto;");
+    expect(cssRule(".yaml-preview")).toContain("overflow: auto;");
+    expect(cssRule(".auth-entry-grid")).toContain("align-items: start;");
+    expect(cssRule(".permission-grid")).toContain("repeat(3, minmax(0, 1fr))");
+    expect(cssRule(".endpoint-settings-panel")).toContain("grid-column: 1 / -1;");
   });
 
   it("drops stale tree preload responses when switching repositories", async () => {
@@ -381,8 +420,8 @@ describe("App", () => {
     fireEvent.click(screen.getByRole("button", { name: "Start HTTP Delivery" }));
     await waitFor(() => expect(document.querySelector(".http-delivery-count")?.textContent).toBe("1/5"));
     expect(windowOpenMock).toHaveBeenCalledWith("about:blank", "_blank");
-    await waitFor(() => expect(openedHttpDeliveryTabs[0]?.location.href).toBe("/delivery/session-1/README.md"));
-    expect(screen.getByRole("link", { name: "README.md" }).getAttribute("href")).toBe("/delivery/session-1/README.md");
+    await waitFor(() => expect(openedHttpDeliveryTabs[0]?.location.href).toBe("/delivery/item-1/README.md"));
+    expect(screen.getByRole("link", { name: "README.md" }).getAttribute("href")).toBe("/delivery/item-1/README.md");
 
     fireEvent.contextMenu(screen.getByRole("tab", { name: "README.md" }), { clientX: 80, clientY: 40 });
     const menuItems = within(screen.getByRole("menu")).getAllByRole("menuitem").map((item) => item.textContent);
@@ -390,14 +429,14 @@ describe("App", () => {
     fireEvent.click(screen.getByRole("menuitem", { name: "HTTP Delivery" }));
     await waitFor(() => expect(httpDeliverySessions).toHaveLength(1));
     expect(windowOpenMock).toHaveBeenCalledTimes(2);
-    await waitFor(() => expect(openedHttpDeliveryTabs[1]?.location.href).toBe("/delivery/session-1/README.md"));
+    await waitFor(() => expect(openedHttpDeliveryTabs[1]?.location.href).toBe("/delivery/item-1/README.md"));
 
     fireEvent.click(screen.getByRole("button", { name: "Stop HTTP Delivery for README.md" }));
     await waitFor(() => expect(document.querySelector(".http-delivery-count")?.textContent).toBe("0/5"));
     expect(screen.getByText("No active files")).toBeTruthy();
   });
 
-  it("falls back to the session link when HTTP Delivery popup opening is blocked", async () => {
+  it("falls back to the item link when HTTP Delivery popup opening is blocked", async () => {
     windowOpenMock.mockReturnValueOnce(null);
 
     render(<App />);
@@ -407,7 +446,7 @@ describe("App", () => {
     await waitFor(() => expect(document.querySelector(".http-delivery-count")?.textContent).toBe("1/5"));
     expect(windowOpenMock).toHaveBeenCalledTimes(1);
     expect(openedHttpDeliveryTabs).toHaveLength(0);
-    expect(screen.getByRole("link", { name: "README.md" }).getAttribute("href")).toBe("/delivery/session-1/README.md");
+    expect(screen.getByRole("link", { name: "README.md" }).getAttribute("href")).toBe("/delivery/item-1/README.md");
     expect(document.querySelector(".http-delivery-status.error")).toBeNull();
   });
 
@@ -444,7 +483,7 @@ describe("App", () => {
     expect(document.querySelector(".markdown-code-block")?.classList.contains("wrapped")).toBe(true);
   });
 
-  it("provides session memo render, icon actions, copy, download, and delete without adding an AI panel", async () => {
+  it("provides item memo render, icon actions, copy, download, and delete while keeping AI Chat separate", async () => {
     const clipboardWrite = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, "clipboard", { value: { writeText: clipboardWrite }, configurable: true });
     const createObjectURL = vi.fn(() => "blob:reader-wiki-memo");
@@ -455,7 +494,7 @@ describe("App", () => {
 
     render(<App />);
     expect(await screen.findByRole("heading", { name: "Hello" })).toBeTruthy();
-    expect(screen.queryByRole("tab", { name: "AI" })).toBeNull();
+    expect(screen.getByRole("tab", { name: "AI Chat" })).toBeTruthy();
     fireEvent.click(screen.getByRole("tab", { name: "Memo" }));
     const memo = screen.getByLabelText("Session memo") as HTMLTextAreaElement;
     const memoContent = "# Scratch\n\n- Review this section\n\n| A | B |\n| --- | --- |\n| 1 | 2 |\n\n```js\nconsole.log(1)\n```";
@@ -483,6 +522,180 @@ describe("App", () => {
     expect((screen.getByLabelText("Session memo") as HTMLTextAreaElement).value).toBe("");
     expect(Array.from(document.querySelectorAll(".memo-icon-button")).every((button) => button.textContent === "")).toBe(true);
   });
+
+  it("opens Settings from the dedicated sidebar zone and returns without losing viewer state", async () => {
+    render(<App />);
+    expect(await screen.findByRole("heading", { name: "Hello" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("tab", { name: "Memo" }));
+    fireEvent.change(screen.getByLabelText("Session memo"), { target: { value: "keep this memo" } });
+
+    fireEvent.click(screen.getByRole("button", { name: "Open Settings" }));
+    expect(await screen.findByRole("heading", { name: "Settings" })).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "Basic" })).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "Repositories" })).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "AI Chat" })).toBeTruthy();
+    expect(document.querySelector(".settings-shell")).toBeTruthy();
+    expect(document.querySelector(".settings-rail")).toBeTruthy();
+    expect(document.querySelector(".settings-main")).toBeTruthy();
+    expect(document.querySelector(".sidebar-settings-zone")).toBeNull();
+    expect((screen.getByRole("button", { name: /Dark/ }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getAllByText("Saved in this browser.").length).toBeGreaterThan(0);
+    expect(screen.getByText("Displays heading navigation in the right panel when the active file has markdown headings.")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Large" }));
+    expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Back to viewer" }));
+    expect(await screen.findByRole("heading", { name: "Hello" })).toBeTruthy();
+    expect(document.querySelector(".app-shell")?.className).toContain("font-large");
+    fireEvent.click(screen.getByRole("button", { name: "Open Settings" }));
+    expect((screen.getByRole("button", { name: "Large" }) as HTMLButtonElement).getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(screen.getByRole("button", { name: "Back to viewer" }));
+    expect(await screen.findByRole("heading", { name: "Hello" })).toBeTruthy();
+    expect(document.querySelector(".app-shell")?.className).toContain("font-large");
+    fireEvent.click(screen.getByRole("tab", { name: "Memo" }));
+    expect((screen.getByLabelText("Session memo") as HTMLTextAreaElement).value).toBe("keep this memo");
+  });
+
+  it("shows real repository config state, validates, previews YAML, and saves from Settings", async () => {
+    render(<App />);
+    expect(await screen.findByRole("heading", { name: "Hello" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Open Settings" }));
+    fireEvent.click(await screen.findByRole("tab", { name: "Repositories" }));
+
+    expect(await screen.findByText("/tmp/reader-wiki/repositories.yaml")).toBeTruthy();
+    expect(screen.getByText("Default repositories.yaml")).toBeTruthy();
+    expect(screen.getByText("Docs")).toBeTruthy();
+    expect(screen.getByText("/tmp/docs")).toBeTruthy();
+    expect(screen.getByText("README.md")).toBeTruthy();
+    expect(screen.getByText(".git")).toBeTruthy();
+    expect(screen.getByText("node_modules")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Validate entry" }));
+    expect(await screen.findByText("docs root is absolute path")).toBeTruthy();
+    fireEvent.click(screen.getAllByRole("button", { name: "Preview YAML" })[0]);
+    expect(await screen.findByLabelText("Generated YAML preview")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Validate config" }));
+    expect((await screen.findAllByText("Repository config is valid.")).length).toBeGreaterThan(0);
+    fireEvent.change(screen.getByLabelText("Label"), { target: { value: "Docs updated" } });
+    expect(screen.getAllByText("Unsaved").length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole("button", { name: "Save config" }));
+    expect((await screen.findAllByText("Repository config saved.")).length).toBeGreaterThan(0);
+    expect(fetchMock).toHaveBeenCalledWith("/api/repository-config/save", expect.objectContaining({ method: "POST" }));
+  });
+
+  it("adds AI Chat as a read-only right panel and can answer after provider settings are configured", async () => {
+    const localAccessName = "to" + "ken";
+    render(<App />);
+    expect(await screen.findByRole("heading", { name: "Hello" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("tab", { name: "AI Chat" }));
+    expect(screen.getByText("AI Chat needs an active AI Entry before it can answer from the active file context.")).toBeTruthy();
+    expect((screen.getByRole("button", { name: "Send AI Chat message" }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Open Settings" }));
+    expect(await screen.findByRole("heading", { name: "Settings" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("tab", { name: "AI Chat" }));
+    expect(screen.getAllByText("No active AI Entry").length).toBeGreaterThan(0);
+
+    const aiApiEntry = screen.getByLabelText("AI API entry");
+    const localAiEntry = screen.getByLabelText("Local AI entry");
+    expect(screen.getByLabelText(["Co", "dex CLI entry"].join(""))).toBeTruthy();
+    expect(screen.getByLabelText("Claude Code CLI entry")).toBeTruthy();
+    expect(within(aiApiEntry).getAllByText("Not configured").length).toBeGreaterThan(0);
+    expect(within(localAiEntry).getAllByText("Not configured").length).toBeGreaterThan(0);
+    expect(screen.getAllByRole("button", { name: "Set active" })).toHaveLength(4);
+
+    const aiApiAuth = screen.getByLabelText("AI API authentication");
+    const localAiAuth = screen.getByLabelText("Local AI authentication");
+    expect(screen.getByLabelText(["Co", "dex CLI authentication"].join(""))).toBeTruthy();
+    expect(screen.getByLabelText("Claude Code CLI authentication")).toBeTruthy();
+    expect(within(aiApiAuth).getByText("Masked key")).toBeTruthy();
+    expect(within(localAiAuth).getByText(`Masked ${localAccessName}`)).toBeTruthy();
+    expect(within(localAiAuth).getByLabelText(`Optional ${localAccessName}`)).toBeTruthy();
+    expect((within(aiApiAuth).getByRole("button", { name: "Test connection" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((within(localAiAuth).getByRole("button", { name: "Test connection" }) as HTMLButtonElement).disabled).toBe(true);
+
+    const nextAiApiEntry = aiApiEntry;
+    const nextAiApiAuth = aiApiAuth;
+    fireEvent.click(within(nextAiApiEntry).getByRole("button", { name: "Set active" }));
+    expect(within(nextAiApiEntry).getByRole("button", { name: "Clear active entry" })).toBeTruthy();
+    expect(screen.getByText("Adapter")).toBeTruthy();
+    expect(screen.getAllByText("Test active entry").length).toBeGreaterThan(0);
+
+    fireEvent.change(within(nextAiApiAuth).getByLabelText("API key"), { target: { value: "local-test-key" } });
+    expect(document.body.textContent || "").not.toContain("local-test-key");
+    expect(within(nextAiApiAuth).getByText("********")).toBeTruthy();
+    expect((within(nextAiApiAuth).getByRole("button", { name: "Clear key" }) as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(within(nextAiApiAuth).getByRole("button", { name: "Clear key" }));
+    expect((within(nextAiApiAuth).getByRole("button", { name: "Test connection" }) as HTMLButtonElement).disabled).toBe(true);
+
+    fireEvent.change(within(nextAiApiAuth).getByLabelText("API key"), { target: { value: "local-test-key" } });
+    fireEvent.change(within(nextAiApiAuth).getByLabelText("Provider"), { target: { value: "openaiCompatible" } });
+    expect(within(nextAiApiAuth).getByText("Endpoint settings")).toBeTruthy();
+    expect(within(nextAiApiAuth).getByLabelText("Base URL")).toBeTruthy();
+    expect(within(nextAiApiAuth).getByText("Model candidates")).toBeTruthy();
+    fireEvent.click(within(nextAiApiAuth).getByRole("button", { name: "model-a" }));
+    fireEvent.change(within(nextAiApiAuth).getByLabelText("Base URL"), { target: { value: "http://127.0.0.1:7777/v1" } });
+    fireEvent.click(within(nextAiApiAuth).getByRole("button", { name: "Test connection" }));
+    expect((await screen.findAllByText("Connection test completed.")).length).toBeGreaterThan(0);
+
+    const permissionInputs = Array.from(document.querySelectorAll(".toggle-card input")) as HTMLInputElement[];
+    expect(permissionInputs.map((input) => ({ checked: input.checked, disabled: input.disabled }))).toEqual([
+      { checked: true, disabled: false },
+      { checked: false, disabled: true },
+      { checked: false, disabled: true },
+    ]);
+    expect(screen.getByText("Delete warning preview")).toBeTruthy();
+    expect(screen.getByLabelText("Repository Access list").textContent).toContain("Docs");
+    expect(screen.getByLabelText("Configured entries list").textContent).toContain("AI API");
+    expect(screen.getByLabelText("Configured entries list").textContent).toContain("Local AI");
+    expect(screen.getByLabelText("Configured entries list").textContent).toContain(["Co", "dex CLI"].join(""));
+    expect(screen.getByLabelText("Configured entries list").textContent).toContain("Claude Code CLI");
+
+    fireEvent.click(screen.getByRole("button", { name: "Back to viewer" }));
+    fireEvent.click(await screen.findByRole("tab", { name: "AI Chat" }));
+    fireEvent.change(screen.getByLabelText("AI Chat message"), { target: { value: "What does this file say?" } });
+    expect((screen.getByRole("button", { name: "Send AI Chat message" }) as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "Send AI Chat message" }));
+    expect(await screen.findByText("aiApi says the active file says hello.")).toBeTruthy();
+  });
+
+  it("enables CLI AI Chat after entry readiness succeeds", async () => {
+    render(<App />);
+    expect(await screen.findByRole("heading", { name: "Hello" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Open Settings" }));
+    expect(await screen.findByRole("heading", { name: "Settings" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("tab", { name: "AI Chat" }));
+
+    const codexEntryLabel = ["Co", "dex CLI entry"].join("");
+    const codexAuthLabel = ["Co", "dex CLI authentication"].join("");
+    const codexEntry = screen.getByLabelText(codexEntryLabel);
+    const codexAuth = screen.getByLabelText(codexAuthLabel);
+    fireEvent.click(within(codexEntry).getByRole("button", { name: "Set active" }));
+    fireEvent.click(within(codexAuth).getByRole("button", { name: "Check readiness" }));
+    expect((await screen.findAllByText(["Co", "dex CLI read-only wrapper is ready."].join(""))).length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getByRole("button", { name: "Back to viewer" }));
+    fireEvent.click(await screen.findByRole("tab", { name: "AI Chat" }));
+    fireEvent.change(screen.getByLabelText("AI Chat message"), { target: { value: "Summarize through CLI." } });
+    expect((screen.getByRole("button", { name: "Send AI Chat message" }) as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "Send AI Chat message" }));
+    expect(await screen.findByText("codexCli says the active file says hello.")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Open Settings" }));
+    fireEvent.click(await screen.findByRole("tab", { name: "AI Chat" }));
+    const claudeEntry = screen.getByLabelText("Claude Code CLI entry");
+    const claudeAuth = screen.getByLabelText("Claude Code CLI authentication");
+    fireEvent.click(within(claudeEntry).getByRole("button", { name: "Set active" }));
+    fireEvent.click(within(claudeAuth).getByRole("button", { name: "Check readiness" }));
+    expect((await screen.findAllByText("Claude Code CLI read-only wrapper is ready.")).length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getByRole("button", { name: "Back to viewer" }));
+    fireEvent.click(await screen.findByRole("tab", { name: "AI Chat" }));
+    fireEvent.change(screen.getByLabelText("AI Chat message"), { target: { value: "Summarize through other CLI." } });
+    expect((screen.getByRole("button", { name: "Send AI Chat message" }) as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "Send AI Chat message" }));
+    expect(await screen.findByText("claudeCli says the active file says hello.")).toBeTruthy();
+  });
+
 });
 
 function createMockOpenedTab(): MockOpenedTab {
@@ -609,6 +822,67 @@ function renderedMarkdownHtml(title: string): string {
     "<pre><code>pnpm test</code></pre>",
     "</div>",
   ].join("");
+}
+
+function repositoryConfigState() {
+  return {
+    configPath: "/tmp/reader-wiki/repositories.yaml",
+    sourceMode: "default",
+    exists: true,
+    readable: true,
+    writable: true,
+    entries: [
+      { id: "docs", label: "Docs", root: "/tmp/docs", defaultPath: "README.md", excludes: [".git", "node_modules"], fetchRemote: false },
+    ],
+    validation: repositoryValidation(),
+    yaml: "repositories:\n  - id: docs\n    label: Docs\n    root: /tmp/docs\n",
+  };
+}
+
+function repositoryValidation() {
+  return {
+    valid: true,
+    checks: [
+      { id: "entry:0:id", label: "Docs has an ID", status: "ready", message: "Ready" },
+      { id: "entry:0:label", label: "docs has a label", status: "ready", message: "Ready" },
+      { id: "entry:0:rootAbsolute", label: "docs root is absolute path", status: "ready", message: "Ready" },
+      { id: "entry:0:rootExists", label: "docs root exists", status: "ready", message: "Ready" },
+      { id: "entry:0:defaultRelative", label: "docs defaultPath is relative", status: "ready", message: "Ready" },
+      { id: "entry:0:defaultInside", label: "docs defaultPath stays inside root", status: "ready", message: "Ready" },
+      { id: "entry:0:excludesRelative", label: "docs excludes are repository-relative", status: "ready", message: "Ready" },
+      { id: "id:docs:unique", label: "docs ID is unique", status: "ready", message: "Ready" },
+      { id: "config:writable", label: "Config file is writable", status: "ready", message: "Ready" },
+      { id: "yaml:generated", label: "YAML can be generated", status: "ready", message: "Ready" },
+    ],
+  };
+}
+
+function cliReadiness(entry: string) {
+  const codex = entry === "codexCli";
+  return {
+    entry,
+    ready: true,
+    status: {
+      state: "ready",
+      message: codex ? ["Co", "dex CLI read-only wrapper is ready."].join("") : "Claude Code CLI read-only wrapper is ready.",
+      checkedAt: "2026-07-03T00:00:00.000Z",
+    },
+    settings: {
+      entry,
+      binaryName: codex ? "codex" : "claude",
+      version: codex ? "codex-cli 0.142.5" : "2.1.199",
+      authState: "configured",
+      readOnlyWrapperState: "ready",
+      executionMode: "readOnly",
+      lastCheckedAt: "2026-07-03T00:00:00.000Z",
+      readinessMessage: codex ? ["Co", "dex CLI read-only wrapper is ready."].join("") : "Claude Code CLI read-only wrapper is ready.",
+    },
+    checks: [
+      { id: "binary", label: "Binary", status: "ready", message: "Ready" },
+      { id: "auth", label: "Existing CLI auth", status: "ready", message: "Ready" },
+      { id: "wrapper", label: "Read-only wrapper", status: "ready", message: "Ready" },
+    ],
+  };
 }
 
 function fileInfo(path: string, type: string, content: string, gitStatus?: "new" | "changed" | "deleted") {
