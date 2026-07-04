@@ -1,8 +1,47 @@
-import { describe, expect, it } from "vitest";
-import { activeAIChatTarget, activeAIProvider, aiReady, defaultAISettings, effectiveAIStatus, normalizeAISettingsState, type AISettingsState } from "../src/settingsState";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { activeAIChatTarget, activeAIProvider, aiReady, defaultAISettings, effectiveAIStatus, loadBasicSettings, normalizeAISettingsState, persistBasicSettings, type AISettingsState } from "../src/settingsState";
 import type { AIProviderSettings, CliAIEntrySettings } from "../src/types";
 
 describe("settings state", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("uses ×1 as the default reader font scale and migrates legacy font size values", () => {
+    installLocalStorageMock();
+    expect(loadBasicSettings().settings.readerFontScale).toBe(1);
+    expect(loadBasicSettings().settings.colorMode).toBe("light");
+
+    window.localStorage.setItem("readerWiki.basicSettings.v1", JSON.stringify({ fontSize: "small", layout: "focused" }));
+    expect(loadBasicSettings().settings).toMatchObject({ readerFontScale: 1, layout: "focused" });
+
+    window.localStorage.setItem("readerWiki.basicSettings.v1", JSON.stringify({ fontSize: "large" }));
+    expect(loadBasicSettings().settings.readerFontScale).toBe(1.5);
+
+    const error = persistBasicSettings({ ...loadBasicSettings().settings, readerFontScale: 2 });
+    expect(error).toBe("");
+    const stored = JSON.parse(window.localStorage.getItem("readerWiki.basicSettings.v1") || "{}") as Record<string, unknown>;
+    expect(stored.readerFontScale).toBe(2);
+    expect(stored.fontSize).toBeUndefined();
+  });
+
+  it("uses Light as the default color mode and migrates legacy System values", () => {
+    installLocalStorageMock();
+    expect(loadBasicSettings().settings.colorMode).toBe("light");
+
+    window.localStorage.setItem("readerWiki.basicSettings.v1", JSON.stringify({ colorMode: "system" }));
+    expect(loadBasicSettings().settings.colorMode).toBe("light");
+
+    window.localStorage.setItem("readerWiki.basicSettings.v1", JSON.stringify({ colorMode: "dark" }));
+    expect(loadBasicSettings().settings.colorMode).toBe("dark");
+
+    const error = persistBasicSettings({ ...loadBasicSettings().settings, colorMode: "light" });
+    expect(error).toBe("");
+    const stored = JSON.parse(window.localStorage.getItem("readerWiki.basicSettings.v1") || "{}") as Record<string, unknown>;
+    expect(stored.colorMode).toBe("light");
+    expect(stored.colorMode).not.toBe("system");
+  });
+
   it("starts without an active AI provider", () => {
     expect(defaultAISettings.activeEntry).toBeNull();
     expect(activeAIProvider(defaultAISettings)).toBeNull();
@@ -72,3 +111,22 @@ describe("settings state", () => {
     });
   });
 });
+
+function installLocalStorageMock(): void {
+  const store = new Map<string, string>();
+  Object.defineProperty(window, "localStorage", {
+    configurable: true,
+    value: {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => {
+        store.set(key, value);
+      },
+      removeItem: (key: string) => {
+        store.delete(key);
+      },
+      clear: () => {
+        store.clear();
+      },
+    } satisfies Pick<Storage, "getItem" | "setItem" | "removeItem" | "clear">,
+  });
+}

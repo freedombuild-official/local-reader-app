@@ -29,7 +29,7 @@ import { fetchFile, fetchHttpDeliveryStatus, fetchRepos, fetchTree, imageFileUrl
 import type { DiffStatus, FileResponse, HttpDeliveryItemStatus, HttpDeliveryStatus, RepoListItem, RepoSyncStatus, TreeNode, TreeSnapshot } from "./types";
 import { AIChatPanel } from "./AIChatPanel";
 import { SettingsView } from "./SettingsView";
-import { defaultAISettings, defaultBasicSettings, loadBasicSettings, persistBasicSettings, type AISettingsState, type BasicSettings } from "./settingsState";
+import { defaultAISettings, defaultBasicSettings, loadBasicSettings, normalizeReaderFontScale, persistBasicSettings, type AISettingsState, type BasicSettings, type ReaderFontScale } from "./settingsState";
 import { injectMarkdownCodeToolbarButtons, installCodeBlockRule } from "../shared/markdownCodeBlocks";
 import { installTableScrollRule } from "../shared/markdownTableScroll";
 
@@ -77,6 +77,7 @@ type FileTreeStickyItem = {
 const MAX_FILE_TABS = 5;
 const HTTP_DELIVERY_MAX_SESSIONS = 5;
 const TREE_ROW_HEIGHT_PX = 31;
+const HTML_VIEWER_BASE_FONT_SIZE_PX = 16;
 const memoMarkdown = new MarkdownIt({ html: false, linkify: true });
 installTableScrollRule(memoMarkdown);
 installCodeBlockRule(memoMarkdown);
@@ -144,6 +145,7 @@ export function App() {
     : httpDeliveryAtCapacity
       ? `HTTP Delivery supports up to ${HTTP_DELIVERY_MAX_SESSIONS} files`
       : "Start HTTP Delivery";
+  const readerTypographyStyle = useMemo(() => buildReaderTypographyStyle(basicSettings.readerFontScale), [basicSettings.readerFontScale]);
 
   const updateBasicSettings = useCallback((settings: BasicSettings) => {
     setBasicSettings(settings);
@@ -547,10 +549,10 @@ export function App() {
     );
   }
 
-  const appShellClass = `app-shell font-${basicSettings.fontSize} layout-${basicSettings.layout} color-${basicSettings.colorMode}`;
+  const appShellClass = `app-shell layout-${basicSettings.layout} color-${basicSettings.colorMode}`;
 
   return (
-    <main className={appShellClass}>
+    <main className={appShellClass} data-color-mode={basicSettings.colorMode}>
       <aside className="sidebar" aria-label="Repositories and files">
         <button
           type="button"
@@ -661,7 +663,7 @@ export function App() {
           }}
         />
         {error ? <p className="state-text error">{error}</p> : null}
-        <div className="viewer-body" ref={viewerBodyRef}>
+        <div className="viewer-body" ref={viewerBodyRef} style={readerTypographyStyle}>
           {canDeliverActiveFile || canCopyActiveFile ? (
             <div className="viewer-copy-actions">
               {canDeliverActiveFile ? (
@@ -683,7 +685,7 @@ export function App() {
               ) : null}
             </div>
           ) : null}
-          <FileViewer tab={activeTab} outline={outline} />
+          <FileViewer tab={activeTab} outline={outline} readerFontScale={basicSettings.readerFontScale} colorMode={basicSettings.colorMode} />
         </div>
       </section>
 
@@ -1104,7 +1106,26 @@ function ViewModeControl({ file, mode, onChange }: { file: FileResponse | null; 
   );
 }
 
-function FileViewer({ tab, outline }: { tab: FileTab | null; outline: OutlineItem[] }) {
+export function buildReaderTypographyStyle(scale: ReaderFontScale): CSSProperties {
+  const normalizedScale = normalizeReaderFontScale(scale);
+  return {
+    "--reader-font-scale": String(normalizedScale),
+    "--reader-body-font-size": scaledPx(16, normalizedScale),
+    "--reader-h1-font-size": scaledPx(30, normalizedScale),
+    "--reader-h2-font-size": scaledPx(23, normalizedScale),
+    "--reader-h3-font-size": scaledPx(18, normalizedScale),
+    "--reader-small-font-size": scaledPx(13, normalizedScale),
+    "--reader-meta-font-size": scaledPx(12, normalizedScale),
+    "--reader-code-font-size": scaledPx(13, normalizedScale),
+    "--reader-html-root-font-size": scaledPx(HTML_VIEWER_BASE_FONT_SIZE_PX, normalizedScale),
+  } as CSSProperties;
+}
+
+function scaledPx(baseSize: number, scale: ReaderFontScale): string {
+  return `${Number((baseSize * normalizeReaderFontScale(scale)).toFixed(2))}px`;
+}
+
+function FileViewer({ tab, outline, readerFontScale, colorMode }: { tab: FileTab | null; outline: OutlineItem[]; readerFontScale: ReaderFontScale; colorMode: BasicSettings["colorMode"] }) {
   if (!tab) return <div className="empty-state">Choose a file from the tree to preview it.</div>;
   if (tab.loading) return <div className="empty-state">Loading {tab.title}...</div>;
   if (tab.error) return <p className="state-text error">{tab.error}</p>;
@@ -1116,11 +1137,30 @@ function FileViewer({ tab, outline }: { tab: FileTab | null; outline: OutlineIte
   if (file.kind === "markdown") {
     return <article className="markdown-body" onClick={handleMarkdownClick} dangerouslySetInnerHTML={{ __html: withOutlineHeadingIds(file.markdown?.html || "", outline) }} />;
   }
-  if (file.kind === "html") return <iframe className="html-frame" title={file.name} sandbox="" srcDoc={file.content} />;
+  if (file.kind === "html") return <iframe className="html-frame" title={file.name} sandbox="" srcDoc={buildSandboxedHtmlSrcDoc(file.content, readerFontScale, colorMode)} />;
   if (file.kind === "image") return <img className="image-viewer" alt={file.name} src={imageFileUrl(file.repoId, file.path, file.assetVersion)} />;
   if (file.kind === "pdf") return <iframe className="pdf-frame" title={file.name} src={pdfFileUrl(file.repoId, file.path, file.assetVersion)} />;
   if (file.kind === "binary") return <BinaryFileState file={file} />;
   return <CodeBlock content={file.content} label="Raw" gitDiff={file.gitDiff} />;
+}
+
+export function buildSandboxedHtmlSrcDoc(content: string, readerFontScale: ReaderFontScale = 1, colorMode: BasicSettings["colorMode"] = "light"): string {
+  const headInjection = buildHtmlViewerBaseStyle(readerFontScale, colorMode);
+  if (/<head[\s>]/i.test(content)) {
+    return content.replace(/<head([^>]*)>/i, `<head$1>${headInjection}`);
+  }
+  if (/<html[\s>]/i.test(content)) {
+    return content.replace(/<html([^>]*)>/i, `<html$1><head>${headInjection}</head>`);
+  }
+  return `<!doctype html><html><head>${headInjection}</head><body>${content}</body></html>`;
+}
+
+function buildHtmlViewerBaseStyle(readerFontScale: ReaderFontScale, colorMode: BasicSettings["colorMode"]): string {
+  const rootFontSize = scaledPx(HTML_VIEWER_BASE_FONT_SIZE_PX, readerFontScale);
+  if (colorMode === "dark") {
+    return `<style>:root { color-scheme: dark; font-size: ${rootFontSize}; color: #e6edf0; background: #10181c; } body { background: #10181c; color: #e6edf0; font-size: 1rem; } a { color: #8fd3dc; } code, pre { background: #17262c; color: #eef6f8; }</style>`;
+  }
+  return `<style>:root { color-scheme: light; font-size: ${rootFontSize}; color: #172026; background: #ffffff; } body { background: #ffffff; color: #172026; font-size: 1rem; }</style>`;
 }
 
 function CodeBlock({ content, label, gitDiff, wrap = false }: { content: string; label: string; gitDiff?: FileResponse["gitDiff"]; wrap?: boolean }) {

@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { App } from "../src/App";
+import { App, buildSandboxedHtmlSrcDoc } from "../src/App";
 
 const fetchMock = vi.fn<typeof fetch>();
 const stylesCss = readFileSync(path.join(process.cwd(), "src/styles.css"), "utf8");
@@ -52,7 +52,27 @@ function cssRule(selector: string): string {
   return match ? match[1] : "";
 }
 
+function installLocalStorageMock(): void {
+  const store = new Map<string, string>();
+  Object.defineProperty(window, "localStorage", {
+    configurable: true,
+    value: {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => {
+        store.set(key, value);
+      },
+      removeItem: (key: string) => {
+        store.delete(key);
+      },
+      clear: () => {
+        store.clear();
+      },
+    } satisfies Pick<Storage, "getItem" | "setItem" | "removeItem" | "clear">,
+  });
+}
+
 beforeEach(() => {
+  installLocalStorageMock();
   httpDeliverySessions = [];
   openedHttpDeliveryTabs = [];
   windowOpenMock = vi.fn(() => createMockOpenedTab() as unknown as Window);
@@ -207,6 +227,16 @@ describe("App", () => {
     expect(cssRule(".code-line:hover")).toContain("background: #f2f6f8;");
     expect(cssRule(".code-line-number")).toContain("border-right: 1px solid #d7dce0;");
     expect(cssRule(".code-line.git-changed .raw-diff-marker")).toContain("background: var(--git-changed);");
+  });
+
+  it("defines dark theme overrides for the app and settings surfaces", () => {
+    expect(stylesCss).toContain('.app-shell[data-color-mode="dark"]');
+    expect(stylesCss).toContain('.settings-shell[data-color-mode="dark"]');
+    expect(stylesCss).toContain("color-scheme: dark;");
+    expect(stylesCss).toContain("--rw-dark-app: #10181c;");
+    expect(stylesCss).toContain('--rw-dark-code: #0f171b;');
+    expect(stylesCss).toContain('.app-shell[data-color-mode="dark"] .code-viewer');
+    expect(stylesCss).toContain('.app-shell[data-color-mode="dark"] .ai-chat-context');
   });
 
   it("keeps Settings rail and main as independent scroll containers", () => {
@@ -535,26 +565,67 @@ describe("App", () => {
     expect(screen.getByRole("tab", { name: "Repositories" })).toBeTruthy();
     expect(screen.getByRole("tab", { name: "AI Chat" })).toBeTruthy();
     expect(document.querySelector(".settings-shell")).toBeTruthy();
+    expect(document.querySelector(".settings-shell")?.getAttribute("data-color-mode")).toBe("light");
     expect(document.querySelector(".settings-rail")).toBeTruthy();
     expect(document.querySelector(".settings-main")).toBeTruthy();
     expect(document.querySelector(".sidebar-settings-zone")).toBeNull();
-    expect((screen.getByRole("button", { name: /Dark/ }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.queryByRole("button", { name: "System" })).toBeNull();
+    expect(screen.queryByText("Future")).toBeNull();
+    expect((screen.getByRole("button", { name: "Light" }) as HTMLButtonElement).getAttribute("aria-pressed")).toBe("true");
+    expect((screen.getByRole("button", { name: "Dark" }) as HTMLButtonElement).disabled).toBe(false);
     expect(screen.getAllByText("Saved in this browser.").length).toBeGreaterThan(0);
     expect(screen.getByText("Displays heading navigation in the right panel when the active file has markdown headings.")).toBeTruthy();
 
-    fireEvent.click(screen.getByRole("button", { name: "Large" }));
+    expect((screen.getByRole("button", { name: "×1" }) as HTMLButtonElement).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByRole("button", { name: "×1.5" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "×2" })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Dark" }));
+    expect((screen.getByRole("button", { name: "Dark" }) as HTMLButtonElement).getAttribute("aria-pressed")).toBe("true");
+    expect(document.querySelector(".settings-shell")?.getAttribute("data-color-mode")).toBe("dark");
+
+    fireEvent.click(screen.getByRole("button", { name: "×2" }));
     expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Back to viewer" }));
     expect(await screen.findByRole("heading", { name: "Hello" })).toBeTruthy();
-    expect(document.querySelector(".app-shell")?.className).toContain("font-large");
+    expect(document.querySelector(".app-shell")?.getAttribute("data-color-mode")).toBe("dark");
+    expect(document.querySelector(".app-shell")?.className).toContain("color-dark");
+    expect(document.querySelector(".app-shell")?.className).not.toContain("font-");
+    const viewerBody = document.querySelector(".viewer-body") as HTMLElement | null;
+    expect(viewerBody?.style.getPropertyValue("--reader-font-scale")).toBe("2");
+    expect(viewerBody?.style.getPropertyValue("--reader-body-font-size")).toBe("32px");
+    expect(viewerBody?.style.getPropertyValue("--reader-h1-font-size")).toBe("60px");
+    expect(viewerBody?.style.getPropertyValue("--reader-code-font-size")).toBe("26px");
+    expect((document.querySelector(".sidebar") as HTMLElement | null)?.getAttribute("style") || "").not.toContain("--reader-");
+    expect((document.querySelector(".right-panel") as HTMLElement | null)?.getAttribute("style") || "").not.toContain("--reader-");
+
+    fireEvent.click(screen.getByRole("button", { name: "Source" }));
+    expect(await screen.findByLabelText("Source")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "api.ts" }));
+    expect(await screen.findByLabelText("Raw")).toBeTruthy();
+    expect(cssRule(".code-viewer")).toContain("font-size: var(--reader-code-font-size, 13px);");
+
     fireEvent.click(screen.getByRole("button", { name: "Open Settings" }));
-    expect((screen.getByRole("button", { name: "Large" }) as HTMLButtonElement).getAttribute("aria-pressed")).toBe("true");
+    expect((screen.getByRole("button", { name: "×2" }) as HTMLButtonElement).getAttribute("aria-pressed")).toBe("true");
+    expect((screen.getByRole("button", { name: "Dark" }) as HTMLButtonElement).getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(screen.getByRole("button", { name: "Light" }));
+    expect(document.querySelector(".settings-shell")?.getAttribute("data-color-mode")).toBe("light");
     fireEvent.click(screen.getByRole("button", { name: "Back to viewer" }));
-    expect(await screen.findByRole("heading", { name: "Hello" })).toBeTruthy();
-    expect(document.querySelector(".app-shell")?.className).toContain("font-large");
+    expect(await screen.findByLabelText("Raw")).toBeTruthy();
+    expect(document.querySelector(".app-shell")?.getAttribute("data-color-mode")).toBe("light");
+    expect(document.querySelector(".app-shell")?.className).not.toContain("font-");
     fireEvent.click(screen.getByRole("tab", { name: "Memo" }));
     expect((screen.getByLabelText("Session memo") as HTMLTextAreaElement).value).toBe("keep this memo");
+  });
+
+  it("injects reader font scale and color mode into sandboxed HTML file view documents", () => {
+    expect(buildSandboxedHtmlSrcDoc("<html><head><title>Doc</title></head><body>Hi</body></html>", 1.5)).toContain(
+      ":root { color-scheme: light; font-size: 24px;",
+    );
+    expect(buildSandboxedHtmlSrcDoc("<h1>Hi</h1>", 2, "dark")).toContain(
+      '<head><style>:root { color-scheme: dark; font-size: 32px; color: #e6edf0; background: #10181c; } body { background: #10181c; color: #e6edf0; font-size: 1rem; }',
+    );
   });
 
   it("shows real repository config state, validates, previews YAML, and saves from Settings", async () => {

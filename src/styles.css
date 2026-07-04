@@ -15,6 +15,35 @@ body { margin: 0; min-width: 320px; min-height: 100vh; overflow: hidden; }
 button, select, textarea { font: inherit; }
 button { color: inherit; }
 
+main:is(.app-shell, .settings-shell) {
+  color-scheme: light;
+  --rw-dark-app: #10181c;
+  --rw-dark-panel: #152126;
+  --rw-dark-panel-soft: #19272d;
+  --rw-dark-panel-muted: #111b20;
+  --rw-dark-border: #30434b;
+  --rw-dark-border-soft: #263940;
+  --rw-dark-border-strong: #3b535d;
+  --rw-dark-text: #e6edf0;
+  --rw-dark-text-soft: #d5e1e5;
+  --rw-dark-muted: #a8b7bd;
+  --rw-dark-muted-soft: #91a2aa;
+  --rw-dark-icon: #b8cbd2;
+  --rw-dark-icon-strong: #e6edf0;
+  --rw-dark-accent: #8fd3dc;
+  --rw-dark-accent-strong: #6bb8c3;
+  --rw-dark-accent-bg: #1f353b;
+  --rw-dark-accent-selected: #203c43;
+  --rw-dark-code: #0f171b;
+  --rw-dark-success: #8fd5a7;
+  --rw-dark-success-bg: #183326;
+  --rw-dark-danger: #f2a7a0;
+  --rw-dark-danger-bg: #3a2021;
+  --rw-dark-warning: #e3c37d;
+  --rw-dark-warning-bg: #352b18;
+  --rw-dark-shadow: rgba(0, 0, 0, 0.34);
+}
+
 .app-shell {
   display: grid;
   grid-template-columns: minmax(260px, 330px) minmax(0, 1fr) minmax(260px, 310px);
@@ -23,8 +52,6 @@ button { color: inherit; }
   overflow: hidden;
   background: #f7fafb;
 }
-.app-shell.font-small { font-size: 14px; }
-.app-shell.font-large { font-size: 17px; }
 .app-shell.layout-compact { grid-template-columns: minmax(230px, 285px) minmax(0, 1fr) minmax(230px, 270px); }
 .app-shell.layout-focused { grid-template-columns: minmax(220px, 280px) minmax(0, 1fr) minmax(210px, 250px); }
 
@@ -448,17 +475,18 @@ button { color: inherit; }
 }
 .markdown-body {
   line-height: 1.68;
+  font-size: var(--reader-body-font-size, 16px);
   background: transparent;
   border: 0;
   border-radius: 0;
   padding: 0;
 }
 .markdown-body h1, .markdown-body h2, .markdown-body h3 { line-height: 1.25; letter-spacing: 0; }
-.markdown-body h1 { font-size: 30px; }
-.markdown-body h2 { font-size: 23px; margin-top: 28px; }
-.markdown-body h3 { font-size: 18px; margin-top: 22px; }
+.markdown-body h1 { font-size: var(--reader-h1-font-size, 30px); }
+.markdown-body h2 { font-size: var(--reader-h2-font-size, 23px); margin-top: 28px; }
+.markdown-body h3 { font-size: var(--reader-h3-font-size, 18px); margin-top: 22px; }
 .markdown-body a { color: #11606c; }
-.markdown-body code { background: #eef3f5; border: 1px solid #d5e0e4; border-radius: 4px; padding: 2px 5px; color: #22323a; }
+.markdown-body code { background: #eef3f5; border: 1px solid #d5e0e4; border-radius: 4px; padding: 2px 5px; color: #22323a; font-size: 0.95em; }
 .markdown-body pre {
   overflow-x: auto;
   overflow-y: hidden;
@@ -466,10 +494,12 @@ button { color: inherit; }
   color: #172026;
   border: 0;
   border-radius: 0;
+  font-size: var(--reader-code-font-size, 13px);
+  line-height: 1.55;
   padding: 4px 14px 14px;
   max-width: 100%;
 }
-.markdown-body pre code { display: block; min-width: max-content; background: transparent; border: 0; color: inherit; padding: 0; overflow-wrap: normal; word-break: normal; }
+.markdown-body pre code { display: block; min-width: max-content; background: transparent; border: 0; color: inherit; font-size: inherit; padding: 0; overflow-wrap: normal; word-break: normal; }
 .markdown-body .markdown-code-block {
   max-width: 100%;
   margin: 16px 0;
@@ -566,7 +596,9 @@ button { color: inherit; }
   border: 1px solid #d7dce0;
   border-radius: 8px;
   padding: 0;
-  font: 13px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: var(--reader-code-font-size, 13px);
+  line-height: 1.55;
 }
 .code-viewer code { display: block; min-width: max-content; padding: 12px 0; }
 .code-viewer.wrap {
@@ -1747,4 +1779,361 @@ button { color: inherit; }
     grid-column: 1 / -1;
     justify-self: start;
   }
+}
+
+.app-shell[data-color-mode="dark"],
+.settings-shell[data-color-mode="dark"] {
+  color-scheme: dark;
+  background: var(--rw-dark-app);
+  color: var(--rw-dark-text);
+}
+
+.app-shell[data-color-mode="dark"] .sidebar,
+.app-shell[data-color-mode="dark"] .workspace,
+.app-shell[data-color-mode="dark"] .viewer-header,
+.app-shell[data-color-mode="dark"] .right-panel-header,
+.app-shell[data-color-mode="dark"] .tree-sticky-scrollport,
+.app-shell[data-color-mode="dark"] .tree-sticky-row,
+.settings-shell[data-color-mode="dark"] .settings-rail,
+.settings-shell[data-color-mode="dark"] .settings-header {
+  border-color: var(--rw-dark-border);
+  background: var(--rw-dark-panel);
+  color: var(--rw-dark-text);
+}
+
+.app-shell[data-color-mode="dark"] .right-panel,
+.app-shell[data-color-mode="dark"] .file-tab-bar-wrap,
+.app-shell[data-color-mode="dark"] .memo-panel,
+.settings-shell[data-color-mode="dark"] {
+  border-color: var(--rw-dark-border);
+  background: var(--rw-dark-panel-muted);
+  color: var(--rw-dark-text);
+}
+
+.app-shell[data-color-mode="dark"] .settings-header,
+.settings-shell[data-color-mode="dark"] .settings-header {
+  background: rgba(21, 33, 38, 0.96);
+}
+
+.app-shell[data-color-mode="dark"] .http-delivery-control,
+.app-shell[data-color-mode="dark"] .empty-state,
+.app-shell[data-color-mode="dark"] .binary-state,
+.app-shell[data-color-mode="dark"] .path-context-menu,
+.app-shell[data-color-mode="dark"] .file-tab-menu,
+.settings-shell[data-color-mode="dark"] .settings-badge,
+.settings-shell[data-color-mode="dark"] .settings-card,
+.settings-shell[data-color-mode="dark"] .settings-status-card,
+.settings-shell[data-color-mode="dark"] .settings-summary-grid > div,
+.settings-shell[data-color-mode="dark"] .setting-row.inline-row,
+.settings-shell[data-color-mode="dark"] .settings-toggle.detailed,
+.settings-shell[data-color-mode="dark"] .repo-list-row,
+.settings-shell[data-color-mode="dark"] .chip-list span,
+.settings-shell[data-color-mode="dark"] .validation-item,
+.settings-shell[data-color-mode="dark"] .toggle-card,
+.settings-shell[data-color-mode="dark"] .settings-info-grid > div,
+.settings-shell[data-color-mode="dark"] .active-entry-summary,
+.settings-shell[data-color-mode="dark"] .side-panel-preview,
+.settings-shell[data-color-mode="dark"] .entry-card,
+.settings-shell[data-color-mode="dark"] .auth-entry-card,
+.settings-shell[data-color-mode="dark"] .mini-tabs span,
+.settings-shell[data-color-mode="dark"] .mini-message,
+.settings-shell[data-color-mode="dark"] .status-pill,
+.settings-shell[data-color-mode="dark"] .entry-status-pills span,
+.settings-shell[data-color-mode="dark"] .endpoint-settings-panel,
+.settings-shell[data-color-mode="dark"] .repo-access-row,
+.settings-shell[data-color-mode="dark"] .entry-status-row,
+.settings-shell[data-color-mode="dark"] .diagnostic-test-row,
+.app-shell[data-color-mode="dark"] .ai-chat-context,
+.app-shell[data-color-mode="dark"] .ai-chat-empty,
+.app-shell[data-color-mode="dark"] .ai-chat-error,
+.app-shell[data-color-mode="dark"] .ai-message {
+  border-color: var(--rw-dark-border);
+  background: var(--rw-dark-panel);
+  color: var(--rw-dark-text);
+}
+
+.app-shell[data-color-mode="dark"] .repo-picker,
+.app-shell[data-color-mode="dark"] .segmented,
+.app-shell[data-color-mode="dark"] .segmented button,
+.app-shell[data-color-mode="dark"] .mode-label,
+.app-shell[data-color-mode="dark"] .right-panel-tabs,
+.app-shell[data-color-mode="dark"] .right-panel-tabs button,
+.app-shell[data-color-mode="dark"] .memo-mode-toggle,
+.app-shell[data-color-mode="dark"] .memo-mode-toggle button,
+.app-shell[data-color-mode="dark"] .viewer-copy-button,
+.app-shell[data-color-mode="dark"] .http-delivery-stop-button,
+.app-shell[data-color-mode="dark"] .memo-icon-button,
+.settings-shell[data-color-mode="dark"] .settings-back-button,
+.settings-shell[data-color-mode="dark"] .secondary-button,
+.settings-shell[data-color-mode="dark"] .danger-button,
+.settings-shell[data-color-mode="dark"] .settings-segmented,
+.settings-shell[data-color-mode="dark"] .settings-segmented button,
+.settings-shell[data-color-mode="dark"] .settings-mark,
+.settings-shell[data-color-mode="dark"] .settings-field input,
+.settings-shell[data-color-mode="dark"] .settings-field select,
+.settings-shell[data-color-mode="dark"] .settings-field textarea,
+.settings-shell[data-color-mode="dark"] .ai-chat-composer textarea,
+.app-shell[data-color-mode="dark"] .ai-chat-composer textarea {
+  border-color: var(--rw-dark-border-strong);
+  background: var(--rw-dark-panel-soft);
+  color: var(--rw-dark-text);
+}
+
+.app-shell[data-color-mode="dark"] .segmented button.active,
+.app-shell[data-color-mode="dark"] .right-panel-tabs button.active,
+.app-shell[data-color-mode="dark"] .memo-mode-toggle button.active,
+.app-shell[data-color-mode="dark"] .viewer-copy-button.http-delivery-open-button.active,
+.settings-shell[data-color-mode="dark"] .primary-button,
+.settings-shell[data-color-mode="dark"] .settings-segmented button.active,
+.settings-shell[data-color-mode="dark"] .settings-category-nav button.active,
+.settings-shell[data-color-mode="dark"] .settings-category-nav button:hover,
+.settings-shell[data-color-mode="dark"] .repo-list-row.active,
+.settings-shell[data-color-mode="dark"] .entry-card.active,
+.settings-shell[data-color-mode="dark"] .entry-status-row.active,
+.settings-shell[data-color-mode="dark"] .mini-tabs strong,
+.settings-shell[data-color-mode="dark"] .mini-message.user,
+.settings-shell[data-color-mode="dark"] .entry-icon,
+.app-shell[data-color-mode="dark"] .ai-message.user {
+  border-color: var(--rw-dark-accent-strong);
+  background: var(--rw-dark-accent-selected);
+  color: var(--rw-dark-text);
+}
+
+.settings-shell[data-color-mode="dark"] .settings-badge,
+.settings-shell[data-color-mode="dark"] .status-pill,
+.settings-shell[data-color-mode="dark"] .entry-status-pills span {
+  color: var(--rw-dark-muted);
+}
+
+.settings-shell[data-color-mode="dark"] .status-pill.active,
+.settings-shell[data-color-mode="dark"] .entry-status-pills span.ready {
+  border-color: var(--rw-dark-success);
+  background: var(--rw-dark-success-bg);
+  color: var(--rw-dark-success);
+}
+
+.settings-shell[data-color-mode="dark"] .entry-status-pills span.error {
+  border-color: var(--rw-dark-danger);
+  background: var(--rw-dark-danger-bg);
+  color: var(--rw-dark-danger);
+}
+
+.app-shell[data-color-mode="dark"] .sidebar-tree-action,
+.app-shell[data-color-mode="dark"] .sidebar-settings-button,
+.app-shell[data-color-mode="dark"] .viewer-copy-button,
+.settings-shell[data-color-mode="dark"] .settings-mark {
+  box-shadow: 0 2px 10px var(--rw-dark-shadow);
+}
+
+.app-shell[data-color-mode="dark"] .tree-chevron,
+.app-shell[data-color-mode="dark"] .tree-icon {
+  color: var(--rw-dark-icon);
+  opacity: 1;
+}
+
+.app-shell[data-color-mode="dark"] .tree-row:hover .tree-chevron,
+.app-shell[data-color-mode="dark"] .tree-row:hover .tree-icon,
+.app-shell[data-color-mode="dark"] .tree-row.selected .tree-chevron,
+.app-shell[data-color-mode="dark"] .tree-row.selected .tree-icon {
+  color: var(--rw-dark-icon-strong);
+}
+
+.app-shell[data-color-mode="dark"] .icon-button.sidebar-tree-action,
+.app-shell[data-color-mode="dark"] .icon-button.sidebar-settings-button {
+  border-color: var(--rw-dark-border-strong);
+  background: var(--rw-dark-panel-soft);
+  color: var(--rw-dark-icon-strong);
+}
+
+.app-shell[data-color-mode="dark"] .sidebar-tree-action svg,
+.app-shell[data-color-mode="dark"] .sidebar-settings-button svg,
+.app-shell[data-color-mode="dark"] .tree-chevron svg {
+  stroke-width: 2.3;
+}
+
+.app-shell[data-color-mode="dark"] .icon-button,
+.app-shell[data-color-mode="dark"] .file-tab,
+.app-shell[data-color-mode="dark"] .tree-row,
+.app-shell[data-color-mode="dark"] .outline-link,
+.app-shell[data-color-mode="dark"] .file-tab-menu button,
+.app-shell[data-color-mode="dark"] .path-context-menu button,
+.settings-shell[data-color-mode="dark"] .settings-category-nav button,
+.settings-shell[data-color-mode="dark"] .repo-list-main,
+.settings-shell[data-color-mode="dark"] .text-button {
+  color: var(--rw-dark-text-soft);
+}
+
+.app-shell[data-color-mode="dark"] .icon-button:hover,
+.app-shell[data-color-mode="dark"] .icon-button:focus-visible,
+.app-shell[data-color-mode="dark"] .tree-row:hover,
+.app-shell[data-color-mode="dark"] .tree-sticky-row:hover,
+.app-shell[data-color-mode="dark"] .file-tab:hover,
+.app-shell[data-color-mode="dark"] .file-tab-close:hover,
+.app-shell[data-color-mode="dark"] .path-context-menu button:hover,
+.app-shell[data-color-mode="dark"] .path-context-menu button:focus-visible,
+.app-shell[data-color-mode="dark"] .file-tab-menu button:hover,
+.app-shell[data-color-mode="dark"] .file-tab-menu button:focus-visible,
+.app-shell[data-color-mode="dark"] .outline-link:hover,
+.app-shell[data-color-mode="dark"] .outline-link:focus-visible,
+.app-shell[data-color-mode="dark"] .memo-mode-toggle button:hover,
+.settings-shell[data-color-mode="dark"] .settings-back-button:hover,
+.settings-shell[data-color-mode="dark"] .secondary-button:hover,
+.settings-shell[data-color-mode="dark"] .settings-segmented button:hover,
+.settings-shell[data-color-mode="dark"] .model-candidates button:hover {
+  border-color: var(--rw-dark-accent-strong);
+  background: var(--rw-dark-accent-bg);
+  color: var(--rw-dark-text);
+}
+
+.app-shell[data-color-mode="dark"] .tree-row.selected,
+.app-shell[data-color-mode="dark"] .file-tab.active,
+.settings-shell[data-color-mode="dark"] .model-candidates button.active {
+  border-color: var(--rw-dark-accent-strong);
+  background: var(--rw-dark-accent-selected);
+  color: var(--rw-dark-text);
+}
+
+.app-shell[data-color-mode="dark"] .sidebar-header p,
+.app-shell[data-color-mode="dark"] .repo-picker-label,
+.app-shell[data-color-mode="dark"] .repo-root,
+.app-shell[data-color-mode="dark"] .repo-sync-status,
+.app-shell[data-color-mode="dark"] .http-delivery-label,
+.app-shell[data-color-mode="dark"] .http-delivery-count,
+.app-shell[data-color-mode="dark"] .http-delivery-status,
+.app-shell[data-color-mode="dark"] .state-text,
+.app-shell[data-color-mode="dark"] .file-tab-state,
+.app-shell[data-color-mode="dark"] .code-line-number,
+.app-shell[data-color-mode="dark"] .binary-state p,
+.app-shell[data-color-mode="dark"] .file-info-list dt,
+.app-shell[data-color-mode="dark"] .outline-link small,
+.app-shell[data-color-mode="dark"] .memo-empty,
+.app-shell[data-color-mode="dark"] .ai-chat-context span,
+.app-shell[data-color-mode="dark"] .ai-chat-empty p,
+.app-shell[data-color-mode="dark"] .ai-chat-placeholder,
+.app-shell[data-color-mode="dark"] .ai-message > span,
+.settings-shell[data-color-mode="dark"] .settings-heading p,
+.settings-shell[data-color-mode="dark"] .settings-header p,
+.settings-shell[data-color-mode="dark"] .settings-status-card span,
+.settings-shell[data-color-mode="dark"] .settings-status-card small,
+.settings-shell[data-color-mode="dark"] .settings-card-heading span,
+.settings-shell[data-color-mode="dark"] .settings-summary-grid span,
+.settings-shell[data-color-mode="dark"] .settings-field span,
+.settings-shell[data-color-mode="dark"] .setting-row small,
+.settings-shell[data-color-mode="dark"] .settings-toggle.detailed small,
+.settings-shell[data-color-mode="dark"] .settings-message,
+.settings-shell[data-color-mode="dark"] .repo-list-main small,
+.settings-shell[data-color-mode="dark"] .settings-info-grid small,
+.settings-shell[data-color-mode="dark"] .active-entry-summary small,
+.settings-shell[data-color-mode="dark"] .side-panel-preview small,
+.settings-shell[data-color-mode="dark"] .mini-message span,
+.settings-shell[data-color-mode="dark"] .entry-card p,
+.settings-shell[data-color-mode="dark"] .auth-card-note,
+.settings-shell[data-color-mode="dark"] .auth-entry-card p,
+.settings-shell[data-color-mode="dark"] .auth-entry-card small,
+.settings-shell[data-color-mode="dark"] .auth-card-heading > div > span,
+.settings-shell[data-color-mode="dark"] .entry-card > div > span,
+.settings-shell[data-color-mode="dark"] .active-entry-summary > span,
+.settings-shell[data-color-mode="dark"] .model-candidates > span,
+.settings-shell[data-color-mode="dark"] .endpoint-settings-heading > span,
+.settings-shell[data-color-mode="dark"] .subsection-title,
+.settings-shell[data-color-mode="dark"] .endpoint-settings-heading small,
+.settings-shell[data-color-mode="dark"] .repo-access-row small,
+.settings-shell[data-color-mode="dark"] .entry-status-row small,
+.settings-shell[data-color-mode="dark"] .diagnostic-test-row small,
+.settings-shell[data-color-mode="dark"] .repo-access-row span,
+.settings-shell[data-color-mode="dark"] .entry-status-row span,
+.settings-shell[data-color-mode="dark"] .diagnostic-test-row span {
+  color: var(--rw-dark-muted);
+}
+
+.app-shell[data-color-mode="dark"] .markdown-body a,
+.settings-shell[data-color-mode="dark"] .text-button {
+  color: var(--rw-dark-accent);
+}
+
+.app-shell[data-color-mode="dark"] .markdown-body code,
+.app-shell[data-color-mode="dark"] .markdown-body pre,
+.app-shell[data-color-mode="dark"] .markdown-body .markdown-code-block,
+.app-shell[data-color-mode="dark"] .code-viewer,
+.settings-shell[data-color-mode="dark"] .yaml-preview {
+  border-color: var(--rw-dark-border);
+  background: var(--rw-dark-code);
+  color: var(--rw-dark-text);
+}
+
+.app-shell[data-color-mode="dark"] .markdown-body .markdown-code-action-button,
+.app-shell[data-color-mode="dark"] .markdown-code-action-button {
+  border-color: var(--rw-dark-border-strong);
+  background: var(--rw-dark-panel-soft);
+  color: var(--rw-dark-text-soft);
+}
+
+.app-shell[data-color-mode="dark"] .markdown-body th,
+.app-shell[data-color-mode="dark"] .markdown-body td,
+.app-shell[data-color-mode="dark"] .markdown-body thead th,
+.app-shell[data-color-mode="dark"] .file-information,
+.app-shell[data-color-mode="dark"] .file-info-list div,
+.app-shell[data-color-mode="dark"] .file-facts div,
+.app-shell[data-color-mode="dark"] .outline-list li,
+.app-shell[data-color-mode="dark"] .memo-panel-header,
+.app-shell[data-color-mode="dark"] .sidebar-settings-zone,
+.app-shell[data-color-mode="dark"] .tree-sticky-layer,
+.app-shell[data-color-mode="dark"] .tree-sticky-row,
+.app-shell[data-color-mode="dark"] .code-line-number {
+  border-color: var(--rw-dark-border-soft);
+}
+
+.app-shell[data-color-mode="dark"] .code-line:hover {
+  background: var(--rw-dark-panel-soft);
+}
+
+.app-shell[data-color-mode="dark"] .html-frame,
+.app-shell[data-color-mode="dark"] .pdf-frame,
+.app-shell[data-color-mode="dark"] .image-viewer {
+  border-color: var(--rw-dark-border);
+  background: var(--rw-dark-panel-muted);
+}
+
+.app-shell[data-color-mode="dark"] .memo-textarea,
+.app-shell[data-color-mode="dark"] .file-info-list dd,
+.settings-shell[data-color-mode="dark"] .yaml-preview,
+.settings-shell[data-color-mode="dark"] .repo-list-main strong {
+  color: var(--rw-dark-text);
+}
+
+.app-shell[data-color-mode="dark"] .viewer-copy-button.copied,
+.app-shell[data-color-mode="dark"] .memo-icon-button.copied,
+.app-shell[data-color-mode="dark"] .markdown-body .markdown-code-copy-button[data-copy-state="copied"],
+.settings-shell[data-color-mode="dark"] .settings-message.success,
+.settings-shell[data-color-mode="dark"] .status-pill.active,
+.settings-shell[data-color-mode="dark"] .entry-status-pills span.ready,
+.settings-shell[data-color-mode="dark"] .validation-item.ready svg {
+  border-color: var(--rw-dark-success);
+  background: var(--rw-dark-success-bg);
+  color: var(--rw-dark-success);
+}
+
+.app-shell[data-color-mode="dark"] .viewer-copy-button.error,
+.app-shell[data-color-mode="dark"] .memo-icon-button.error,
+.app-shell[data-color-mode="dark"] .memo-icon-button.danger:hover,
+.app-shell[data-color-mode="dark"] .http-delivery-stop-button:hover,
+.app-shell[data-color-mode="dark"] .markdown-body .markdown-code-copy-button[data-copy-state="error"],
+.app-shell[data-color-mode="dark"] .http-delivery-status.error,
+.app-shell[data-color-mode="dark"] .state-text.error,
+.app-shell[data-color-mode="dark"] .ai-chat-error,
+.settings-shell[data-color-mode="dark"] .danger-button,
+.settings-shell[data-color-mode="dark"] .settings-message.error,
+.settings-shell[data-color-mode="dark"] .entry-status-pills span.error,
+.settings-shell[data-color-mode="dark"] .validation-item.error svg {
+  border-color: var(--rw-dark-danger);
+  background: var(--rw-dark-danger-bg);
+  color: var(--rw-dark-danger);
+}
+
+.app-shell[data-color-mode="dark"] .file-tab-notice,
+.settings-shell[data-color-mode="dark"] .settings-message.warning,
+.settings-shell[data-color-mode="dark"] .warning-box {
+  border-color: var(--rw-dark-warning);
+  background: var(--rw-dark-warning-bg);
+  color: var(--rw-dark-warning);
 }

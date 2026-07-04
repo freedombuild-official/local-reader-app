@@ -11,9 +11,12 @@ import {
   defaultAISettings,
   derivedAIStatus,
   effectiveAIStatus,
+  formatReaderFontScaleLabel,
   isCliSettings,
   isProviderEntryKind,
   normalizeAISettingsState,
+  normalizeReaderFontScale,
+  READER_FONT_SCALE_OPTIONS,
   updateAIEntry,
   updateAIEntryStatus,
   updateCliEntryReadiness,
@@ -232,7 +235,7 @@ export function SettingsView({
   }
 
   return (
-    <main className="settings-shell" data-testid="settings-shell">
+    <main className="settings-shell" data-testid="settings-shell" data-color-mode={basicSettings.colorMode}>
       <aside className="settings-rail" aria-label="Settings navigation">
         <button type="button" className="settings-back-button" onClick={onBack}>
           <ArrowLeft aria-hidden="true" focusable="false" />
@@ -327,31 +330,26 @@ export function SettingsView({
 function BasicSettingsPanel({ settings, dirty, saveError, onChange }: { settings: BasicSettings; dirty: boolean; saveError: string; onChange: (settings: BasicSettings) => void }) {
   return (
     <section className="settings-page" aria-label="Basic settings">
-      <SettingsCard title="Reader text scale" eyebrow="Font size" status={settings.fontSize}>
+      <SettingsCard title="Reader text scale" eyebrow="Font size" status={formatReaderFontScaleLabel(settings.readerFontScale)}>
         <SettingRow title="Adjust reader text density" description="Applies to markdown, text, code, and document reading surfaces in this browser.">
           <SegmentedControl
             label="Font size"
-            value={settings.fontSize}
-            options={[
-              ["small", "Small"],
-              ["default", "Default"],
-              ["large", "Large"],
-            ]}
-            onChange={(fontSize) => onChange({ ...settings, fontSize: fontSize as BasicSettings["fontSize"] })}
+            value={String(settings.readerFontScale)}
+            options={READER_FONT_SCALE_OPTIONS.map((scale): [string, string] => [String(scale), formatReaderFontScaleLabel(scale)])}
+            onChange={(readerFontScale) => onChange({ ...settings, readerFontScale: normalizeReaderFontScale(readerFontScale) })}
           />
         </SettingRow>
       </SettingsCard>
       <SettingsCard title="Appearance" eyebrow="Color mode" status={settings.colorMode}>
-        <SettingRow title="Match the reader surface to the browser" description="Dark mode is shown as a future state and is not selectable in this version.">
+        <SettingRow title="Choose the reader theme" description="Applies Light or Dark to the full Reader-Wiki app in this browser.">
           <SegmentedControl
             label="Color mode"
             value={settings.colorMode}
             options={[
-              ["system", "System"],
               ["light", "Light"],
-              { value: "dark", label: "Dark", disabled: true, title: "Future state" },
+              ["dark", "Dark"],
             ]}
-            onChange={(colorMode) => onChange({ ...settings, colorMode: colorMode === "dark" ? settings.colorMode : (colorMode as BasicSettings["colorMode"]) })}
+            onChange={(colorMode) => onChange({ ...settings, colorMode: colorMode as BasicSettings["colorMode"] })}
           />
         </SettingRow>
       </SettingsCard>

@@ -1,8 +1,11 @@
 import type { AIChatExecutionTarget, AIConnectionStatus, AICliEntryKind, AIEntryKind, AIEntrySettings, AIProviderEntryKind, AIProviderSettings, CliAIEntryReadiness, CliAIEntrySettings } from "./types";
 
+export const READER_FONT_SCALE_OPTIONS = [1, 1.5, 2] as const;
+export type ReaderFontScale = (typeof READER_FONT_SCALE_OPTIONS)[number];
+
 export type BasicSettings = {
-  fontSize: "small" | "default" | "large";
-  colorMode: "system" | "light" | "dark";
+  readerFontScale: ReaderFontScale;
+  colorMode: "light" | "dark";
   layout: "compact" | "comfortable" | "focused";
   showOutline: boolean;
   showSourceMetadata: boolean;
@@ -18,8 +21,8 @@ export type AISettingsState = {
 const BASIC_SETTINGS_KEY = "readerWiki.basicSettings.v1";
 
 export const defaultBasicSettings: BasicSettings = {
-  fontSize: "default",
-  colorMode: "system",
+  readerFontScale: 1,
+  colorMode: "light",
   layout: "comfortable",
   showOutline: true,
   showSourceMetadata: true,
@@ -83,7 +86,7 @@ export function loadBasicSettings(): { settings: BasicSettings; error: string } 
     if (!storage) return { settings: defaultBasicSettings, error: "" };
     const raw = storage.getItem(BASIC_SETTINGS_KEY);
     if (!raw) return { settings: defaultBasicSettings, error: "" };
-    const parsed = JSON.parse(raw) as Partial<BasicSettings>;
+    const parsed = JSON.parse(raw) as Partial<BasicSettings> & { fontSize?: unknown };
     return { settings: normalizeBasicSettings(parsed), error: "" };
   } catch (error) {
     return { settings: defaultBasicSettings, error: error instanceof Error ? error.message : String(error) };
@@ -280,10 +283,24 @@ export function normalizeAISettingsState(value: AISettingsState): AISettingsStat
   };
 }
 
-function normalizeBasicSettings(value: Partial<BasicSettings>): BasicSettings {
+export function normalizeReaderFontScale(value: unknown): ReaderFontScale {
+  const numericValue = typeof value === "number" ? value : Number(value);
+  return READER_FONT_SCALE_OPTIONS.find((option) => option === numericValue) ?? 1;
+}
+
+export function formatReaderFontScaleLabel(scale: ReaderFontScale): string {
+  return `×${normalizeReaderFontScale(scale)}`;
+}
+
+function normalizeLegacyFontSize(value: unknown): ReaderFontScale {
+  if (value === "large") return 1.5;
+  return 1;
+}
+
+function normalizeBasicSettings(value: Partial<BasicSettings> & { fontSize?: unknown }): BasicSettings {
   return {
-    fontSize: value.fontSize === "small" || value.fontSize === "large" ? value.fontSize : "default",
-    colorMode: value.colorMode === "light" ? "light" : "system",
+    readerFontScale: value.readerFontScale === undefined ? normalizeLegacyFontSize(value.fontSize) : normalizeReaderFontScale(value.readerFontScale),
+    colorMode: value.colorMode === "dark" ? "dark" : "light",
     layout: value.layout === "compact" || value.layout === "focused" ? value.layout : "comfortable",
     showOutline: value.showOutline !== false,
     showSourceMetadata: value.showSourceMetadata !== false,
