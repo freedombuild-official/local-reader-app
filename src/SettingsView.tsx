@@ -287,7 +287,7 @@ export function SettingsView({
           </div>
         </header>
 
-        {category === "basic" ? <BasicSettingsPanel settings={basicDraft} dirty={basicDirty} saveError={basicSaveError} onChange={commitBasicSettings} /> : null}
+        {category === "basic" ? <BasicSettingsPanel settings={basicDraft} onChange={commitBasicSettings} /> : null}
         {category === "repositories" ? (
           <RepositoriesSettingsPanel
             repoState={repoState}
@@ -327,7 +327,7 @@ export function SettingsView({
   );
 }
 
-function BasicSettingsPanel({ settings, dirty, saveError, onChange }: { settings: BasicSettings; dirty: boolean; saveError: string; onChange: (settings: BasicSettings) => void }) {
+function BasicSettingsPanel({ settings, onChange }: { settings: BasicSettings; onChange: (settings: BasicSettings) => void }) {
   return (
     <section className="settings-page" aria-label="Basic settings">
       <SettingsCard title="Reader text scale" eyebrow="Font size" status={formatReaderFontScaleLabel(settings.readerFontScale)}>
@@ -354,7 +354,7 @@ function BasicSettingsPanel({ settings, dirty, saveError, onChange }: { settings
         </SettingRow>
       </SettingsCard>
       <SettingsCard title="Workspace density" eyebrow="Reader layout" status={settings.layout}>
-        <SettingRow title="Choose how much surrounding context stays visible" description="Compact favors navigation, Comfortable balances panels, and Focused gives the reader more space.">
+        <SettingRow title="Choose how much surrounding context stays visible" description="Compact widens navigation and side context, Comfortable balances panels, and Focused gives the reader more width.">
           <SegmentedControl
             label="Reader layout"
             value={settings.layout}
@@ -366,23 +366,6 @@ function BasicSettingsPanel({ settings, dirty, saveError, onChange }: { settings
             onChange={(layout) => onChange({ ...settings, layout: layout as BasicSettings["layout"] })}
           />
         </SettingRow>
-      </SettingsCard>
-      <SettingsCard title="Wiki display options" eyebrow="Display" status={saveError ? "Save failed" : "Saved"}>
-        <label className="settings-toggle detailed">
-          <input type="checkbox" checked={settings.showOutline} onChange={(event) => onChange({ ...settings, showOutline: event.target.checked })} />
-          <span>
-            <strong>Show page outline</strong>
-            <small>Displays heading navigation in the right panel when the active file has markdown headings.</small>
-          </span>
-        </label>
-        <label className="settings-toggle detailed">
-          <input type="checkbox" checked={settings.showSourceMetadata} onChange={(event) => onChange({ ...settings, showSourceMetadata: event.target.checked })} />
-          <span>
-            <strong>Show source metadata</strong>
-            <small>Shows file path, type, size, line count, and viewer status below the active file.</small>
-          </span>
-        </label>
-        {saveError ? <p className="settings-message error">{saveError}</p> : <p className="settings-message">{dirty ? "Unsaved browser-local changes." : "Saved in this browser."}</p>}
       </SettingsCard>
     </section>
   );
@@ -604,41 +587,11 @@ function AIChatSettingsPanel({
 
   return (
     <section className="settings-page ai-settings-page" aria-label="AI Chat settings">
-      <SettingsCard title="AI Chat behavior" eyebrow="General" status="Read-only">
-        <div className="settings-info-grid">
-          <div>
-            <strong>Only one AI Entry can be active at a time</strong>
-            <small>Settings can hold CLI and provider entries. The right panel uses only the active entry.</small>
-          </div>
-          <div>
-            <strong>Outline / Memo / AI Chat</strong>
-            <small>AI Chat lives in the same right panel and receives read-only context from the active repository file.</small>
-          </div>
-        </div>
-        <div className="side-panel-preview" aria-label="Right panel preview">
-          <div className="mini-tabs">
-            <span>Outline</span>
-            <span>Memo</span>
-            <strong>AI Chat</strong>
-          </div>
-          <div className="mini-chat-preview">
-            <div className="mini-message user">
-              <span>User</span>
-              <p>Explain the active file.</p>
-            </div>
-            <div className="mini-message assistant">
-              <span>Assistant</span>
-              <p>{activeEntry ? `${entryLabel(activeEntry)} answers from read-only context.` : "Select an AI Entry before sending."}</p>
-            </div>
-          </div>
-          <small>AI Entry: {activeEntry ? entryLabel(activeEntry) : "No active AI Entry"}</small>
-        </div>
-      </SettingsCard>
       <SettingsCard title="AI Entry" eyebrow="Provider" status={activeEntry ? entryLabel(activeEntry) : "No active AI Entry"}>
         <div className="active-entry-summary">
           <span>Active AI Entry</span>
           <strong>{activeEntry ? entryLabel(activeEntry) : "No active AI Entry"}</strong>
-          <small>{activeEntry ? "Only this entry is used by AI Chat." : "Choose an entry to enable provider checks and AI Chat sending."}</small>
+          <small>{activeEntry ? "Only this entry is active for AI Chat." : "Choose one entry to enable provider checks and AI Chat sending."}</small>
           {dirty ? <small>AI Chat settings have unsaved changes.</small> : null}
         </div>
         <div className="entry-grid" aria-label="AI Entry choices">

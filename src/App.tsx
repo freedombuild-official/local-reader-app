@@ -699,8 +699,6 @@ export function App() {
         memoMode={memoMode}
         onMemoTextChange={setMemoText}
         onMemoModeChange={setMemoMode}
-        showOutline={basicSettings.showOutline}
-        showSourceMetadata={basicSettings.showSourceMetadata}
         aiSettings={aiSettings}
         activeRepoId={activeRepoId}
         onOpenSettings={() => setAppView("settings")}
@@ -1255,7 +1253,7 @@ function HttpDeliveryPanel({ status, stoppingItemIds, error, onStop }: {
   );
 }
 
-function RightPanel({ mode, onModeChange, file, outline, onHeadingSelect, memoText, memoMode, onMemoTextChange, onMemoModeChange, showOutline, showSourceMetadata, aiSettings, activeRepoId, onOpenSettings }: {
+function RightPanel({ mode, onModeChange, file, outline, onHeadingSelect, memoText, memoMode, onMemoTextChange, onMemoModeChange, aiSettings, activeRepoId, onOpenSettings }: {
   mode: RightPanelMode;
   onModeChange: (mode: RightPanelMode) => void;
   file: FileResponse | null;
@@ -1265,8 +1263,6 @@ function RightPanel({ mode, onModeChange, file, outline, onHeadingSelect, memoTe
   memoMode: MemoMode;
   onMemoTextChange: (value: string) => void;
   onMemoModeChange: (mode: MemoMode) => void;
-  showOutline: boolean;
-  showSourceMetadata: boolean;
   aiSettings: AISettingsState;
   activeRepoId: string;
   onOpenSettings: () => void;
@@ -1287,7 +1283,7 @@ function RightPanel({ mode, onModeChange, file, outline, onHeadingSelect, memoTe
         </div>
       </header>
       {mode === "outline" ? (
-        <OutlinePanel file={file} outline={showOutline ? outline : []} showSourceMetadata={showSourceMetadata} onHeadingSelect={onHeadingSelect} />
+        <OutlinePanel file={file} outline={outline} onHeadingSelect={onHeadingSelect} />
       ) : mode === "memo" ? (
         <MemoPanel memoText={memoText} memoMode={memoMode} onMemoTextChange={onMemoTextChange} onMemoModeChange={onMemoModeChange} />
       ) : (
@@ -1299,10 +1295,10 @@ function RightPanel({ mode, onModeChange, file, outline, onHeadingSelect, memoTe
   );
 }
 
-function OutlinePanel({ file, outline, showSourceMetadata, onHeadingSelect }: { file: FileResponse | null; outline: OutlineItem[]; showSourceMetadata: boolean; onHeadingSelect: (headingId: string) => void }) {
+function OutlinePanel({ file, outline, onHeadingSelect }: { file: FileResponse | null; outline: OutlineItem[]; onHeadingSelect: (headingId: string) => void }) {
   return (
     <section className="side-panel-body">
-      {showSourceMetadata ? <FileInformationPanel file={file} /> : null}
+      <FileInformationPanel file={file} />
       <h2>Table of Contents</h2>
       {!file ? (
         <p className="state-text">No file selected.</p>

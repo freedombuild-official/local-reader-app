@@ -7,8 +7,6 @@ export type BasicSettings = {
   readerFontScale: ReaderFontScale;
   colorMode: "light" | "dark";
   layout: "compact" | "comfortable" | "focused";
-  showOutline: boolean;
-  showSourceMetadata: boolean;
 };
 
 export type AISettingsState = {
@@ -24,8 +22,6 @@ export const defaultBasicSettings: BasicSettings = {
   readerFontScale: 1,
   colorMode: "light",
   layout: "comfortable",
-  showOutline: true,
-  showSourceMetadata: true,
 };
 
 export const defaultAISettings: AISettingsState = {
@@ -302,8 +298,6 @@ function normalizeBasicSettings(value: Partial<BasicSettings> & { fontSize?: unk
     readerFontScale: value.readerFontScale === undefined ? normalizeLegacyFontSize(value.fontSize) : normalizeReaderFontScale(value.readerFontScale),
     colorMode: value.colorMode === "dark" ? "dark" : "light",
     layout: value.layout === "compact" || value.layout === "focused" ? value.layout : "comfortable",
-    showOutline: value.showOutline !== false,
-    showSourceMetadata: value.showSourceMetadata !== false,
   };
 }
 

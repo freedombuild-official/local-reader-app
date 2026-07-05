@@ -239,6 +239,30 @@ describe("App", () => {
     expect(stylesCss).toContain('.app-shell[data-color-mode="dark"] .ai-chat-context');
   });
 
+  it("defines Reader layout density through app-shell custom properties", () => {
+    const appShellRule = cssRule(".app-shell");
+    expect(appShellRule).toContain("--rw-left-panel-min: 260px;");
+    expect(appShellRule).toContain("--rw-right-panel-max: 310px;");
+    expect(appShellRule).toContain("grid-template-columns: minmax(var(--rw-left-panel-min), var(--rw-left-panel-max)) minmax(0, 1fr) minmax(var(--rw-right-panel-min), var(--rw-right-panel-max));");
+
+    const compactRule = cssRule(".app-shell.layout-compact");
+    expect(compactRule).toContain("--rw-left-panel-min: 300px;");
+    expect(compactRule).toContain("--rw-left-panel-max: 380px;");
+    expect(compactRule).toContain("--rw-right-panel-min: 285px;");
+    expect(compactRule).toContain("--rw-side-panel-padding: 12px;");
+
+    const focusedRule = cssRule(".app-shell.layout-focused");
+    expect(focusedRule).toContain("--rw-left-panel-max: 270px;");
+    expect(focusedRule).toContain("--rw-right-panel-max: 250px;");
+    expect(focusedRule).toContain("--rw-viewer-padding-x: 34px;");
+
+    expect(cssRule(".sidebar")).toContain("padding: var(--rw-sidebar-padding-y) var(--rw-sidebar-padding-x);");
+    expect(cssRule(".tree-row")).toContain("min-height: var(--rw-tree-row-min-height);");
+    expect(cssRule(".viewer-body")).toContain("padding: var(--rw-viewer-padding-top) var(--rw-viewer-padding-x) var(--rw-viewer-padding-bottom);");
+    expect(cssRule(".side-panel-body")).toContain("padding: var(--rw-side-panel-padding);");
+    expect(stylesCss).toContain(".app-shell,\n  .app-shell.layout-compact,\n  .app-shell.layout-focused {\n    --rw-sidebar-padding-y: var(--rw-mobile-sidebar-padding-y);");
+  });
+
   it("keeps Settings rail and main as independent scroll containers", () => {
     expect(cssRule(".settings-shell")).toContain("height: 100vh;");
     expect(cssRule(".settings-shell")).toContain("overflow: hidden;");
@@ -574,24 +598,38 @@ describe("App", () => {
     expect((screen.getByRole("button", { name: "Light" }) as HTMLButtonElement).getAttribute("aria-pressed")).toBe("true");
     expect((screen.getByRole("button", { name: "Dark" }) as HTMLButtonElement).disabled).toBe(false);
     expect(screen.getAllByText("Saved in this browser.").length).toBeGreaterThan(0);
-    expect(screen.getByText("Displays heading navigation in the right panel when the active file has markdown headings.")).toBeTruthy();
+    expect(screen.queryByText("Display")).toBeNull();
+    expect(screen.queryByText("Wiki display options")).toBeNull();
+    expect(screen.queryByText("Show page outline")).toBeNull();
+    expect(screen.queryByText("Show source metadata")).toBeNull();
+    expect(screen.queryByText("Displays heading navigation in the right panel when the active file has markdown headings.")).toBeNull();
 
     expect((screen.getByRole("button", { name: "×1" }) as HTMLButtonElement).getAttribute("aria-pressed")).toBe("true");
     expect(screen.getByRole("button", { name: "×1.5" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "×2" })).toBeTruthy();
+    expect((screen.getByRole("button", { name: "Comfortable" }) as HTMLButtonElement).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByRole("button", { name: "Compact" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Focused" })).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Dark" }));
     expect((screen.getByRole("button", { name: "Dark" }) as HTMLButtonElement).getAttribute("aria-pressed")).toBe("true");
     expect(document.querySelector(".settings-shell")?.getAttribute("data-color-mode")).toBe("dark");
 
     fireEvent.click(screen.getByRole("button", { name: "×2" }));
+    fireEvent.click(screen.getByRole("button", { name: "Compact" }));
+    expect((screen.getByRole("button", { name: "Compact" }) as HTMLButtonElement).getAttribute("aria-pressed")).toBe("true");
     expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Back to viewer" }));
     expect(await screen.findByRole("heading", { name: "Hello" })).toBeTruthy();
     expect(document.querySelector(".app-shell")?.getAttribute("data-color-mode")).toBe("dark");
     expect(document.querySelector(".app-shell")?.className).toContain("color-dark");
+    expect(document.querySelector(".app-shell")?.className).toContain("layout-compact");
     expect(document.querySelector(".app-shell")?.className).not.toContain("font-");
+    const storedCompactSettings = JSON.parse(window.localStorage.getItem("readerWiki.basicSettings.v1") || "{}") as Record<string, unknown>;
+    expect(storedCompactSettings.layout).toBe("compact");
+    expect(storedCompactSettings.readerFontScale).toBe(2);
+    expect(storedCompactSettings.colorMode).toBe("dark");
     const viewerBody = document.querySelector(".viewer-body") as HTMLElement | null;
     expect(viewerBody?.style.getPropertyValue("--reader-font-scale")).toBe("2");
     expect(viewerBody?.style.getPropertyValue("--reader-body-font-size")).toBe("32px");
@@ -609,12 +647,18 @@ describe("App", () => {
     fireEvent.click(screen.getByRole("button", { name: "Open Settings" }));
     expect((screen.getByRole("button", { name: "×2" }) as HTMLButtonElement).getAttribute("aria-pressed")).toBe("true");
     expect((screen.getByRole("button", { name: "Dark" }) as HTMLButtonElement).getAttribute("aria-pressed")).toBe("true");
+    expect((screen.getByRole("button", { name: "Compact" }) as HTMLButtonElement).getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(screen.getByRole("button", { name: "Focused" }));
+    expect((screen.getByRole("button", { name: "Focused" }) as HTMLButtonElement).getAttribute("aria-pressed")).toBe("true");
     fireEvent.click(screen.getByRole("button", { name: "Light" }));
     expect(document.querySelector(".settings-shell")?.getAttribute("data-color-mode")).toBe("light");
     fireEvent.click(screen.getByRole("button", { name: "Back to viewer" }));
     expect(await screen.findByLabelText("Raw")).toBeTruthy();
     expect(document.querySelector(".app-shell")?.getAttribute("data-color-mode")).toBe("light");
+    expect(document.querySelector(".app-shell")?.className).toContain("layout-focused");
     expect(document.querySelector(".app-shell")?.className).not.toContain("font-");
+    const storedFocusedSettings = JSON.parse(window.localStorage.getItem("readerWiki.basicSettings.v1") || "{}") as Record<string, unknown>;
+    expect(storedFocusedSettings.layout).toBe("focused");
     fireEvent.click(screen.getByRole("tab", { name: "Memo" }));
     expect((screen.getByLabelText("Session memo") as HTMLTextAreaElement).value).toBe("keep this memo");
   });
@@ -664,6 +708,15 @@ describe("App", () => {
     fireEvent.click(screen.getByRole("button", { name: "Open Settings" }));
     expect(await screen.findByRole("heading", { name: "Settings" })).toBeTruthy();
     fireEvent.click(screen.getByRole("tab", { name: "AI Chat" }));
+    expect(screen.queryByRole("heading", { name: "AI Chat behavior" })).toBeNull();
+    expect(screen.queryByLabelText("Right panel preview")).toBeNull();
+    expect(screen.queryByText("Only one AI Entry can be active at a time")).toBeNull();
+    expect(screen.queryByText("Outline / Memo / AI Chat")).toBeNull();
+    expect(screen.queryByText("Explain the active file.")).toBeNull();
+    expect(screen.queryByText("Select an AI Entry before sending.")).toBeNull();
+    const aiEntryHeading = screen.getByRole("heading", { name: "AI Entry" });
+    const authenticationHeading = screen.getByRole("heading", { name: "Authentication" });
+    expect(aiEntryHeading.compareDocumentPosition(authenticationHeading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(screen.getAllByText("No active AI Entry").length).toBeGreaterThan(0);
 
     const aiApiEntry = screen.getByLabelText("AI API entry");

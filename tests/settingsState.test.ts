@@ -42,6 +42,45 @@ describe("settings state", () => {
     expect(stored.colorMode).not.toBe("system");
   });
 
+  it("uses Comfortable as the default reader layout and normalizes invalid layout values", () => {
+    installLocalStorageMock();
+    expect(loadBasicSettings().settings.layout).toBe("comfortable");
+
+    window.localStorage.setItem("readerWiki.basicSettings.v1", JSON.stringify({ layout: "compact" }));
+    expect(loadBasicSettings().settings.layout).toBe("compact");
+
+    window.localStorage.setItem("readerWiki.basicSettings.v1", JSON.stringify({ layout: "focused" }));
+    expect(loadBasicSettings().settings.layout).toBe("focused");
+
+    window.localStorage.setItem("readerWiki.basicSettings.v1", JSON.stringify({ layout: "hidden" }));
+    expect(loadBasicSettings().settings.layout).toBe("comfortable");
+
+    const error = persistBasicSettings({ ...loadBasicSettings().settings, layout: "compact" });
+    expect(error).toBe("");
+    const stored = JSON.parse(window.localStorage.getItem("readerWiki.basicSettings.v1") || "{}") as Record<string, unknown>;
+    expect(stored.layout).toBe("compact");
+  });
+
+  it("ignores legacy display visibility settings and does not persist them again", () => {
+    installLocalStorageMock();
+    window.localStorage.setItem(
+      "readerWiki.basicSettings.v1",
+      JSON.stringify({ layout: "focused", showOutline: false, showSourceMetadata: false }),
+    );
+
+    const loaded = loadBasicSettings().settings;
+    expect(loaded.layout).toBe("focused");
+    expect("showOutline" in loaded).toBe(false);
+    expect("showSourceMetadata" in loaded).toBe(false);
+
+    const error = persistBasicSettings({ ...loaded, layout: "compact" });
+    expect(error).toBe("");
+    const stored = JSON.parse(window.localStorage.getItem("readerWiki.basicSettings.v1") || "{}") as Record<string, unknown>;
+    expect(stored.layout).toBe("compact");
+    expect(stored.showOutline).toBeUndefined();
+    expect(stored.showSourceMetadata).toBeUndefined();
+  });
+
   it("starts without an active AI provider", () => {
     expect(defaultAISettings.activeEntry).toBeNull();
     expect(activeAIProvider(defaultAISettings)).toBeNull();
