@@ -9,6 +9,7 @@ import { promisify } from "node:util";
 import { describe, expect, it, vi } from "vitest";
 import { createApiRouter } from "../server/api.js";
 import { safeCliEnv, type AICommandRunner } from "../server/aiCliAdapters.js";
+import { testAIConnection } from "../server/aiProviders.js";
 import { createHttpDeliveryService } from "../server/httpDelivery.js";
 import { createRepositoryRegistry } from "../server/repositoryRegistry.js";
 
@@ -471,7 +472,7 @@ describe("api", () => {
     try {
       const testResponse = await postJson(`${server.url}/api/ai/test-connection`, provider);
       expect(testResponse.status).toBe(200);
-      await expect(testResponse.json()).resolves.toMatchObject({ state: "ready" });
+      await expect(testResponse.json()).resolves.toMatchObject({ state: "ready", code: "success", severity: "success", nextAction: expect.any(String) });
 
       const chatResponse = await postJson(`${server.url}/api/ai/chat`, {
         target: { kind: "provider", provider },
@@ -489,6 +490,66 @@ describe("api", () => {
         context: { repoId: "docs", path: "private/notes.md", includeContent: true },
       });
       expect(excludedResponse.status).toBe(403);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("classifies provider readiness failures without surfacing raw fetch errors", async () => {
+    const app = express();
+    app.use("/v1", express.json({ limit: "100kb" }));
+    app.get("/v1/auth-required/models", (_request, response) => response.status(401).json({ error: { message: "raw auth detail" } }));
+    app.get("/v1/model-missing/models", (_request, response) => response.json({ data: [{ id: "other-model" }] }));
+    app.get("/v1/http-error/models", (_request, response) => response.status(404).json({}));
+    app.post("/v1/http-error/chat/completions", (_request, response) => response.status(500).json({ error: { message: "raw provider detail" } }));
+    const server = await listen(app);
+    try {
+      const base = {
+        entry: "aiApi" as const,
+        provider: "openaiCompatible" as const,
+        model: "wanted-model",
+        apiFormat: "openaiCompatible" as const,
+        credential: "test-key",
+      };
+
+      await expect(testAIConnection({ ...base, baseUrl: "not a url" })).resolves.toMatchObject({
+        state: "failed",
+        code: "invalid_endpoint",
+        severity: "error",
+        nextAction: expect.any(String),
+      });
+      await expect(testAIConnection({ ...base, baseUrl: "http://127.0.0.1:9/v1" })).resolves.toMatchObject({
+        state: "failed",
+        code: "endpoint_unreachable",
+        severity: "error",
+        message: "Endpoint is unreachable.",
+      });
+      await expect(testAIConnection({ ...base, baseUrl: `${server.url}/v1/auth-required` })).resolves.toMatchObject({
+        state: "failed",
+        code: "credential_required",
+        severity: "warning",
+        message: "Provider rejected the credential.",
+      });
+      await expect(testAIConnection({ ...base, baseUrl: `${server.url}/v1/model-missing` })).resolves.toMatchObject({
+        state: "failed",
+        code: "model_missing",
+        severity: "warning",
+        message: "Model is not visible at this endpoint.",
+      });
+      await expect(testAIConnection({ ...base, baseUrl: `${server.url}/v1/http-error` })).resolves.toMatchObject({
+        state: "failed",
+        code: "provider_http_error",
+        severity: "error",
+        message: "Provider returned HTTP 500.",
+      });
+
+      const controller = new AbortController();
+      controller.abort();
+      await expect(testAIConnection({ ...base, baseUrl: `${server.url}/v1/model-missing` }, controller.signal)).resolves.toMatchObject({
+        state: "failed",
+        code: "timeout_or_abort",
+        severity: "warning",
+      });
     } finally {
       await server.close();
     }

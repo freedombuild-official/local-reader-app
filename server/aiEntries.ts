@@ -41,7 +41,7 @@ async function probeCxReadiness(runner: AICommandRunner): Promise<CliAIEntryRead
     check("execution", "Minimal execution", executionReady, executionReady ? "Minimal read-only request succeeded." : execution.ok ? "Minimal read-only request failed." : execution.error),
   ];
   const ready = checks.every((item) => item.status === "ready");
-  const status = readinessStatus(ready, ready ? `${cxLabel()} read-only wrapper is ready.` : firstError(checks));
+  const status = readinessStatus(ready, checks, ready ? `${cxLabel()} read-only wrapper is ready.` : firstError(checks));
   return {
     entry: "codexCli",
     settings: {
@@ -96,7 +96,7 @@ async function probeClaudeReadiness(runner: AICommandRunner): Promise<CliAIEntry
     check("execution", "Minimal execution", executionReady, executionReady ? "Minimal tool-restricted request succeeded." : execution.ok ? "Minimal tool-restricted request failed." : execution.error),
   ];
   const ready = checks.every((item) => item.status === "ready");
-  const status = readinessStatus(ready, ready ? "Claude Code CLI read-only wrapper is ready." : firstError(checks));
+  const status = readinessStatus(ready, checks, ready ? "Claude Code CLI read-only wrapper is ready." : firstError(checks));
   return {
     entry: "claudeCli",
     settings: {
@@ -177,8 +177,30 @@ function check(id: string, label: string, ok: boolean, message: string): Check {
   return { id, label, status: ok ? "ready" : "error", message: sanitizeCliText(message) };
 }
 
-function readinessStatus(ready: boolean, message: string): AIConnectionStatus {
-  return { state: ready ? "ready" : "failed", message: sanitizeCliText(message), checkedAt: new Date().toISOString() };
+function readinessStatus(ready: boolean, checks: Check[], message: string): AIConnectionStatus {
+  if (ready) {
+    return {
+      state: "ready",
+      code: "success",
+      severity: "success",
+      message: sanitizeCliText(message),
+      nextAction: "Use this entry for read-only AI Chat or check again.",
+      checkedAt: new Date().toISOString(),
+    };
+  }
+  const failed = checks.find((item) => item.status === "error");
+  const code = failed?.id === "auth" ? "cli_auth_missing" : "wrapper_not_ready";
+  const nextAction = failed?.id === "auth"
+    ? "Sign in with the CLI outside Reader-Wiki, then check readiness again."
+    : "Check that the installed CLI supports the read-only wrapper, then run readiness again.";
+  return {
+    state: "failed",
+    code,
+    severity: "warning",
+    message: sanitizeCliText(message),
+    nextAction,
+    checkedAt: new Date().toISOString(),
+  };
 }
 
 function firstError(checks: Check[]): string {

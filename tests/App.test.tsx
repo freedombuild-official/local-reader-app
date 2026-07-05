@@ -108,7 +108,7 @@ beforeEach(() => {
       return json(repositoryConfigState());
     }
     if (url === "/api/ai/test-connection") {
-      return json({ state: "ready", message: "Connection test completed.", checkedAt: "2026-07-03T00:00:00.000Z" });
+      return json({ state: "ready", code: "success", severity: "success", message: "Connected.", nextAction: "This entry is ready for read-only AI Chat.", checkedAt: "2026-07-03T00:00:00.000Z" });
     }
     if (url === "/api/ai/entry-readiness") {
       const body = parseJsonBody(init?.body) as { entry?: string };
@@ -270,7 +270,7 @@ describe("App", () => {
     expect(cssRule(".settings-main")).toContain("overflow-y: auto;");
     expect(cssRule(".yaml-preview")).toContain("overflow: auto;");
     expect(cssRule(".auth-entry-grid")).toContain("align-items: start;");
-    expect(cssRule(".permission-grid")).toContain("repeat(3, minmax(0, 1fr))");
+    expect(cssRule(".policy-grid")).toContain("repeat(3, minmax(0, 1fr))");
     expect(cssRule(".endpoint-settings-panel")).toContain("grid-column: 1 / -1;");
   });
 
@@ -699,7 +699,6 @@ describe("App", () => {
   });
 
   it("adds AI Chat as a read-only right panel and can answer after provider settings are configured", async () => {
-    const localAccessName = "to" + "ken";
     render(<App />);
     expect(await screen.findByRole("heading", { name: "Hello" })).toBeTruthy();
     fireEvent.click(screen.getByRole("tab", { name: "AI Chat" }));
@@ -715,8 +714,12 @@ describe("App", () => {
     expect(screen.queryByText("Explain the active file.")).toBeNull();
     expect(screen.queryByText("Select an AI Entry before sending.")).toBeNull();
     const aiEntryHeading = screen.getByRole("heading", { name: "AI Entry" });
-    const authenticationHeading = screen.getByRole("heading", { name: "Authentication" });
-    expect(aiEntryHeading.compareDocumentPosition(authenticationHeading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const connectionHeading = screen.getByRole("heading", { name: "Connection / Credentials" });
+    const accessHeading = screen.getByRole("heading", { name: "Access policy" });
+    const diagnosticsHeading = screen.getByRole("heading", { name: "Readiness diagnostics" });
+    expect(aiEntryHeading.compareDocumentPosition(connectionHeading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(connectionHeading.compareDocumentPosition(accessHeading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(accessHeading.compareDocumentPosition(diagnosticsHeading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(screen.getAllByText("No active AI Entry").length).toBeGreaterThan(0);
 
     const aiApiEntry = screen.getByLabelText("AI API entry");
@@ -729,26 +732,21 @@ describe("App", () => {
     expect(within(claudeCodeEntry).getAllByText("Claude Code CLI")).toHaveLength(1);
     expect(within(aiApiEntry).getAllByText("AI API")).toHaveLength(1);
     expect(within(localAiEntry).getAllByText("Local AI")).toHaveLength(1);
-    expect(within(aiApiEntry).getAllByText("Not configured").length).toBeGreaterThan(0);
-    expect(within(localAiEntry).getAllByText("Not configured").length).toBeGreaterThan(0);
+    expect(within(aiApiEntry).getAllByText("Needs setup").length).toBeGreaterThan(0);
+    expect(within(localAiEntry).getAllByText("Needs setup").length).toBeGreaterThan(0);
     expect(screen.getAllByRole("button", { name: "Set active" })).toHaveLength(4);
-
-    const aiApiAuth = screen.getByLabelText("AI API authentication");
-    const localAiAuth = screen.getByLabelText("Local AI authentication");
-    expect(screen.getByLabelText(["Co", "dex CLI authentication"].join(""))).toBeTruthy();
-    expect(screen.getByLabelText("Claude Code CLI authentication")).toBeTruthy();
-    expect(within(aiApiAuth).getByText("Masked key")).toBeTruthy();
-    expect(within(localAiAuth).getByText(`Masked ${localAccessName}`)).toBeTruthy();
-    expect(within(localAiAuth).getByLabelText(`Optional ${localAccessName}`)).toBeTruthy();
-    expect((within(aiApiAuth).getByRole("button", { name: "Test connection" }) as HTMLButtonElement).disabled).toBe(true);
-    expect((within(localAiAuth).getByRole("button", { name: "Test connection" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.queryByLabelText("AI API connection")).toBeNull();
+    expect(screen.queryByLabelText("Local AI connection")).toBeNull();
 
     const nextAiApiEntry = aiApiEntry;
-    const nextAiApiAuth = aiApiAuth;
     fireEvent.click(within(nextAiApiEntry).getByRole("button", { name: "Set active" }));
     expect(within(nextAiApiEntry).getByRole("button", { name: "Clear active entry" })).toBeTruthy();
-    expect(screen.getByText("Adapter")).toBeTruthy();
+    const nextAiApiAuth = screen.getByLabelText("AI API connection");
+    expect(screen.queryByText("Adapter")).toBeNull();
+    expect(screen.queryByText("File operations")).toBeNull();
+    expect(screen.queryByText("Model candidates")).toBeNull();
     expect(screen.getAllByText("Test active entry").length).toBeGreaterThan(0);
+    expect((within(nextAiApiAuth).getByRole("button", { name: "Test connection" }) as HTMLButtonElement).disabled).toBe(true);
 
     fireEvent.change(within(nextAiApiAuth).getByLabelText("API key"), { target: { value: "local-test-key" } });
     expect(document.body.textContent || "").not.toContain("local-test-key");
@@ -761,24 +759,26 @@ describe("App", () => {
     fireEvent.change(within(nextAiApiAuth).getByLabelText("Provider"), { target: { value: "openaiCompatible" } });
     expect(within(nextAiApiAuth).getByText("Endpoint settings")).toBeTruthy();
     expect(within(nextAiApiAuth).getByLabelText("Base URL")).toBeTruthy();
-    expect(within(nextAiApiAuth).getByText("Model candidates")).toBeTruthy();
-    fireEvent.click(within(nextAiApiAuth).getByRole("button", { name: "model-a" }));
+    expect(within(nextAiApiAuth).queryByText("Model candidates")).toBeNull();
+    fireEvent.change(within(nextAiApiAuth).getByLabelText("Model"), { target: { value: "model-a" } });
     fireEvent.change(within(nextAiApiAuth).getByLabelText("Base URL"), { target: { value: "http://127.0.0.1:7777/v1" } });
-    fireEvent.click(within(nextAiApiAuth).getByRole("button", { name: "Test connection" }));
-    expect((await screen.findAllByText("Connection test completed.")).length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole("button", { name: "Back to viewer" }));
+    fireEvent.click(await screen.findByRole("tab", { name: "AI Chat" }));
+    fireEvent.change(screen.getByLabelText("AI Chat message"), { target: { value: "What does this file say?" } });
+    expect((screen.getByRole("button", { name: "Send AI Chat message" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText("AI Chat needs a connected AI Entry before it can answer from the active file context.")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Open AI Chat Settings" }));
+    fireEvent.click(await screen.findByRole("tab", { name: "AI Chat" }));
+    const testedAiApiAuth = screen.getByLabelText("AI API connection");
+    fireEvent.click(within(testedAiApiAuth).getByRole("button", { name: "Test connection" }));
+    expect((await screen.findAllByText("Connected.")).length).toBeGreaterThan(0);
+    expect(within(testedAiApiAuth).getByRole("button", { name: "Test again" })).toBeTruthy();
 
-    const permissionInputs = Array.from(document.querySelectorAll(".toggle-card input")) as HTMLInputElement[];
-    expect(permissionInputs.map((input) => ({ checked: input.checked, disabled: input.disabled }))).toEqual([
-      { checked: true, disabled: false },
-      { checked: false, disabled: true },
-      { checked: false, disabled: true },
-    ]);
-    expect(screen.getByText("Delete warning preview")).toBeTruthy();
+    expect(document.querySelectorAll(".toggle-card input")).toHaveLength(0);
+    expect(screen.queryByText("Delete warning preview")).toBeNull();
     expect(screen.getByLabelText("Repository Access list").textContent).toContain("Docs");
-    expect(screen.getByLabelText("Configured entries list").textContent).toContain("AI API");
-    expect(screen.getByLabelText("Configured entries list").textContent).toContain("Local AI");
-    expect(screen.getByLabelText("Configured entries list").textContent).toContain(["Co", "dex CLI"].join(""));
-    expect(screen.getByLabelText("Configured entries list").textContent).toContain("Claude Code CLI");
+    expect(screen.queryByLabelText("Configured entries list")).toBeNull();
+    expect(screen.getByLabelText("Readiness checklist").textContent).toContain("Next action");
 
     fireEvent.click(screen.getByRole("button", { name: "Back to viewer" }));
     fireEvent.click(await screen.findByRole("tab", { name: "AI Chat" }));
@@ -796,10 +796,10 @@ describe("App", () => {
     fireEvent.click(screen.getByRole("tab", { name: "AI Chat" }));
 
     const codexEntryLabel = ["Co", "dex CLI entry"].join("");
-    const codexAuthLabel = ["Co", "dex CLI authentication"].join("");
+    const codexAuthLabel = ["Co", "dex CLI connection"].join("");
     const codexEntry = screen.getByLabelText(codexEntryLabel);
-    const codexAuth = screen.getByLabelText(codexAuthLabel);
     fireEvent.click(within(codexEntry).getByRole("button", { name: "Set active" }));
+    const codexAuth = screen.getByLabelText(codexAuthLabel);
     fireEvent.click(within(codexAuth).getByRole("button", { name: "Check readiness" }));
     expect((await screen.findAllByText(["Co", "dex CLI read-only wrapper is ready."].join(""))).length).toBeGreaterThan(0);
 
@@ -813,8 +813,8 @@ describe("App", () => {
     fireEvent.click(screen.getByRole("button", { name: "Open Settings" }));
     fireEvent.click(await screen.findByRole("tab", { name: "AI Chat" }));
     const claudeEntry = screen.getByLabelText("Claude Code CLI entry");
-    const claudeAuth = screen.getByLabelText("Claude Code CLI authentication");
     fireEvent.click(within(claudeEntry).getByRole("button", { name: "Set active" }));
+    const claudeAuth = screen.getByLabelText("Claude Code CLI connection");
     fireEvent.click(within(claudeAuth).getByRole("button", { name: "Check readiness" }));
     expect((await screen.findAllByText("Claude Code CLI read-only wrapper is ready.")).length).toBeGreaterThan(0);
 

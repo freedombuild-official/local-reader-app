@@ -2,7 +2,7 @@ import { useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "r
 import MarkdownIt from "markdown-it";
 import { Send, Square, RotateCcw } from "lucide-react";
 import { sendAIChatMessage } from "./api";
-import { activeAIChatTarget, activeAIEntry, aiReady, derivedAIStatus, effectiveAIStatus, type AISettingsState } from "./settingsState";
+import { activeAIChatTarget, activeAIEntry, aiVerifiedReady, derivedAIStatus, effectiveAIStatus, type AISettingsState } from "./settingsState";
 import type { AIChatMessage, AIChatResponse, FileResponse } from "./types";
 import { injectMarkdownCodeToolbarButtons, installCodeBlockRule } from "../shared/markdownCodeBlocks";
 import { installTableScrollRule } from "../shared/markdownTableScroll";
@@ -29,8 +29,9 @@ export function AIChatPanel({ aiSettings, activeRepoId, activeFile, onOpenSettin
   const activeEntry = activeAIEntry(aiSettings);
   const target = activeAIChatTarget(aiSettings);
   const status = activeEntry ? effectiveAIStatus(aiSettings, activeEntry.entry) : derivedAIStatus(null);
-  const ready = Boolean(target && aiReady(activeEntry));
+  const ready = Boolean(target && activeEntry && aiVerifiedReady(aiSettings, activeEntry.entry));
   const statusMessage = status.message;
+  const nextAction = status.nextAction || "Open AI Chat Settings and complete readiness checks.";
   const canSend = Boolean(ready && activeRepoId && activeFile?.path && draft.trim() && !pending);
   const contextLabel = activeFile ? `${activeFile.path} (${activeFile.kind})` : "No active file";
 
@@ -93,8 +94,9 @@ export function AIChatPanel({ aiSettings, activeRepoId, activeFile, onOpenSettin
       </div>
       {!ready ? (
         <div className="ai-chat-empty">
-          <p>AI Chat needs an active AI Entry before it can answer from the active file context.</p>
+          <p>{activeEntry ? "AI Chat needs a connected AI Entry before it can answer from the active file context." : "AI Chat needs an active AI Entry before it can answer from the active file context."}</p>
           <p>{statusMessage}</p>
+          <p>{nextAction}</p>
           <button type="button" className="secondary-button" onClick={onOpenSettings}>
             Open AI Chat Settings
           </button>

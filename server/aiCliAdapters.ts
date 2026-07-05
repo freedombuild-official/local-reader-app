@@ -200,5 +200,12 @@ export function sanitizeCliText(value: string): string {
 }
 
 function status(state: AIConnectionStatus["state"], message: string): AIConnectionStatus {
-  return { state, message, checkedAt: new Date().toISOString() };
+  return {
+    state,
+    code: state === "ready" ? "success" : "provider_http_error",
+    severity: state === "ready" ? "success" : "error",
+    message,
+    nextAction: state === "ready" ? "Continue the conversation or check readiness again if CLI settings change." : "Check CLI readiness before trying again.",
+    checkedAt: new Date().toISOString(),
+  };
 }

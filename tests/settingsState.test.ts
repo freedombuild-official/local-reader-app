@@ -85,7 +85,7 @@ describe("settings state", () => {
     expect(defaultAISettings.activeEntry).toBeNull();
     expect(activeAIProvider(defaultAISettings)).toBeNull();
     expect(Object.keys(defaultAISettings.entries)).toEqual(["aiApi", "localAi", "codexCli", "claudeCli"]);
-    expect(effectiveAIStatus(defaultAISettings, "aiApi").message).toBe("Provider settings are not configured.");
+    expect(effectiveAIStatus(defaultAISettings, "aiApi")).toMatchObject({ state: "notConfigured", code: "not_configured", message: "Connection settings are incomplete." });
   });
 
   it("normalizes CLI entries without carrying old app-only state", () => {
@@ -136,11 +136,23 @@ describe("settings state", () => {
     expect(activeAIChatTarget({ ...defaultAISettings, activeEntry: "aiApi" })).toBeNull();
     expect(activeAIChatTarget({ ...defaultAISettings, activeEntry: "codexCli" })).toBeNull();
     expect(aiReady(localAiReady)).toBe(true);
-    expect(activeAIChatTarget({ ...defaultAISettings, activeEntry: "localAi", entries: { ...defaultAISettings.entries, localAi: localAiReady } })).toEqual({
+    expect(activeAIChatTarget({ ...defaultAISettings, activeEntry: "localAi", entries: { ...defaultAISettings.entries, localAi: localAiReady } })).toBeNull();
+    expect(activeAIChatTarget({ ...defaultAISettings, activeEntry: "aiApi", entries: { ...defaultAISettings.entries, aiApi: aiApiReady } })).toBeNull();
+    expect(activeAIChatTarget({
+      ...defaultAISettings,
+      activeEntry: "localAi",
+      entries: { ...defaultAISettings.entries, localAi: localAiReady },
+      statuses: { ...defaultAISettings.statuses, localAi: { state: "ready", code: "success", severity: "success", message: "Connected.", nextAction: "Ready.", checkedAt: "2026-07-05T00:00:00.000Z" } },
+    })).toEqual({
       kind: "provider",
       provider: localAiReady,
     });
-    expect(activeAIChatTarget({ ...defaultAISettings, activeEntry: "aiApi", entries: { ...defaultAISettings.entries, aiApi: aiApiReady } })).toEqual({
+    expect(activeAIChatTarget({
+      ...defaultAISettings,
+      activeEntry: "aiApi",
+      entries: { ...defaultAISettings.entries, aiApi: aiApiReady },
+      statuses: { ...defaultAISettings.statuses, aiApi: { state: "ready", code: "success", severity: "success", message: "Connected.", nextAction: "Ready.", checkedAt: "2026-07-05T00:00:00.000Z" } },
+    })).toEqual({
       kind: "provider",
       provider: aiApiReady,
     });

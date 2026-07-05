@@ -8,11 +8,11 @@ import {
   aiEntryProvider,
   aiEntrySettings,
   aiReady,
+  aiVerifiedReady,
   defaultAISettings,
   derivedAIStatus,
   effectiveAIStatus,
   formatReaderFontScaleLabel,
-  isCliSettings,
   isProviderEntryKind,
   normalizeAISettingsState,
   normalizeReaderFontScale,
@@ -212,7 +212,10 @@ export function SettingsView({
     } catch (error) {
       const failed: AIConnectionStatus = {
         state: "failed",
-        message: error instanceof Error ? error.message : String(error),
+        code: "provider_http_error",
+        severity: "error",
+        message: "Readiness check failed.",
+        nextAction: error instanceof Error ? error.message : String(error),
         checkedAt: new Date().toISOString(),
       };
       commitAISettings(updateAIEntryStatus(aiDraft, entry, failed));
@@ -565,7 +568,7 @@ function AIChatSettingsPanel({
 }) {
   const activeEntrySettings = activeAIEntry(settings);
   const activeEntry = settings.activeEntry;
-  const ready = aiReady(activeEntrySettings);
+  const ready = aiVerifiedReady(settings, activeEntry);
   const configured = aiConfigured(activeEntrySettings);
   const entries = ["codexCli", "claudeCli", "aiApi", "localAi"] as AIEntryKind[];
 
@@ -587,11 +590,11 @@ function AIChatSettingsPanel({
 
   return (
     <section className="settings-page ai-settings-page" aria-label="AI Chat settings">
-      <SettingsCard title="AI Entry" eyebrow="Provider" status={activeEntry ? entryLabel(activeEntry) : "No active AI Entry"}>
+      <SettingsCard title="AI Entry" eyebrow="Active entry" status={activeEntry ? entryLabel(activeEntry) : "No active AI Entry"}>
         <div className="active-entry-summary">
           <span>Active AI Entry</span>
           <strong>{activeEntry ? entryLabel(activeEntry) : "No active AI Entry"}</strong>
-          <small>{activeEntry ? "Only this entry is active for AI Chat." : "Choose one entry to enable provider checks and AI Chat sending."}</small>
+          <small>{activeEntry ? status.nextAction || "Only this entry is used for AI Chat." : "Choose one entry before checking readiness or sending AI Chat."}</small>
           {dirty ? <small>AI Chat settings have unsaved changes.</small> : null}
         </div>
         <div className="entry-grid" aria-label="AI Entry choices">
@@ -608,14 +611,17 @@ function AIChatSettingsPanel({
           ))}
         </div>
       </SettingsCard>
-      <SettingsCard title="Authentication" eyebrow="Connection" status={statusLabel(status)}>
-        <div className="auth-entry-grid">
+      <SettingsCard title="Connection / Credentials" eyebrow="Readiness" status={statusLabel(status)}>
+        {!activeEntry ? (
+          <p className="settings-message">Select an AI Entry to edit connection details and run readiness checks.</p>
+        ) : null}
+        {activeEntry === "codexCli" ? (
           <AuthenticationEntryCard
             entry="codexCli"
             title={entryLabel("codexCli")}
             subtitle="Existing CLI auth / read-only wrapper"
             note="Uses installed CLI authentication and fixed read-only invocation. No login, logout, browser launch, or repository writes are started here."
-            active={activeEntry === "codexCli"}
+            active
             status={effectiveAIStatus(settings, "codexCli")}
           >
             <CliAIForm
@@ -625,12 +631,14 @@ function AIChatSettingsPanel({
               onTest={() => onTestEntry("codexCli")}
             />
           </AuthenticationEntryCard>
+        ) : null}
+        {activeEntry === "claudeCli" ? (
           <AuthenticationEntryCard
             entry="claudeCli"
             title={entryLabel("claudeCli")}
             subtitle="Existing CLI auth / tool-restricted print mode"
             note="Uses installed CLI authentication and a non-persistent print invocation with tools disabled."
-            active={activeEntry === "claudeCli"}
+            active
             status={effectiveAIStatus(settings, "claudeCli")}
           >
             <CliAIForm
@@ -640,12 +648,14 @@ function AIChatSettingsPanel({
               onTest={() => onTestEntry("claudeCli")}
             />
           </AuthenticationEntryCard>
+        ) : null}
+        {activeEntry === "aiApi" ? (
           <AuthenticationEntryCard
             entry="aiApi"
             title="AI API"
-            subtitle="Provider / model / key"
-            note="OpenAI, Anthropic, and Google start with a key and model. Compatible or custom APIs use Endpoint settings."
-            active={activeEntry === "aiApi"}
+            subtitle="Provider / model / credential"
+            note="Cloud and compatible providers require a model, endpoint where applicable, and a credential kept in this browser run only."
+            active
             status={effectiveAIStatus(settings, "aiApi")}
           >
             <AIAPIForm
@@ -657,12 +667,14 @@ function AIChatSettingsPanel({
               onTest={() => onTestEntry("aiApi")}
             />
           </AuthenticationEntryCard>
+        ) : null}
+        {activeEntry === "localAi" ? (
           <AuthenticationEntryCard
             entry="localAi"
             title="Local AI"
-            subtitle="Local runtime / endpoint"
-            note="Use a localhost runtime endpoint. This stays separate from cloud API key setup."
-            active={activeEntry === "localAi"}
+            subtitle="Local runtime / endpoint / model"
+            note="Use a localhost OpenAI-compatible endpoint. Reader-Wiki does not start runtimes, load models, or run local AI CLIs."
+            active
             status={effectiveAIStatus(settings, "localAi")}
           >
             <LocalAIForm
@@ -674,58 +686,46 @@ function AIChatSettingsPanel({
               onTest={() => onTestEntry("localAi")}
             />
           </AuthenticationEntryCard>
-        </div>
+        ) : null}
         <p className="settings-message">Provider credentials stay in the current browser run and are never written to repository config or browser storage.</p>
       </SettingsCard>
-      <SettingsCard title="Access & Permissions" eyebrow="AI Chat" status="Read only">
-        <div className="permission-grid">
-          <PermissionToggleCard label="Read" description="Registered repository files can be sent as read-only context." checked />
-          <PermissionToggleCard label="Write" description="Future state. Proposed edits would need preview and confirmation." disabled />
-          <PermissionToggleCard label="Delete" description="Future state. Delete remains unavailable in this local viewer." disabled />
-        </div>
-        <div className="warning-box disabled-preview">
-          <strong>Delete warning preview</strong>
-          <span>Delete is disabled. A future version would require active repository, repository-relative path, confirmation, and operation log before any delete action.</span>
+      <SettingsCard title="Access policy" eyebrow="AI Chat" status="Read-only context">
+        <div className="policy-grid">
+          <div className="policy-item ready">
+            <strong>Read context</strong>
+            <small>AI Chat can receive the active repository file as guarded read-only context.</small>
+          </div>
+          <div className="policy-item">
+            <strong>No write path</strong>
+            <small>AI Chat cannot edit files, apply patches, mutate repositories, or delete content.</small>
+          </div>
+          <div className="policy-item">
+            <strong>No runtime orchestration</strong>
+            <small>Reader-Wiki does not start Local AI servers, load models, download models, or run local AI CLIs.</small>
+          </div>
         </div>
         <div className="subsection-title">Repository Access</div>
         <RepositoryAccessList repositories={repositories} />
-        <p className="settings-message">Write and delete are disabled future states. AI Chat receives read-only file context only.</p>
       </SettingsCard>
-      <SettingsCard title="Diagnostics" eyebrow="Readiness" status={ready ? "Ready" : "Needs setup"}>
-        <div className="diagnostic-test-row">
+      <SettingsCard title="Readiness diagnostics" eyebrow="Diagnostics" status={statusLabel(status)}>
+        <div className={`diagnostic-test-row ${statusClass(status)}`}>
           <div>
             <span>Test active entry</span>
             <strong>{activeEntry ? `${entryLabel(activeEntry)} readiness` : "No active AI Entry"}</strong>
             <small>{activeEntry ? status.message : "Select an AI Entry before running diagnostics."}</small>
+            {activeEntry && status.nextAction ? <small>{status.nextAction}</small> : null}
           </div>
-          <button type="button" className="secondary-button" onClick={onTestActive} disabled={!activeEntry || testingEntry !== null}>
-            {testingEntry && testingEntry === activeEntry ? "Testing..." : "Test active entry"}
+          <button type="button" className={ready ? "success-button" : "secondary-button"} onClick={onTestActive} disabled={!activeEntry || testingEntry !== null}>
+            {ready ? <CheckCircle2 aria-hidden="true" focusable="false" /> : null}
+            {testingEntry && testingEntry === activeEntry ? "Testing..." : ready ? "Test again" : "Test active entry"}
           </button>
         </div>
-        <div className="settings-summary-grid">
-          <SummaryItem label="Active entry" value={activeEntry ? entryLabel(activeEntry) : "No active AI Entry"} />
-          <SummaryItem label="Configured" value={configured ? "Yes" : "No"} />
-          <SummaryItem label="Connection" value={statusLabel(status)} />
-          <SummaryItem label="Authentication" value={credentialStatus(activeEntrySettings)} />
-          <SummaryItem label="Adapter" value={activeEntry ? adapterStatusLabel(activeEntrySettings) : "Select an AI Entry"} />
-          <SummaryItem label="File operations" value="Read only" />
-          <SummaryItem label="Last check" value={activeEntry ? settings.lastCheckedAtByEntry[activeEntry] || "Not checked" : "Not checked"} />
-        </div>
-        <div className="subsection-title">Configured entries list</div>
-        <div className="entry-status-list" aria-label="Configured entries list">
-          {entries.map((entry) => {
-            const entrySettings = aiEntrySettings(settings, entry);
-            const entryStatus = effectiveAIStatus(settings, entry);
-            return (
-              <div key={entry} className={`entry-status-row${activeEntry === entry ? " active" : ""}`}>
-                <div>
-                  <span>{entryLabel(entry)}</span>
-                  <small>{entryDescription(entry)}</small>
-                </div>
-                <strong>{entryDiagnosticLabel(entrySettings, entryStatus, activeEntry === entry)}</strong>
-              </div>
-            );
-          })}
+        <div className="readiness-list" aria-label="Readiness checklist">
+          <ReadinessRow label="Active entry" status={activeEntry ? "ready" : "warning"} value={activeEntry ? entryLabel(activeEntry) : "Select an entry"} />
+          <ReadinessRow label="Connection fields" status={configured ? "ready" : "warning"} value={configured ? "Configured" : "Incomplete"} />
+          <ReadinessRow label="Connection check" status={readinessRowStatus(status)} value={statusLabel(status)} detail={status.message} />
+          <ReadinessRow label="Next action" status={readinessRowStatus(status)} value={status.nextAction || "No action available"} />
+          <ReadinessRow label="Last check" status={settings.activeEntry && settings.lastCheckedAtByEntry[settings.activeEntry] ? "ready" : "warning"} value={activeEntry ? formatLastCheck(settings.lastCheckedAtByEntry[activeEntry]) : "Not tested"} />
         </div>
       </SettingsCard>
     </section>
@@ -750,7 +750,7 @@ function AuthenticationEntryCard({
   children: ReactNode;
 }) {
   return (
-    <article className={`auth-entry-card${active ? " active" : ""}`} aria-label={`${title} authentication`}>
+    <article className={`auth-entry-card${active ? " active" : ""}`} aria-label={`${title} connection`}>
       <div className="auth-card-heading">
         <span className="entry-icon" aria-hidden="true">
           {entryIcon(entry)}
@@ -763,7 +763,8 @@ function AuthenticationEntryCard({
       </div>
       <p className="auth-card-note">{note}</p>
       {children}
-      <p className={`settings-message ${status.state === "failed" ? "error" : status.state === "ready" ? "success" : ""}`}>{status.message}</p>
+      <p className={`settings-message ${statusClass(status)}`}>{status.message}</p>
+      {status.nextAction ? <p className="settings-message">{status.nextAction}</p> : null}
     </article>
   );
 }
@@ -801,16 +802,17 @@ function AIAPIForm({
         <input type={concealedInputType} value={provider.credential || ""} autoComplete="off" onChange={(event) => onUpdate({ credential: event.target.value })} />
       </label>
       <Field label="Model" value={provider.model} onChange={(model) => onUpdate({ model })} />
-      <div className="setting-row inline-row wide">
-        <div>
-          <span>Masked key</span>
-          <strong>{credentialMask(provider)}</strong>
+      {provider.credential?.trim() ? (
+        <div className="setting-row inline-row wide">
+          <div>
+            <span>Saved for this browser run</span>
+            <strong>{credentialMask(provider)}</strong>
+          </div>
+          <button type="button" className="danger-button" onClick={onClearCredential}>
+            Clear key
+          </button>
         </div>
-        <button type="button" className="danger-button" onClick={onClearCredential} disabled={!provider.credential}>
-          Clear key
-        </button>
-      </div>
-      <ModelCandidates provider={provider} onSelect={(model) => onUpdate({ model })} />
+      ) : null}
       {needsEndpoint ? (
         <div className="endpoint-settings-panel wide">
           <div className="endpoint-settings-heading">
@@ -835,8 +837,9 @@ function AIAPIForm({
           <strong>{statusLabel(status)}</strong>
           <small>{connectionHint(provider, status)}</small>
         </div>
-        <button type="button" className="secondary-button" onClick={onTest} disabled={testing || !aiReady(provider)}>
-          {testing ? "Testing..." : "Test connection"}
+        <button type="button" className={status.state === "ready" ? "success-button" : "secondary-button"} onClick={onTest} disabled={testing || !aiReady(provider)}>
+          {status.state === "ready" ? <CheckCircle2 aria-hidden="true" focusable="false" /> : null}
+          {testing ? "Testing..." : status.state === "ready" ? "Test again" : "Test connection"}
         </button>
       </div>
     </div>
@@ -882,24 +885,28 @@ function LocalAIForm({
           <option value="custom">Custom</option>
         </select>
       </label>
-      <div className="setting-row inline-row wide">
-        <div>
-          <span>{`Masked ${localAccessName()}`}</span>
-          <strong>{credentialMask(provider)}</strong>
+      {provider.credential?.trim() ? (
+        <div className="setting-row inline-row wide">
+          <div>
+            <span>{`Saved for this browser run`}</span>
+            <strong>{credentialMask(provider)}</strong>
+          </div>
+          <button type="button" className="danger-button" onClick={onClearCredential}>
+            {`Clear ${localAccessName()}`}
+          </button>
         </div>
-        <button type="button" className="danger-button" onClick={onClearCredential} disabled={!provider.credential}>
-          {`Clear ${localAccessName()}`}
-        </button>
-      </div>
-      <ModelCandidates provider={provider} onSelect={(model) => onUpdate({ model })} />
+      ) : (
+        <p className="settings-message wide">Leave the optional credential empty when the local runtime does not require one.</p>
+      )}
       <div className="setting-row inline-row wide">
         <div>
           <span>Connection status</span>
           <strong>{statusLabel(status)}</strong>
           <small>{connectionHint(provider, status)}</small>
         </div>
-        <button type="button" className="secondary-button" onClick={onTest} disabled={testing || !aiReady(provider)}>
-          {testing ? "Testing..." : "Test connection"}
+        <button type="button" className={status.state === "ready" ? "success-button" : "secondary-button"} onClick={onTest} disabled={testing || !aiReady(provider)}>
+          {status.state === "ready" ? <CheckCircle2 aria-hidden="true" focusable="false" /> : null}
+          {testing ? "Testing..." : status.state === "ready" ? "Test again" : "Test connection"}
         </button>
       </div>
     </div>
@@ -918,10 +925,11 @@ function CliAIForm({ entry, status, testing, onTest }: { entry: CliAIEntrySettin
         <div>
           <span>Readiness</span>
           <strong>{statusLabel(status)}</strong>
-          <small>{status.message}</small>
+          <small>{status.nextAction || status.message}</small>
         </div>
-        <button type="button" className="secondary-button" onClick={onTest} disabled={testing}>
-          {testing ? "Checking..." : "Check readiness"}
+        <button type="button" className={status.state === "ready" ? "success-button" : "secondary-button"} onClick={onTest} disabled={testing}>
+          {status.state === "ready" ? <CheckCircle2 aria-hidden="true" focusable="false" /> : null}
+          {testing ? "Checking..." : status.state === "ready" ? "Check again" : "Check readiness"}
         </button>
       </div>
     </div>
@@ -955,31 +963,14 @@ function AIEntryCard({
         </div>
       </div>
       <div className="entry-status-pills">
-        <span className={aiConfigured(settings) ? "ready" : ""}>{aiConfigured(settings) ? "Configured" : "Not configured"}</span>
-        <span className={status.state === "ready" ? "ready" : status.state === "failed" ? "error" : ""}>{statusLabel(status)}</span>
         <span className={active ? "ready" : ""}>{active ? "Active" : "Inactive"}</span>
+        <span className={status.state === "ready" ? "ready" : status.state === "failed" ? "error" : ""}>{statusLabel(status)}</span>
       </div>
-      <p className="settings-message">{status.message}</p>
-      <button type="button" className={active ? "text-button" : "secondary-button"} onClick={active ? onClearActive : onSetActive}>
+      {active ? <p className="settings-message">{status.nextAction || status.message}</p> : null}
+      <button type="button" className="secondary-button" onClick={active ? onClearActive : onSetActive}>
         {active ? "Clear active entry" : "Set active"}
       </button>
     </article>
-  );
-}
-
-function ModelCandidates({ provider, onSelect }: { provider: AIProviderSettings; onSelect: (model: string) => void }) {
-  const candidates = modelCandidates(provider);
-  return (
-    <div className="model-candidates wide" aria-label="Model candidates">
-      <span>Model candidates</span>
-      <div>
-        {candidates.map((model) => (
-          <button key={model} type="button" className={provider.model === model ? "active" : ""} onClick={() => onSelect(model)}>
-            {model}
-          </button>
-        ))}
-      </div>
-    </div>
   );
 }
 
@@ -1058,14 +1049,6 @@ function entryDescription(entry: AIEntryKind): string {
   return "Local OpenAI-compatible runtime endpoint.";
 }
 
-function modelCandidates(provider: AIProviderSettings): string[] {
-  if (provider.entry === "localAi") return ["llama3.2", "qwen2.5", "mistral"];
-  if (provider.provider === "anthropic") return ["claude-sonnet-4.5", "claude-haiku-4.5"];
-  if (provider.provider === "google") return ["gemini-3.5-flash", "gemini-3.5-pro"];
-  if (provider.provider === "openaiCompatible" || provider.provider === "custom") return ["model-a", "model-b"];
-  return ["gpt-5.5", "gpt-5.5-mini"];
-}
-
 function Field({ label, value, onChange, wide = false }: { label: string; value: string; onChange: (value: string) => void; wide?: boolean }) {
   return (
     <label className={`settings-field${wide ? " wide" : ""}`}>
@@ -1084,6 +1067,19 @@ function SummaryItem({ label, value }: { label: string; value: string }) {
   );
 }
 
+function ReadinessRow({ label, status, value, detail = "" }: { label: string; status: "ready" | "warning" | "error"; value: string; detail?: string }) {
+  return (
+    <div className={`readiness-row ${status}`}>
+      {status === "ready" ? <CheckCircle2 aria-hidden="true" /> : <XCircle aria-hidden="true" />}
+      <div>
+        <span>{label}</span>
+        <strong>{value}</strong>
+        {detail ? <small>{detail}</small> : null}
+      </div>
+    </div>
+  );
+}
+
 function ValidationRow({ item }: { item: RepositoryConfigValidation["checks"][number] }) {
   const ready = item.status === "ready";
   return (
@@ -1097,19 +1093,6 @@ function ValidationRow({ item }: { item: RepositoryConfigValidation["checks"][nu
   );
 }
 
-function PermissionToggleCard({ label, description, checked = false, disabled = false }: { label: string; description: string; checked?: boolean; disabled?: boolean }) {
-  return (
-    <label className={`toggle-card${disabled ? " disabled" : ""}`}>
-      <input type="checkbox" checked={checked} disabled={disabled} readOnly />
-      <span className="toggle-visual" aria-hidden="true" />
-      <span>
-        <strong>{label}</strong>
-        <small>{description}</small>
-      </span>
-    </label>
-  );
-}
-
 function RepositoryAccessList({ repositories }: { repositories: RepositoryConfigEntryDraft[] }) {
   if (!repositories.length) return <p className="settings-message">No registered repositories are available for read-only context.</p>;
   return (
@@ -1120,7 +1103,7 @@ function RepositoryAccessList({ repositories }: { repositories: RepositoryConfig
             <span>{repo.label || repo.id || "Untitled repository"}</span>
             <small>{repo.defaultPath ? `Default context path: ${repo.defaultPath}` : "No default context path"}</small>
           </div>
-          <strong>Read only</strong>
+          <strong>Available</strong>
         </div>
       ))}
     </div>
@@ -1129,14 +1112,6 @@ function RepositoryAccessList({ repositories }: { repositories: RepositoryConfig
 
 function credentialMask(provider: AIProviderSettings): string {
   return provider.credential?.trim() ? "********" : "Not entered";
-}
-
-function credentialStatus(entry: AIEntrySettings | null): string {
-  if (!entry) return "Not applicable";
-  if (isCliSettings(entry)) return cliAuthLabel(entry);
-  if (entry.entry === "localAi" && !entry.credential?.trim()) return `Optional ${localAccessName()} empty`;
-  if (!entry.credential?.trim()) return "Credential missing";
-  return entry.entry === "aiApi" ? "Key entered" : `${capitalize(localAccessName())} entered`;
 }
 
 function connectionHint(provider: AIProviderSettings, status: AIConnectionStatus): string {
@@ -1150,23 +1125,6 @@ function connectionHint(provider: AIProviderSettings, status: AIConnectionStatus
   if (!provider.baseUrl.trim()) return "Enter a local endpoint.";
   if (!provider.model.trim()) return "Choose a local model.";
   return "Ready to test this local runtime.";
-}
-
-function entryDiagnosticLabel(entry: AIEntrySettings, status: AIConnectionStatus, active: boolean): string {
-  const parts = [
-    active ? "Active" : "Inactive",
-    aiConfigured(entry) ? "Configured" : "Not configured",
-    statusLabel(status),
-  ];
-  if (isProviderEntryKind(entry.entry) && entry.entry === "localAi" && entry.credential?.trim()) parts.push(`${capitalize(localAccessName())} entered`);
-  if (isCliSettings(entry)) parts.push(cliWrapperLabel(entry));
-  return parts.join(" / ");
-}
-
-function adapterStatusLabel(entry: AIEntrySettings | null): string {
-  if (!entry) return "Select an AI Entry";
-  if (isCliSettings(entry)) return `${entryLabel(entry.entry)} adapter`;
-  return `${entryLabel(entry.entry)} provider`;
 }
 
 function cliAuthLabel(entry: CliAIEntrySettings): string {
@@ -1185,10 +1143,6 @@ function localAccessName(): string {
   return "to" + "ken";
 }
 
-function capitalize(value: string): string {
-  return `${value.slice(0, 1).toUpperCase()}${value.slice(1)}`;
-}
-
 function providerDefaults(provider: string): Partial<AIProviderSettings> {
   if (provider === "anthropic") return { provider: "anthropic", apiFormat: "anthropic", model: "claude-sonnet-4.5", baseUrl: "" };
   if (provider === "google") return { provider: "google", apiFormat: "google", model: "gemini-3.5-flash", baseUrl: "" };
@@ -1205,10 +1159,30 @@ function localDefaults(runtime: string): Partial<AIProviderSettings> {
 }
 
 function statusLabel(status: AIConnectionStatus): string {
-  if (status.state === "notConfigured") return "Not configured";
-  if (status.state === "configured") return "Configured";
-  if (status.state === "ready") return "Ready";
-  return "Failed";
+  if (status.state === "notConfigured") return "Needs setup";
+  if (status.state === "configured") return "Needs test";
+  if (status.state === "ready") return "Connected";
+  return "Needs attention";
+}
+
+function statusClass(status: AIConnectionStatus): string {
+  if (status.severity === "success" || status.state === "ready") return "success";
+  if (status.severity === "warning" || status.state === "configured") return "warning";
+  if (status.severity === "error" || status.state === "failed") return "error";
+  return "";
+}
+
+function readinessRowStatus(status: AIConnectionStatus): "ready" | "warning" | "error" {
+  if (status.state === "ready") return "ready";
+  if (status.state === "failed" && status.severity === "error") return "error";
+  return "warning";
+}
+
+function formatLastCheck(value: string): string {
+  if (!value) return "Not tested";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "Not tested";
+  return date.toLocaleString();
 }
 
 function categoryStatus(category: SettingsCategory, basicError: string, basicDirty: boolean, repoSaveState: SaveState, providerStatus: AIConnectionStatus, aiDirty: boolean): string {

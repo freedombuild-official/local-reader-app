@@ -167,9 +167,28 @@ export type CliAIEntrySettings = {
 
 export type AIEntrySettings = AIProviderSettings | CliAIEntrySettings;
 
+export type AIReadinessCode =
+  | "not_configured"
+  | "needs_test"
+  | "endpoint_unreachable"
+  | "invalid_endpoint"
+  | "model_missing"
+  | "credential_required"
+  | "provider_http_error"
+  | "timeout_or_abort"
+  | "cli_auth_missing"
+  | "wrapper_not_ready"
+  | "success";
+
+export type AIReadinessSeverity = "info" | "success" | "warning" | "error";
+
 export type AIConnectionStatus = {
   state: "notConfigured" | "configured" | "ready" | "failed";
+  code?: AIReadinessCode;
+  severity?: AIReadinessSeverity;
   message: string;
+  nextAction?: string;
+  detail?: string;
   checkedAt: string;
 };
 

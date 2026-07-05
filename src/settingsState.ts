@@ -120,7 +120,7 @@ export function activeAIProvider(settings: AISettingsState): AIProviderSettings 
 
 export function activeAIChatTarget(settings: AISettingsState): AIChatExecutionTarget | null {
   const entry = activeAIEntry(settings);
-  if (!entry || !aiReady(entry)) return null;
+  if (!entry || !aiVerifiedReady(settings, entry.entry)) return null;
   if (isProviderSettings(entry)) return { kind: "provider", provider: entry };
   return { kind: "cli", entry: entry.entry };
 }
@@ -175,17 +175,31 @@ export function storedAIStatus(settings: AISettingsState, entry: AIEntryKind): A
   return settings.statuses[entry] || null;
 }
 
+export function aiVerifiedReady(settings: AISettingsState, entry: AIEntryKind | null): boolean {
+  if (!entry) return false;
+  return effectiveAIStatus(settings, entry).state === "ready";
+}
+
 export function derivedAIStatus(entry: AIEntrySettings | null): AIConnectionStatus {
-  if (!entry) return { state: "notConfigured", message: "No active AI Entry is selected.", checkedAt: "" };
-  if (isCliSettings(entry)) {
-    if (aiReady(entry)) return { state: "ready", message: entry.readinessMessage || "CLI read-only wrapper is ready.", checkedAt: entry.lastCheckedAt || "" };
-    if (entry.authState === "configured") return { state: "configured", message: entry.readinessMessage || "CLI authentication is configured, but read-only wrapper readiness is not confirmed.", checkedAt: entry.lastCheckedAt || "" };
-    if (entry.authState === "notConfigured") return { state: "notConfigured", message: entry.readinessMessage || "CLI authentication is not configured.", checkedAt: entry.lastCheckedAt || "" };
-    return { state: "notConfigured", message: entry.readinessMessage || "CLI readiness has not been checked.", checkedAt: entry.lastCheckedAt || "" };
+  if (!entry) {
+    return aiStatus("notConfigured", "not_configured", "info", "No active AI Entry is selected.", "Select one entry before running checks or sending AI Chat.");
   }
-  if (aiReady(entry)) return { state: "ready", message: "Provider settings are ready.", checkedAt: "" };
-  if (aiConfigured(entry)) return { state: "configured", message: "Provider settings are partially configured.", checkedAt: "" };
-  return { state: "notConfigured", message: "Provider settings are not configured.", checkedAt: "" };
+  if (isCliSettings(entry)) {
+    if (aiReady(entry)) {
+      return aiStatus("ready", "success", "success", entry.readinessMessage || "CLI read-only wrapper is ready.", "Use this entry for read-only AI Chat or check again.", entry.lastCheckedAt || "");
+    }
+    if (entry.authState === "configured") {
+      return aiStatus("configured", "wrapper_not_ready", "warning", entry.readinessMessage || "CLI auth is configured, but the read-only wrapper is not confirmed.", "Run readiness check for this CLI entry.", entry.lastCheckedAt || "");
+    }
+    if (entry.authState === "notConfigured") {
+      return aiStatus("notConfigured", "cli_auth_missing", "warning", entry.readinessMessage || "CLI auth is not configured.", "Sign in with the CLI outside Reader-Wiki, then check readiness again.", entry.lastCheckedAt || "");
+    }
+    return aiStatus("notConfigured", "needs_test", "info", entry.readinessMessage || "CLI readiness has not been checked.", "Run readiness check for this CLI entry.", entry.lastCheckedAt || "");
+  }
+  if (aiConfigured(entry)) {
+    return aiStatus("configured", "needs_test", "warning", "Connection has not been tested.", "Test this entry before using it for AI Chat.");
+  }
+  return aiStatus("notConfigured", "not_configured", "info", "Connection settings are incomplete.", providerNextAction(entry));
 }
 
 export function effectiveAIStatus(settings: AISettingsState, entry: AIEntryKind): AIConnectionStatus {
@@ -325,4 +339,23 @@ function normalizeOptionalAIEntryKind(entry: unknown): AIEntryKind | null {
 function normalizeAIEntryKind(entry: unknown): AIEntryKind {
   if (entry === "aiApi" || entry === "localAi" || entry === "codexCli" || entry === "claudeCli") return entry;
   return "aiApi";
+}
+
+function aiStatus(
+  state: AIConnectionStatus["state"],
+  code: NonNullable<AIConnectionStatus["code"]>,
+  severity: NonNullable<AIConnectionStatus["severity"]>,
+  message: string,
+  nextAction: string,
+  checkedAt = "",
+  detail = "",
+): AIConnectionStatus {
+  return { state, code, severity, message, nextAction, checkedAt, ...(detail ? { detail } : {}) };
+}
+
+function providerNextAction(entry: AIProviderSettings): string {
+  if (!entry.model.trim()) return "Enter a model name.";
+  if (entry.entry === "aiApi" && !entry.credential?.trim()) return "Enter the API credential for this provider.";
+  if (!entry.baseUrl.trim() && (entry.entry === "localAi" || entry.provider === "openaiCompatible" || entry.provider === "custom")) return "Enter the endpoint URL.";
+  return "Complete the connection fields.";
 }

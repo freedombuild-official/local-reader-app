@@ -17,42 +17,65 @@ const DEFAULT_BASE_URLS: Record<string, string> = {
   openaiLocal: "http://127.0.0.1:8000/v1",
 };
 
+class ProviderHttpError extends Error {
+  constructor(readonly responseStatus: number) {
+    super(`Provider HTTP ${responseStatus}`);
+    this.name = "ProviderHttpError";
+  }
+}
+
+class ProviderAbortError extends Error {
+  constructor(message = "Connection timed out or was canceled.") {
+    super(message);
+    this.name = "ProviderAbortError";
+  }
+}
+
 export async function testAIConnection(provider: AIProviderSettings, signal?: AbortSignal): Promise<AIConnectionStatus> {
   const readiness = providerReadiness(provider);
   if (readiness.state !== "ready") return readiness;
   try {
-    await requestProviderText({
-      provider,
-      messages: [{ role: "user", content: "Reply with Reader-Wiki ready." }],
-      signal,
+    return await withTimeout(signal, async (timeoutSignal) => {
+      const modelVisibility = await testModelVisibility(provider, timeoutSignal);
+      if (modelVisibility) return modelVisibility;
+      await requestProviderText({
+        provider,
+        messages: [{ role: "user", content: "Reply with Reader-Wiki ready." }],
+        signal: timeoutSignal,
+      });
+      return status("ready", "success", "success", "Connected.", "This entry is ready for read-only AI Chat.");
     });
-    return status("ready", "Connection test completed.");
   } catch (error) {
-    return status("failed", safeProviderError(error));
+    return safeProviderErrorStatus(error);
   }
 }
 
 export async function requestAIChatCompletion(request: ProviderRequest): Promise<{ content: string; status: AIConnectionStatus }> {
   const readiness = providerReadiness(request.provider);
   if (readiness.state !== "ready") throw new HttpError(400, readiness.message);
-  const content = await requestProviderText(request);
-  return { content, status: status("ready", "Response received.") };
+  try {
+    const content = await requestProviderText(request);
+    return { content, status: status("ready", "success", "success", "Response received.", "Continue the conversation or test again if the endpoint changes.") };
+  } catch (error) {
+    const failed = safeProviderErrorStatus(error);
+    throw new HttpError(502, failed.message);
+  }
 }
 
 export function providerReadiness(provider: AIProviderSettings): AIConnectionStatus {
-  if (!provider.entry) return status("notConfigured", "Select an AI entry.");
-  if (!provider.model.trim()) return status("notConfigured", "Model is required.");
+  if (!provider.entry) return status("notConfigured", "not_configured", "info", "Select an AI entry.", "Choose an AI Entry.");
+  if (!provider.model.trim()) return status("notConfigured", "not_configured", "warning", "Model is required.", "Enter the model name shown by your provider.");
   if (provider.entry === "aiApi" && !provider.credential?.trim()) {
-    return status("notConfigured", "API key is required for AI API.");
+    return status("notConfigured", "credential_required", "warning", "API credential is required.", "Enter the provider credential, then test the connection.");
   }
   const baseUrl = providerBaseUrl(provider);
-  if (!baseUrl) return status("notConfigured", "Endpoint is required.");
+  if (!baseUrl) return status("notConfigured", "not_configured", "warning", "Endpoint is required.", "Enter the endpoint URL.");
   try {
     new URL(baseUrl);
   } catch {
-    return status("failed", "Endpoint URL is invalid.");
+    return status("failed", "invalid_endpoint", "error", "Endpoint URL is invalid.", "Check the endpoint URL format.");
   }
-  return status("ready", "Provider settings are ready.");
+  return status("ready", "needs_test", "info", "Connection can be tested.", "Run Test connection before using this entry.");
 }
 
 async function requestProviderText({ provider, messages = [], context, signal }: ProviderRequest): Promise<string> {
@@ -86,7 +109,7 @@ async function requestOpenAICompatibleText(
     signal,
   });
   const data = (await response.json().catch(() => ({}))) as { choices?: Array<{ message?: { content?: string } }>; error?: { message?: string } };
-  if (!response.ok) throw new Error(data.error?.message || `Provider returned HTTP ${response.status}.`);
+  if (!response.ok) throw new ProviderHttpError(response.status);
   return data.choices?.[0]?.message?.content || "";
 }
 
@@ -111,7 +134,7 @@ async function requestAnthropicText(
     signal,
   });
   const data = (await response.json().catch(() => ({}))) as { content?: Array<{ text?: string }>; error?: { message?: string } };
-  if (!response.ok) throw new Error(data.error?.message || `Provider returned HTTP ${response.status}.`);
+  if (!response.ok) throw new ProviderHttpError(response.status);
   return data.content?.map((item) => item.text || "").join("\n").trim() || "";
 }
 
@@ -133,7 +156,7 @@ async function requestGoogleText(
     signal,
   });
   const data = (await response.json().catch(() => ({}))) as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>; error?: { message?: string } };
-  if (!response.ok) throw new Error(data.error?.message || `Provider returned HTTP ${response.status}.`);
+  if (!response.ok) throw new ProviderHttpError(response.status);
   return data.candidates?.[0]?.content?.parts?.map((part) => part.text || "").join("\n").trim() || "";
 }
 
@@ -181,12 +204,70 @@ function providerBaseUrl(provider: AIProviderSettings): string {
   return "";
 }
 
-function status(state: AIConnectionStatus["state"], message: string): AIConnectionStatus {
-  return { state, message, checkedAt: new Date().toISOString() };
+async function testModelVisibility(provider: AIProviderSettings, signal: AbortSignal | undefined): Promise<AIConnectionStatus | null> {
+  if (provider.apiFormat !== "openaiCompatible" && provider.provider !== "openaiCompatible" && provider.entry !== "localAi") return null;
+  const baseUrl = providerBaseUrl(provider).replace(/\/+$/, "");
+  const response = await fetch(`${baseUrl}/models`, {
+    method: "GET",
+    headers: {
+      ...(provider.credential ? { Authorization: `Bearer ${provider.credential}` } : {}),
+    },
+    signal,
+  });
+  if (response.status === 404 || response.status === 405) return null;
+  if (!response.ok) throw new ProviderHttpError(response.status);
+  const data = (await response.json().catch(() => ({}))) as { data?: Array<{ id?: string }> };
+  const ids = (data.data || []).map((item) => item.id || "").filter(Boolean);
+  if (ids.length && !ids.includes(provider.model)) {
+    return status("failed", "model_missing", "warning", "Model is not visible at this endpoint.", "Check the model name or load it in your local runtime outside Reader-Wiki.");
+  }
+  return null;
 }
 
-function safeProviderError(error: unknown): string {
-  if (error instanceof Error && error.name === "AbortError") return "Connection test was canceled.";
-  if (error instanceof Error && error.message) return error.message;
-  return "Provider request failed.";
+async function withTimeout<T>(inputSignal: AbortSignal | undefined, work: (signal: AbortSignal | undefined) => Promise<T>): Promise<T> {
+  if (inputSignal?.aborted) throw new ProviderAbortError();
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  let abort: (() => void) | undefined;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timeout = setTimeout(() => reject(new ProviderAbortError()), 15_000);
+  });
+  const abortPromise = new Promise<never>((_, reject) => {
+    abort = () => reject(new ProviderAbortError("Connection test was canceled."));
+    inputSignal?.addEventListener("abort", abort, { once: true });
+  });
+  try {
+    return await Promise.race([work(inputSignal), timeoutPromise, abortPromise]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+    if (abort) inputSignal?.removeEventListener("abort", abort);
+  }
+}
+
+function status(
+  state: AIConnectionStatus["state"],
+  code: NonNullable<AIConnectionStatus["code"]>,
+  severity: NonNullable<AIConnectionStatus["severity"]>,
+  message: string,
+  nextAction: string,
+): AIConnectionStatus {
+  return { state, code, severity, message, nextAction, checkedAt: new Date().toISOString() };
+}
+
+function safeProviderErrorStatus(error: unknown): AIConnectionStatus {
+  if (error instanceof ProviderAbortError || (error instanceof Error && error.name === "AbortError")) {
+    return status("failed", "timeout_or_abort", "warning", "Connection timed out or was canceled.", "Check that the endpoint is reachable, then test again.");
+  }
+  if (error instanceof ProviderHttpError) {
+    if (error.responseStatus === 401 || error.responseStatus === 403) {
+      return status("failed", "credential_required", "warning", "Provider rejected the credential.", "Check the provider credential and access for this model.");
+    }
+    if (error.responseStatus === 404) {
+      return status("failed", "model_missing", "warning", "Model or endpoint was not found.", "Check the endpoint URL and model name.");
+    }
+    return status("failed", "provider_http_error", "error", `Provider returned HTTP ${error.responseStatus}.`, "Check provider status, endpoint settings, and model access.");
+  }
+  if (error instanceof TypeError) {
+    return status("failed", "endpoint_unreachable", "error", "Endpoint is unreachable.", "Check that the server is running and the endpoint URL is correct.");
+  }
+  return status("failed", "provider_http_error", "error", "Provider request failed.", "Check endpoint settings and test again.");
 }

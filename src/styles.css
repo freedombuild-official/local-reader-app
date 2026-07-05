@@ -909,6 +909,7 @@ main:is(.app-shell, .settings-shell) {
 }
 .settings-back-button,
 .primary-button,
+.success-button,
 .secondary-button,
 .danger-button,
 .text-button {
@@ -930,6 +931,7 @@ main:is(.app-shell, .settings-shell) {
 .settings-back-button { align-self: flex-start; }
 .settings-back-button svg,
 .primary-button svg,
+.success-button svg,
 .secondary-button svg,
 .danger-button svg,
 .text-button svg {
@@ -940,6 +942,11 @@ main:is(.app-shell, .settings-shell) {
   border-color: #1f6673;
   background: #287888;
   color: #ffffff;
+}
+.success-button {
+  border-color: #8bc29b;
+  background: #e8f5ec;
+  color: #23693d;
 }
 .danger-button {
   border-color: #e2aaa4;
@@ -952,6 +959,7 @@ main:is(.app-shell, .settings-shell) {
   padding: 0;
 }
 .primary-button:disabled,
+.success-button:disabled,
 .secondary-button:disabled,
 .danger-button:disabled,
 .text-button:disabled {
@@ -1345,10 +1353,34 @@ main:is(.app-shell, .settings-shell) {
   color: #61717a;
   margin-top: 2px;
 }
-.permission-grid {
+.permission-grid,
+.policy-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
+}
+.policy-item {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  border: 1px solid #d8e1e4;
+  border-radius: 7px;
+  background: #fbfcfd;
+  padding: 10px;
+}
+.policy-item.ready {
+  border-color: #b7d7c2;
+  background: #f1faf3;
+}
+.policy-item strong,
+.policy-item small {
+  display: block;
+  overflow-wrap: anywhere;
+}
+.policy-item small {
+  color: #61717a;
+  font-size: 12px;
+  line-height: 1.4;
 }
 .toggle-card {
   display: grid;
@@ -1598,13 +1630,15 @@ main:is(.app-shell, .settings-shell) {
   margin-top: 4px;
 }
 .repo-access-list,
-.entry-status-list {
+.entry-status-list,
+.readiness-list {
   display: grid;
   gap: 8px;
 }
 .repo-access-row,
 .entry-status-row,
-.diagnostic-test-row {
+.diagnostic-test-row,
+.readiness-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 10px;
@@ -1615,13 +1649,25 @@ main:is(.app-shell, .settings-shell) {
   background: #fbfcfd;
   padding: 10px;
 }
+.readiness-row {
+  grid-template-columns: 22px minmax(0, 1fr);
+  align-items: start;
+}
+.readiness-row svg {
+  width: 18px;
+  height: 18px;
+}
+.readiness-row.ready svg { color: #23693d; }
+.readiness-row.warning svg { color: #835a05; }
+.readiness-row.error svg { color: #9d2f2f; }
 .entry-status-row.active {
   border-color: #8bbac3;
   background: #eef7f8;
 }
 .repo-access-row span,
 .entry-status-row span,
-.diagnostic-test-row span {
+.diagnostic-test-row span,
+.readiness-row span {
   display: block;
   color: #61717a;
   font-size: 12px;
@@ -1629,7 +1675,20 @@ main:is(.app-shell, .settings-shell) {
 }
 .repo-access-row strong,
 .entry-status-row strong,
-.diagnostic-test-row strong {
+.diagnostic-test-row strong,
+.readiness-row strong {
+  display: block;
+  overflow-wrap: anywhere;
+}
+.diagnostic-test-row small {
+  display: block;
+}
+.readiness-row small {
+  display: block;
+  color: #61717a;
+  font-size: 12px;
+  line-height: 1.4;
+  margin-top: 2px;
   overflow-wrap: anywhere;
 }
 .ai-chat-panel {
@@ -1722,6 +1781,7 @@ main:is(.app-shell, .settings-shell) {
   .entry-grid,
   .auth-entry-grid,
   .permission-grid,
+  .policy-grid,
   .repo-form-grid,
   .provider-form-grid {
     grid-template-columns: 1fr;
@@ -1776,6 +1836,7 @@ main:is(.app-shell, .settings-shell) {
     min-height: 0;
   }
   .settings-status-card { margin-top: 0; }
+  .settings-rail .settings-status-card { display: none; }
   .settings-header {
     position: static;
     align-items: stretch;
@@ -1855,6 +1916,7 @@ main:is(.app-shell, .settings-shell) {
 .settings-shell[data-color-mode="dark"] .chip-list span,
 .settings-shell[data-color-mode="dark"] .validation-item,
 .settings-shell[data-color-mode="dark"] .toggle-card,
+.settings-shell[data-color-mode="dark"] .policy-item,
 .settings-shell[data-color-mode="dark"] .active-entry-summary,
 .settings-shell[data-color-mode="dark"] .entry-card,
 .settings-shell[data-color-mode="dark"] .auth-entry-card,
@@ -1864,6 +1926,7 @@ main:is(.app-shell, .settings-shell) {
 .settings-shell[data-color-mode="dark"] .repo-access-row,
 .settings-shell[data-color-mode="dark"] .entry-status-row,
 .settings-shell[data-color-mode="dark"] .diagnostic-test-row,
+.settings-shell[data-color-mode="dark"] .readiness-row,
 .app-shell[data-color-mode="dark"] .ai-chat-context,
 .app-shell[data-color-mode="dark"] .ai-chat-empty,
 .app-shell[data-color-mode="dark"] .ai-chat-error,
@@ -1885,6 +1948,7 @@ main:is(.app-shell, .settings-shell) {
 .app-shell[data-color-mode="dark"] .http-delivery-stop-button,
 .app-shell[data-color-mode="dark"] .memo-icon-button,
 .settings-shell[data-color-mode="dark"] .settings-back-button,
+.settings-shell[data-color-mode="dark"] .success-button,
 .settings-shell[data-color-mode="dark"] .secondary-button,
 .settings-shell[data-color-mode="dark"] .danger-button,
 .settings-shell[data-color-mode="dark"] .settings-segmented,
@@ -1910,6 +1974,7 @@ main:is(.app-shell, .settings-shell) {
 .settings-shell[data-color-mode="dark"] .settings-category-nav button:hover,
 .settings-shell[data-color-mode="dark"] .repo-list-row.active,
 .settings-shell[data-color-mode="dark"] .entry-card.active,
+.settings-shell[data-color-mode="dark"] .policy-item.ready,
 .settings-shell[data-color-mode="dark"] .entry-status-row.active,
 .settings-shell[data-color-mode="dark"] .entry-icon,
 .app-shell[data-color-mode="dark"] .ai-message.user {
@@ -2056,9 +2121,12 @@ main:is(.app-shell, .settings-shell) {
 .settings-shell[data-color-mode="dark"] .repo-access-row small,
 .settings-shell[data-color-mode="dark"] .entry-status-row small,
 .settings-shell[data-color-mode="dark"] .diagnostic-test-row small,
+.settings-shell[data-color-mode="dark"] .readiness-row small,
 .settings-shell[data-color-mode="dark"] .repo-access-row span,
 .settings-shell[data-color-mode="dark"] .entry-status-row span,
-.settings-shell[data-color-mode="dark"] .diagnostic-test-row span {
+.settings-shell[data-color-mode="dark"] .diagnostic-test-row span,
+.settings-shell[data-color-mode="dark"] .readiness-row span,
+.settings-shell[data-color-mode="dark"] .policy-item small {
   color: var(--rw-dark-muted);
 }
 
