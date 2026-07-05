@@ -721,8 +721,14 @@ describe("App", () => {
 
     const aiApiEntry = screen.getByLabelText("AI API entry");
     const localAiEntry = screen.getByLabelText("Local AI entry");
-    expect(screen.getByLabelText(["Co", "dex CLI entry"].join(""))).toBeTruthy();
-    expect(screen.getByLabelText("Claude Code CLI entry")).toBeTruthy();
+    const codexCliEntry = screen.getByLabelText(["Co", "dex CLI entry"].join(""));
+    const claudeCodeEntry = screen.getByLabelText("Claude Code CLI entry");
+    expect(codexCliEntry).toBeTruthy();
+    expect(claudeCodeEntry).toBeTruthy();
+    expect(within(codexCliEntry).getAllByText(["Co", "dex CLI"].join(""))).toHaveLength(1);
+    expect(within(claudeCodeEntry).getAllByText("Claude Code CLI")).toHaveLength(1);
+    expect(within(aiApiEntry).getAllByText("AI API")).toHaveLength(1);
+    expect(within(localAiEntry).getAllByText("Local AI")).toHaveLength(1);
     expect(within(aiApiEntry).getAllByText("Not configured").length).toBeGreaterThan(0);
     expect(within(localAiEntry).getAllByText("Not configured").length).toBeGreaterThan(0);
     expect(screen.getAllByRole("button", { name: "Set active" })).toHaveLength(4);

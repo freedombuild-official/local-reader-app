@@ -1473,7 +1473,7 @@ main:is(.app-shell, .settings-shell) {
   font-weight: 900;
 }
 .entry-card h4 {
-  margin: 2px 0 0;
+  margin: 0;
   font-size: 16px;
 }
 .auth-entry-card.active {

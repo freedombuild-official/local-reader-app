@@ -950,7 +950,6 @@ function AIEntryCard({
           {entryIcon(entry)}
         </span>
         <div>
-          <span>{entryLabel(entry)}</span>
           <h4>{entryLabel(entry)}</h4>
           <p>{entryDescription(entry)}</p>
         </div>
