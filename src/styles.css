@@ -1445,12 +1445,6 @@ main:is(.app-shell, .settings-shell) {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
 }
-.auth-entry-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  align-items: start;
-  gap: 12px;
-}
 .active-entry-summary,
 .entry-card,
 .auth-entry-card {
@@ -1539,6 +1533,18 @@ main:is(.app-shell, .settings-shell) {
   border-color: #b7d7c2;
   color: #23693d;
 }
+.status-pill.success {
+  border-color: #b7d7c2;
+  color: #23693d;
+}
+.status-pill.warning {
+  border-color: #ecd6a4;
+  color: #835a05;
+}
+.status-pill.error {
+  border-color: #e2aaa4;
+  color: #9d2f2f;
+}
 .entry-status-pills {
   display: flex;
   flex-wrap: wrap;
@@ -1581,8 +1587,7 @@ main:is(.app-shell, .settings-shell) {
 }
 .endpoint-settings-heading small,
 .repo-access-row small,
-.entry-status-row small,
-.diagnostic-test-row small {
+.readiness-row small {
   color: #61717a;
   font-size: 12px;
   line-height: 1.4;
@@ -1609,6 +1614,56 @@ main:is(.app-shell, .settings-shell) {
   background: #eef7f8;
   color: #0f4a53;
 }
+.cli-readiness-panel {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+.cli-readiness-action {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: center;
+  min-width: 0;
+  border: 1px solid #d8e1e4;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 14px;
+}
+.cli-readiness-action.success {
+  border-color: #b7d7c2;
+  background: #f3fbf5;
+}
+.cli-readiness-action.warning {
+  border-color: #ecd6a4;
+  background: #fffaf0;
+}
+.cli-readiness-action.error {
+  border-color: #e2aaa4;
+  background: #fff7f6;
+}
+.cli-readiness-action span,
+.cli-readiness-action small {
+  display: block;
+}
+.cli-readiness-action span {
+  color: #61717a;
+  font-size: 12px;
+  font-weight: 800;
+}
+.cli-readiness-action strong {
+  display: block;
+  font-size: 18px;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+.cli-readiness-action small {
+  color: #61717a;
+  font-size: 12px;
+  line-height: 1.4;
+  margin-top: 3px;
+  overflow-wrap: anywhere;
+}
 .warning-box {
   display: grid;
   gap: 4px;
@@ -1630,14 +1685,33 @@ main:is(.app-shell, .settings-shell) {
   margin-top: 4px;
 }
 .repo-access-list,
-.entry-status-list,
 .readiness-list {
   display: grid;
   gap: 8px;
 }
+.readiness-details {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  border-top: 1px solid #e0e7ea;
+  padding-top: 10px;
+}
+.readiness-details summary {
+  width: fit-content;
+  color: #405058;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 850;
+  line-height: 1.4;
+}
+.readiness-details summary:focus-visible {
+  outline: 2px solid #4b9faf;
+  outline-offset: 3px;
+}
+.readiness-details[open] summary {
+  margin-bottom: 8px;
+}
 .repo-access-row,
-.entry-status-row,
-.diagnostic-test-row,
 .readiness-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -1660,13 +1734,7 @@ main:is(.app-shell, .settings-shell) {
 .readiness-row.ready svg { color: #23693d; }
 .readiness-row.warning svg { color: #835a05; }
 .readiness-row.error svg { color: #9d2f2f; }
-.entry-status-row.active {
-  border-color: #8bbac3;
-  background: #eef7f8;
-}
 .repo-access-row span,
-.entry-status-row span,
-.diagnostic-test-row span,
 .readiness-row span {
   display: block;
   color: #61717a;
@@ -1674,14 +1742,9 @@ main:is(.app-shell, .settings-shell) {
   font-weight: 800;
 }
 .repo-access-row strong,
-.entry-status-row strong,
-.diagnostic-test-row strong,
 .readiness-row strong {
   display: block;
   overflow-wrap: anywhere;
-}
-.diagnostic-test-row small {
-  display: block;
 }
 .readiness-row small {
   display: block;
@@ -1779,7 +1842,6 @@ main:is(.app-shell, .settings-shell) {
   .settings-shell { grid-template-columns: 240px minmax(0, 1fr); }
   .settings-summary-grid,
   .entry-grid,
-  .auth-entry-grid,
   .permission-grid,
   .policy-grid,
   .repo-form-grid,
@@ -1852,9 +1914,7 @@ main:is(.app-shell, .settings-shell) {
     border-top: 1px solid #c8d4d8;
   }
   .settings-segmented button:first-child { border-top: 0; }
-  .repo-access-row,
-  .entry-status-row,
-  .diagnostic-test-row {
+  .repo-access-row {
     grid-template-columns: 1fr;
     align-items: start;
   }
@@ -1864,6 +1924,12 @@ main:is(.app-shell, .settings-shell) {
   .auth-card-heading .status-pill {
     grid-column: 1 / -1;
     justify-self: start;
+  }
+  .cli-readiness-action {
+    grid-template-columns: 1fr;
+  }
+  .cli-readiness-action button {
+    justify-self: stretch;
   }
 }
 
@@ -1923,9 +1989,9 @@ main:is(.app-shell, .settings-shell) {
 .settings-shell[data-color-mode="dark"] .status-pill,
 .settings-shell[data-color-mode="dark"] .entry-status-pills span,
 .settings-shell[data-color-mode="dark"] .endpoint-settings-panel,
+.settings-shell[data-color-mode="dark"] .cli-readiness-action,
+.settings-shell[data-color-mode="dark"] .readiness-details,
 .settings-shell[data-color-mode="dark"] .repo-access-row,
-.settings-shell[data-color-mode="dark"] .entry-status-row,
-.settings-shell[data-color-mode="dark"] .diagnostic-test-row,
 .settings-shell[data-color-mode="dark"] .readiness-row,
 .app-shell[data-color-mode="dark"] .ai-chat-context,
 .app-shell[data-color-mode="dark"] .ai-chat-empty,
@@ -1975,7 +2041,6 @@ main:is(.app-shell, .settings-shell) {
 .settings-shell[data-color-mode="dark"] .repo-list-row.active,
 .settings-shell[data-color-mode="dark"] .entry-card.active,
 .settings-shell[data-color-mode="dark"] .policy-item.ready,
-.settings-shell[data-color-mode="dark"] .entry-status-row.active,
 .settings-shell[data-color-mode="dark"] .entry-icon,
 .app-shell[data-color-mode="dark"] .ai-message.user {
   border-color: var(--rw-dark-accent-strong);
@@ -2000,6 +2065,21 @@ main:is(.app-shell, .settings-shell) {
   border-color: var(--rw-dark-danger);
   background: var(--rw-dark-danger-bg);
   color: var(--rw-dark-danger);
+}
+
+.settings-shell[data-color-mode="dark"] .cli-readiness-action.success {
+  border-color: var(--rw-dark-success);
+  background: var(--rw-dark-success-bg);
+}
+
+.settings-shell[data-color-mode="dark"] .cli-readiness-action.warning {
+  border-color: var(--rw-dark-warning);
+  background: var(--rw-dark-warning-bg);
+}
+
+.settings-shell[data-color-mode="dark"] .cli-readiness-action.error {
+  border-color: var(--rw-dark-danger);
+  background: var(--rw-dark-danger-bg);
 }
 
 .app-shell[data-color-mode="dark"] .sidebar-tree-action,
@@ -2117,15 +2197,14 @@ main:is(.app-shell, .settings-shell) {
 .settings-shell[data-color-mode="dark"] .model-candidates > span,
 .settings-shell[data-color-mode="dark"] .endpoint-settings-heading > span,
 .settings-shell[data-color-mode="dark"] .subsection-title,
+.settings-shell[data-color-mode="dark"] .readiness-details summary,
 .settings-shell[data-color-mode="dark"] .endpoint-settings-heading small,
 .settings-shell[data-color-mode="dark"] .repo-access-row small,
-.settings-shell[data-color-mode="dark"] .entry-status-row small,
-.settings-shell[data-color-mode="dark"] .diagnostic-test-row small,
 .settings-shell[data-color-mode="dark"] .readiness-row small,
 .settings-shell[data-color-mode="dark"] .repo-access-row span,
-.settings-shell[data-color-mode="dark"] .entry-status-row span,
-.settings-shell[data-color-mode="dark"] .diagnostic-test-row span,
 .settings-shell[data-color-mode="dark"] .readiness-row span,
+.settings-shell[data-color-mode="dark"] .cli-readiness-action span,
+.settings-shell[data-color-mode="dark"] .cli-readiness-action small,
 .settings-shell[data-color-mode="dark"] .policy-item small {
   color: var(--rw-dark-muted);
 }

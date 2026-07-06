@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ArrowLeft, CheckCircle2, Settings as SettingsIcon, XCircle } from "lucide-react";
 import { fetchAIEntryReadiness, fetchRepositoryConfig, previewRepositoryConfig, saveRepositoryConfig, testAIProviderConnection, validateRepositoryConfig } from "./api";
 import {
@@ -8,11 +8,11 @@ import {
   aiEntryProvider,
   aiEntrySettings,
   aiReady,
-  aiVerifiedReady,
   defaultAISettings,
   derivedAIStatus,
   effectiveAIStatus,
   formatReaderFontScaleLabel,
+  isCliEntryKind,
   isProviderEntryKind,
   normalizeAISettingsState,
   normalizeReaderFontScale,
@@ -72,13 +72,16 @@ export function SettingsView({
   const [repoSaveState, setRepoSaveState] = useState<SaveState>("idle");
   const [repoMessage, setRepoMessage] = useState("");
   const [testingEntry, setTestingEntry] = useState<AIEntryKind | null>(null);
+  const aiDraftRef = useRef(aiDraft);
 
   useEffect(() => {
     setBasicDraft(basicSettings);
   }, [basicSettings]);
 
   useEffect(() => {
-    setAiDraft(normalizeAISettingsState(aiSettings));
+    const normalized = normalizeAISettingsState(aiSettings);
+    aiDraftRef.current = normalized;
+    setAiDraft(normalized);
   }, [aiSettings]);
 
   useEffect(() => {
@@ -199,15 +202,21 @@ export function SettingsView({
   }
 
   async function testEntry(entry: AIEntryKind) {
+    const entryAtStart = entry;
+    const settingsAtStart = aiDraftRef.current;
+    const providerFingerprint = isProviderEntryKind(entryAtStart) ? providerSettingsFingerprint(aiEntryProvider(settingsAtStart, entryAtStart)) : "";
     setTestingEntry(entry);
     try {
-      if (isProviderEntryKind(entry)) {
-        const provider = aiEntryProvider(aiDraft, entry);
+      if (isProviderEntryKind(entryAtStart)) {
+        const provider = aiEntryProvider(settingsAtStart, entryAtStart);
         const status = await testAIProviderConnection(provider);
-        commitAISettings(updateAIEntryStatus(aiDraft, entry, status));
+        commitAISettingsUpdate((current) => {
+          if (providerSettingsFingerprint(aiEntryProvider(current, entryAtStart)) !== providerFingerprint) return current;
+          return updateAIEntryStatus(current, entryAtStart, status);
+        });
       } else {
-        const readiness = await fetchAIEntryReadiness(entry);
-        commitAISettings(updateCliEntryReadiness(aiDraft, readiness));
+        const readiness = await fetchAIEntryReadiness(entryAtStart);
+        commitAISettingsUpdate((current) => updateCliEntryReadiness(current, readiness));
       }
     } catch (error) {
       const failed: AIConnectionStatus = {
@@ -218,7 +227,10 @@ export function SettingsView({
         nextAction: error instanceof Error ? error.message : String(error),
         checkedAt: new Date().toISOString(),
       };
-      commitAISettings(updateAIEntryStatus(aiDraft, entry, failed));
+      commitAISettingsUpdate((current) => {
+        if (isProviderEntryKind(entryAtStart) && providerSettingsFingerprint(aiEntryProvider(current, entryAtStart)) !== providerFingerprint) return current;
+        return updateAIEntryStatus(current, entryAtStart, failed);
+      });
     } finally {
       setTestingEntry(null);
     }
@@ -232,9 +244,14 @@ export function SettingsView({
 
   function commitAISettings(settings: AISettingsState): AISettingsState {
     const normalized = normalizeAISettingsState(settings);
+    aiDraftRef.current = normalized;
     setAiDraft(normalized);
     onAISettingsChange(normalized);
     return normalized;
+  }
+
+  function commitAISettingsUpdate(updater: (settings: AISettingsState) => AISettingsState): AISettingsState {
+    return commitAISettings(updater(aiDraftRef.current));
   }
 
   return (
@@ -320,9 +337,6 @@ export function SettingsView({
             dirty={aiDirty}
             onChange={commitAISettings}
             onTestEntry={(entry) => void testEntry(entry)}
-            onTestActive={() => {
-              if (aiDraft.activeEntry) void testEntry(aiDraft.activeEntry);
-            }}
           />
         ) : null}
       </section>
@@ -555,7 +569,6 @@ function AIChatSettingsPanel({
   dirty,
   onChange,
   onTestEntry,
-  onTestActive,
 }: {
   settings: AISettingsState;
   status: AIConnectionStatus;
@@ -564,13 +577,12 @@ function AIChatSettingsPanel({
   dirty: boolean;
   onChange: (settings: AISettingsState) => void;
   onTestEntry: (entry: AIEntryKind) => void;
-  onTestActive: () => void;
 }) {
   const activeEntrySettings = activeAIEntry(settings);
   const activeEntry = settings.activeEntry;
-  const ready = aiVerifiedReady(settings, activeEntry);
   const configured = aiConfigured(activeEntrySettings);
   const entries = ["codexCli", "claudeCli", "aiApi", "localAi"] as AIEntryKind[];
+  const activeSetupTitle = isCliEntryKind(activeEntry) ? "CLI Readiness" : "Connection / Credentials";
 
   function setActiveEntry(entry: AIEntryKind) {
     onChange({ ...settings, activeEntry: entry });
@@ -611,122 +623,114 @@ function AIChatSettingsPanel({
           ))}
         </div>
       </SettingsCard>
-      <SettingsCard title="Connection / Credentials" eyebrow="Readiness" status={statusLabel(status)}>
-        {!activeEntry ? (
-          <p className="settings-message">Select an AI Entry to edit connection details and run readiness checks.</p>
-        ) : null}
-        {activeEntry === "codexCli" ? (
-          <AuthenticationEntryCard
-            entry="codexCli"
-            title={entryLabel("codexCli")}
-            subtitle="Existing CLI auth / read-only wrapper"
-            note="Uses installed CLI authentication and fixed read-only invocation. No login, logout, browser launch, or repository writes are started here."
-            active
-            status={effectiveAIStatus(settings, "codexCli")}
-          >
-            <CliAIForm
-              entry={aiEntryCli(settings, "codexCli")}
+      {activeEntry ? (
+        <SettingsCard title={activeSetupTitle} eyebrow={entryLabel(activeEntry)} status={aiEntryStatusLabel(activeEntry, status)}>
+          {activeEntry === "codexCli" ? (
+            <AuthenticationEntryCard
+              entry="codexCli"
+              title={entryLabel("codexCli")}
+              subtitle="Existing CLI readiness"
+              note="Uses installed CLI authentication and fixed read-only invocation. No login, logout, browser launch, or repository writes are started here."
+              configured={configured}
+              lastCheckedAt={settings.lastCheckedAtByEntry.codexCli}
               status={effectiveAIStatus(settings, "codexCli")}
-              testing={testingEntry === "codexCli"}
-              onTest={() => onTestEntry("codexCli")}
-            />
-          </AuthenticationEntryCard>
-        ) : null}
-        {activeEntry === "claudeCli" ? (
-          <AuthenticationEntryCard
-            entry="claudeCli"
-            title={entryLabel("claudeCli")}
-            subtitle="Existing CLI auth / tool-restricted print mode"
-            note="Uses installed CLI authentication and a non-persistent print invocation with tools disabled."
-            active
-            status={effectiveAIStatus(settings, "claudeCli")}
-          >
-            <CliAIForm
-              entry={aiEntryCli(settings, "claudeCli")}
+              labelKind="readiness"
+              statusLabelText={cliStatusLabel(effectiveAIStatus(settings, "codexCli"))}
+              showStatusMessages={false}
+              detailsChildren={<CliReadinessDetails entry={aiEntryCli(settings, "codexCli")} />}
+            >
+              <CliAIForm
+                entry={aiEntryCli(settings, "codexCli")}
+                status={effectiveAIStatus(settings, "codexCli")}
+                testing={testingEntry === "codexCli"}
+                onTest={() => onTestEntry("codexCli")}
+              />
+            </AuthenticationEntryCard>
+          ) : null}
+          {activeEntry === "claudeCli" ? (
+            <AuthenticationEntryCard
+              entry="claudeCli"
+              title={entryLabel("claudeCli")}
+              subtitle="Existing CLI readiness"
+              note="Uses installed CLI authentication and a non-persistent print invocation with tools disabled. No login, logout, browser auth, or credential handling is started here."
+              configured={configured}
+              lastCheckedAt={settings.lastCheckedAtByEntry.claudeCli}
               status={effectiveAIStatus(settings, "claudeCli")}
-              testing={testingEntry === "claudeCli"}
-              onTest={() => onTestEntry("claudeCli")}
-            />
-          </AuthenticationEntryCard>
-        ) : null}
-        {activeEntry === "aiApi" ? (
-          <AuthenticationEntryCard
-            entry="aiApi"
-            title="AI API"
-            subtitle="Provider / model / credential"
-            note="Cloud and compatible providers require a model, endpoint where applicable, and a credential kept in this browser run only."
-            active
-            status={effectiveAIStatus(settings, "aiApi")}
-          >
-            <AIAPIForm
-              provider={aiEntryProvider(settings, "aiApi")}
+              labelKind="readiness"
+              statusLabelText={cliStatusLabel(effectiveAIStatus(settings, "claudeCli"))}
+              showStatusMessages={false}
+              detailsChildren={<CliReadinessDetails entry={aiEntryCli(settings, "claudeCli")} />}
+            >
+              <CliAIForm
+                entry={aiEntryCli(settings, "claudeCli")}
+                status={effectiveAIStatus(settings, "claudeCli")}
+                testing={testingEntry === "claudeCli"}
+                onTest={() => onTestEntry("claudeCli")}
+              />
+            </AuthenticationEntryCard>
+          ) : null}
+          {activeEntry === "aiApi" ? (
+            <AuthenticationEntryCard
+              entry="aiApi"
+              title="AI API"
+              subtitle="Provider / model / credential"
+              note="Cloud and compatible providers require a model, endpoint where applicable, and a credential kept in this browser run only."
+              configured={configured}
+              lastCheckedAt={settings.lastCheckedAtByEntry.aiApi}
               status={effectiveAIStatus(settings, "aiApi")}
-              testing={testingEntry === "aiApi"}
-              onUpdate={(update) => updateEntry("aiApi", update)}
-              onClearCredential={() => updateEntry("aiApi", { credential: "" })}
-              onTest={() => onTestEntry("aiApi")}
-            />
-          </AuthenticationEntryCard>
-        ) : null}
-        {activeEntry === "localAi" ? (
-          <AuthenticationEntryCard
-            entry="localAi"
-            title="Local AI"
-            subtitle="Local runtime / endpoint / model"
-            note="Use a localhost OpenAI-compatible endpoint. Reader-Wiki does not start runtimes, load models, or run local AI CLIs."
-            active
-            status={effectiveAIStatus(settings, "localAi")}
-          >
-            <LocalAIForm
-              provider={aiEntryProvider(settings, "localAi")}
+              labelKind="connection"
+            >
+              <AIAPIForm
+                provider={aiEntryProvider(settings, "aiApi")}
+                status={effectiveAIStatus(settings, "aiApi")}
+                testing={testingEntry === "aiApi"}
+                onUpdate={(update) => updateEntry("aiApi", update)}
+                onClearCredential={() => updateEntry("aiApi", { credential: "" })}
+                onTest={() => onTestEntry("aiApi")}
+              />
+            </AuthenticationEntryCard>
+          ) : null}
+          {activeEntry === "localAi" ? (
+            <AuthenticationEntryCard
+              entry="localAi"
+              title="Local AI"
+              subtitle="Local runtime / endpoint / model"
+              note="Use a localhost OpenAI-compatible endpoint. Reader-Wiki does not start runtimes, load models, or run local AI CLIs."
+              configured={configured}
+              lastCheckedAt={settings.lastCheckedAtByEntry.localAi}
               status={effectiveAIStatus(settings, "localAi")}
-              testing={testingEntry === "localAi"}
-              onUpdate={(update) => updateEntry("localAi", update)}
-              onClearCredential={() => updateEntry("localAi", { credential: "" })}
-              onTest={() => onTestEntry("localAi")}
-            />
-          </AuthenticationEntryCard>
-        ) : null}
-        <p className="settings-message">Provider credentials stay in the current browser run and are never written to repository config or browser storage.</p>
-      </SettingsCard>
+              labelKind="connection"
+            >
+              <LocalAIForm
+                provider={aiEntryProvider(settings, "localAi")}
+                status={effectiveAIStatus(settings, "localAi")}
+                testing={testingEntry === "localAi"}
+                onUpdate={(update) => updateEntry("localAi", update)}
+                onClearCredential={() => updateEntry("localAi", { credential: "" })}
+                onTest={() => onTestEntry("localAi")}
+              />
+            </AuthenticationEntryCard>
+          ) : null}
+          {isProviderEntryKind(activeEntry) ? <p className="settings-message">Provider credentials stay in the current browser run and are never written to repository config or browser storage.</p> : null}
+        </SettingsCard>
+      ) : null}
       <SettingsCard title="Access policy" eyebrow="AI Chat" status="Read-only context">
         <div className="policy-grid">
           <div className="policy-item ready">
-            <strong>Read context</strong>
-            <small>AI Chat can receive the active repository file as guarded read-only context.</small>
+            <strong>Read active context</strong>
+            <small>AI Chat receives only the active file and provided metadata as guarded read-only context.</small>
           </div>
           <div className="policy-item">
-            <strong>No write path</strong>
-            <small>AI Chat cannot edit files, apply patches, mutate repositories, or delete content.</small>
+            <strong>No repository writes</strong>
+            <small>AI Chat cannot edit files, apply patches, mutate repositories, delete content, or search the whole repo on its own.</small>
           </div>
           <div className="policy-item">
             <strong>No runtime orchestration</strong>
-            <small>Reader-Wiki does not start Local AI servers, load models, download models, or run local AI CLIs.</small>
+            <small>Reader-Wiki does not start AI servers, load models, download models, run shell commands, or launch auth flows.</small>
           </div>
         </div>
         <div className="subsection-title">Repository Access</div>
         <RepositoryAccessList repositories={repositories} />
-      </SettingsCard>
-      <SettingsCard title="Readiness diagnostics" eyebrow="Diagnostics" status={statusLabel(status)}>
-        <div className={`diagnostic-test-row ${statusClass(status)}`}>
-          <div>
-            <span>Test active entry</span>
-            <strong>{activeEntry ? `${entryLabel(activeEntry)} readiness` : "No active AI Entry"}</strong>
-            <small>{activeEntry ? status.message : "Select an AI Entry before running diagnostics."}</small>
-            {activeEntry && status.nextAction ? <small>{status.nextAction}</small> : null}
-          </div>
-          <button type="button" className={ready ? "success-button" : "secondary-button"} onClick={onTestActive} disabled={!activeEntry || testingEntry !== null}>
-            {ready ? <CheckCircle2 aria-hidden="true" focusable="false" /> : null}
-            {testingEntry && testingEntry === activeEntry ? "Testing..." : ready ? "Test again" : "Test active entry"}
-          </button>
-        </div>
-        <div className="readiness-list" aria-label="Readiness checklist">
-          <ReadinessRow label="Active entry" status={activeEntry ? "ready" : "warning"} value={activeEntry ? entryLabel(activeEntry) : "Select an entry"} />
-          <ReadinessRow label="Connection fields" status={configured ? "ready" : "warning"} value={configured ? "Configured" : "Incomplete"} />
-          <ReadinessRow label="Connection check" status={readinessRowStatus(status)} value={statusLabel(status)} detail={status.message} />
-          <ReadinessRow label="Next action" status={readinessRowStatus(status)} value={status.nextAction || "No action available"} />
-          <ReadinessRow label="Last check" status={settings.activeEntry && settings.lastCheckedAtByEntry[settings.activeEntry] ? "ready" : "warning"} value={activeEntry ? formatLastCheck(settings.lastCheckedAtByEntry[activeEntry]) : "Not tested"} />
-        </div>
       </SettingsCard>
     </section>
   );
@@ -737,20 +741,32 @@ function AuthenticationEntryCard({
   title,
   subtitle,
   note,
-  active,
+  configured,
+  lastCheckedAt,
   status,
   children,
+  labelKind = "connection",
+  statusLabelText,
+  showStatusMessages = true,
+  detailsChildren,
 }: {
   entry: AIEntryKind;
   title: string;
   subtitle: string;
   note: string;
-  active: boolean;
+  configured: boolean;
+  lastCheckedAt: string;
   status: AIConnectionStatus;
   children: ReactNode;
+  labelKind?: "connection" | "readiness";
+  statusLabelText?: string;
+  showStatusMessages?: boolean;
+  detailsChildren?: ReactNode;
 }) {
+  const cliEntry = isCliEntryKind(entry);
+  const checklistLabel = cliEntry ? "Readiness checklist" : "Readiness checklist";
   return (
-    <article className={`auth-entry-card${active ? " active" : ""}`} aria-label={`${title} connection`}>
+    <article className="auth-entry-card active" aria-label={`${title} ${labelKind}`}>
       <div className="auth-card-heading">
         <span className="entry-icon" aria-hidden="true">
           {entryIcon(entry)}
@@ -759,12 +775,23 @@ function AuthenticationEntryCard({
           <span>{title}</span>
           <h4>{subtitle}</h4>
         </div>
-        <span className={`status-pill ${active ? "active" : "inactive"}`}>{active ? "Active" : "Inactive"}</span>
+        <span className={`status-pill ${statusClass(status) || "active"}`}>{statusLabelText || statusLabel(status)}</span>
       </div>
       <p className="auth-card-note">{note}</p>
       {children}
-      <p className={`settings-message ${statusClass(status)}`}>{status.message}</p>
-      {status.nextAction ? <p className="settings-message">{status.nextAction}</p> : null}
+      {showStatusMessages ? <p className={`settings-message ${statusClass(status)}`}>{status.message}</p> : null}
+      {showStatusMessages && status.nextAction ? <p className="settings-message">{status.nextAction}</p> : null}
+      <details className="readiness-details" aria-label={`${title} readiness details`}>
+        <summary>Details</summary>
+        <div className="readiness-list" aria-label={checklistLabel}>
+          <ReadinessRow label="Active entry" status="ready" value={title} />
+          {cliEntry ? null : <ReadinessRow label="Connection fields" status={configured ? "ready" : "warning"} value={configured ? "Configured" : "Incomplete"} />}
+          <ReadinessRow label={cliEntry ? "Readiness check" : "Connection check"} status={readinessRowStatus(status)} value={statusLabelText || statusLabel(status)} detail={status.message} />
+          <ReadinessRow label="Next action" status={readinessRowStatus(status)} value={status.nextAction || "No action available"} />
+          <ReadinessRow label="Last check" status={lastCheckedAt ? "ready" : "warning"} value={formatLastCheck(lastCheckedAt)} />
+          {detailsChildren}
+        </div>
+      </details>
     </article>
   );
 }
@@ -915,17 +942,13 @@ function LocalAIForm({
 
 function CliAIForm({ entry, status, testing, onTest }: { entry: CliAIEntrySettings; status: AIConnectionStatus; testing: boolean; onTest: () => void }) {
   return (
-    <div className="provider-form-grid auth-form-grid">
-      <SummaryItem label="Binary" value={entry.binaryName} />
-      <SummaryItem label="Version" value={entry.version || "Not checked"} />
-      <SummaryItem label="Existing auth" value={cliAuthLabel(entry)} />
-      <SummaryItem label="Wrapper" value={cliWrapperLabel(entry)} />
-      <SummaryItem label="Execution mode" value={entry.executionMode === "readOnly" ? "Read only" : "Not confirmed"} />
-      <div className="setting-row inline-row wide">
+    <div className="cli-readiness-panel">
+      <div className={`cli-readiness-action ${statusClass(status) || "neutral"}`}>
         <div>
           <span>Readiness</span>
-          <strong>{statusLabel(status)}</strong>
-          <small>{status.nextAction || status.message}</small>
+          <strong>{cliStatusLabel(status)}</strong>
+          <small>{cliStatusMessage(status)}</small>
+          <small>Last checked: {formatLastCheck(entry.lastCheckedAt || "")}</small>
         </div>
         <button type="button" className={status.state === "ready" ? "success-button" : "secondary-button"} onClick={onTest} disabled={testing}>
           {status.state === "ready" ? <CheckCircle2 aria-hidden="true" focusable="false" /> : null}
@@ -933,6 +956,18 @@ function CliAIForm({ entry, status, testing, onTest }: { entry: CliAIEntrySettin
         </button>
       </div>
     </div>
+  );
+}
+
+function CliReadinessDetails({ entry }: { entry: CliAIEntrySettings }) {
+  return (
+    <>
+      <ReadinessRow label="Binary" status={entry.binaryName ? "ready" : "warning"} value={entry.binaryName || "Unknown"} />
+      <ReadinessRow label="Version" status={entry.version ? "ready" : "warning"} value={entry.version || "Not checked"} />
+      <ReadinessRow label="Existing sign-in" status={entry.authState === "configured" ? "ready" : "warning"} value={cliAuthLabel(entry)} />
+      <ReadinessRow label="Read-only wrapper" status={entry.readOnlyWrapperState === "ready" ? "ready" : "warning"} value={cliWrapperLabel(entry)} />
+      <ReadinessRow label="Execution mode" status={entry.executionMode === "readOnly" ? "ready" : "warning"} value={entry.executionMode === "readOnly" ? "Read only" : "Not confirmed"} />
+    </>
   );
 }
 
@@ -964,7 +999,7 @@ function AIEntryCard({
       </div>
       <div className="entry-status-pills">
         <span className={active ? "ready" : ""}>{active ? "Active" : "Inactive"}</span>
-        <span className={status.state === "ready" ? "ready" : status.state === "failed" ? "error" : ""}>{statusLabel(status)}</span>
+        <span className={status.state === "ready" ? "ready" : status.state === "failed" ? "error" : ""}>{aiEntryStatusLabel(entry, status)}</span>
       </div>
       {active ? <p className="settings-message">{status.nextAction || status.message}</p> : null}
       <button type="button" className="secondary-button" onClick={active ? onClearActive : onSetActive}>
@@ -1151,6 +1186,18 @@ function providerDefaults(provider: string): Partial<AIProviderSettings> {
   return { provider: "openai", apiFormat: "openaiCompatible", model: "gpt-5.5", baseUrl: "" };
 }
 
+function providerSettingsFingerprint(provider: AIProviderSettings): string {
+  return JSON.stringify({
+    entry: provider.entry,
+    provider: provider.provider || "",
+    runtime: provider.runtime || "",
+    model: provider.model,
+    baseUrl: provider.baseUrl,
+    apiFormat: provider.apiFormat,
+    credential: provider.credential || "",
+  });
+}
+
 function localDefaults(runtime: string): Partial<AIProviderSettings> {
   if (runtime === "lmStudio") return { runtime: "lmStudio", baseUrl: "http://127.0.0.1:1234/v1", model: "" };
   if (runtime === "openaiLocal") return { runtime: "openaiLocal", baseUrl: "http://127.0.0.1:8000/v1", model: "" };
@@ -1163,6 +1210,24 @@ function statusLabel(status: AIConnectionStatus): string {
   if (status.state === "configured") return "Needs test";
   if (status.state === "ready") return "Connected";
   return "Needs attention";
+}
+
+function aiEntryStatusLabel(entry: AIEntryKind | null, status: AIConnectionStatus): string {
+  return isCliEntryKind(entry) ? cliStatusLabel(status) : statusLabel(status);
+}
+
+function cliStatusLabel(status: AIConnectionStatus): string {
+  if (status.state === "ready") return "Success";
+  if (status.code === "cli_auth_missing") return "Needs sign-in";
+  if (status.state === "failed" || status.code === "wrapper_not_ready") return "Check failed";
+  return "Not checked";
+}
+
+function cliStatusMessage(status: AIConnectionStatus): string {
+  if (status.state === "ready") return "Ready to use for AI Chat.";
+  if (status.code === "cli_auth_missing") return "Sign in with the CLI outside Reader-Wiki, then check readiness again.";
+  if (status.state === "failed" || status.code === "wrapper_not_ready") return status.nextAction || status.message;
+  return "Check the installed CLI and existing sign-in state.";
 }
 
 function statusClass(status: AIConnectionStatus): string {
