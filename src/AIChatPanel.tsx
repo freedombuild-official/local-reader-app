@@ -7,6 +7,7 @@ import { activeAIChatTarget, activeAIEntry, aiVerifiedReady, derivedAIStatus, ef
 import type { AIChatAttachment, AIChatMessage, AIChatSessionState, AIModelBehavior, FileResponse } from "./types";
 import { injectMarkdownCodeToolbarButtons, installCodeBlockRule } from "../shared/markdownCodeBlocks";
 import { installTableScrollRule } from "../shared/markdownTableScroll";
+import { installTaskListRule } from "../shared/markdownTaskLists";
 
 type AIChatPanelProps = {
   aiSettings: AISettingsState;
@@ -37,6 +38,7 @@ const MAX_ATTACHMENT_TEXT_BYTES = 64 * 1024;
 
 installTableScrollRule(aiMarkdown);
 installCodeBlockRule(aiMarkdown);
+installTaskListRule(aiMarkdown);
 
 export function AIChatPanel({ aiSettings, session, onSessionChange, modelBehavior, activeRepoId, activeFile, onOpenSettings, onMarkdownClick }: AIChatPanelProps) {
   const [copyStateById, setCopyStateById] = useState<Record<string, CopyState>>({});
@@ -213,15 +215,17 @@ export function AIChatPanel({ aiSettings, session, onSessionChange, modelBehavio
           <article key={message.id} className={`ai-message ${message.role}`}>
             <header className="ai-message-header">
               <span>{message.role === "user" ? "You" : "AI"}</span>
-              <button type="button" className={`icon-button ai-message-copy ${copyStateById[message.id] || "idle"}`} aria-label={`Copy ${message.role === "user" ? "user" : "AI"} message`} title="Copy message" onClick={() => void copyMessage(message.id, message.content)}>
-                {copyStateById[message.id] === "copied" ? <Check aria-hidden="true" focusable="false" /> : <Copy aria-hidden="true" focusable="false" />}
-              </button>
             </header>
             {message.content ? (
               <div className="markdown-body ai-message-body" onClick={onMarkdownClick} dangerouslySetInnerHTML={{ __html: message.html }} />
             ) : (
               <span className="ai-message-streaming">Streaming...</span>
             )}
+            <footer className="ai-message-footer">
+              <button type="button" className={`icon-button ai-message-copy ${copyStateById[message.id] || "idle"}`} aria-label={`Copy ${message.role === "user" ? "user" : "AI"} message`} title="Copy message" onClick={() => void copyMessage(message.id, message.content)}>
+                {copyStateById[message.id] === "copied" ? <Check aria-hidden="true" focusable="false" /> : <Copy aria-hidden="true" focusable="false" />}
+              </button>
+            </footer>
           </article>
         ))}
       </div>
@@ -306,11 +310,13 @@ function replaceLastAssistant(session: AIChatSessionState, content: string): AIC
 
 function renderAIMessage(content: string): string {
   return sanitizeHtml(injectMarkdownCodeToolbarButtons(aiMarkdown.render(content)), {
-    allowedTags: [...sanitizeHtml.defaults.allowedTags, "div", "span", "button", "svg", "path", "rect"],
+    allowedTags: [...sanitizeHtml.defaults.allowedTags, "div", "span", "button", "svg", "path", "rect", "input"],
     allowedAttributes: {
       ...sanitizeHtml.defaults.allowedAttributes,
       a: ["href", "name", "target", "rel"],
       code: ["class"],
+      input: ["aria-label", "checked", "class", "disabled", "type"],
+      li: ["class"],
       pre: ["class"],
       div: ["class", "data-reader-wiki-code-block"],
       span: ["class", "aria-hidden"],

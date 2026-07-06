@@ -32,6 +32,7 @@ import { SettingsView } from "./SettingsView";
 import { activeAIModelBehavior, defaultAISettings, defaultBasicSettings, loadBasicSettings, normalizeReaderFontScale, persistBasicSettings, type AISettingsState, type BasicSettings, type ReaderFontScale } from "./settingsState";
 import { injectMarkdownCodeToolbarButtons, installCodeBlockRule } from "../shared/markdownCodeBlocks";
 import { installTableScrollRule } from "../shared/markdownTableScroll";
+import { installTaskListRule } from "../shared/markdownTaskLists";
 
 type TreeCache = TreeSnapshot;
 type ViewMode = "rendered" | "source" | "raw";
@@ -90,6 +91,7 @@ const defaultAIChatSession: AIChatSessionState = {
 const memoMarkdown = new MarkdownIt({ html: false, linkify: true });
 installTableScrollRule(memoMarkdown);
 installCodeBlockRule(memoMarkdown);
+installTaskListRule(memoMarkdown);
 
 export function App() {
   const [appView, setAppView] = useState<AppView>("viewer");

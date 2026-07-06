@@ -589,9 +589,15 @@ main:is(.app-shell, .settings-shell) {
 .markdown-body .markdown-code-block pre { margin: 0; }
 .markdown-body .markdown-code-block.wrapped pre,
 .markdown-body .markdown-code-block.wrapped pre code {
+  min-width: 0;
+  max-width: 100%;
+  width: 100%;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   word-break: normal;
+}
+.markdown-body .markdown-code-block.wrapped pre {
+  overflow-x: hidden;
 }
 .markdown-body .markdown-code-action-button {
   display: inline-flex;
@@ -656,7 +662,17 @@ main:is(.app-shell, .settings-shell) {
 .markdown-body table { border-collapse: collapse; border-spacing: 0; width: max-content; min-width: 100%; max-width: none; table-layout: auto; margin: 0; }
 .markdown-body th, .markdown-body td { border: 0; border-bottom: 1px solid #d6e0e4; padding: 8px 10px; text-align: left; vertical-align: top; white-space: nowrap; overflow-wrap: normal; word-break: normal; }
 .markdown-body thead th { border-bottom-color: #b9c8ce; color: #172026; }
-.task-list-checkbox { margin-right: 8px; }
+.markdown-body blockquote {
+  margin: 16px 0;
+  border-left: 4px solid #b8cbd2;
+  background: #f5f8f9;
+  color: #4d5e66;
+  padding: 10px 14px;
+}
+.markdown-body blockquote > :first-child { margin-top: 0; }
+.markdown-body blockquote > :last-child { margin-bottom: 0; }
+.markdown-body li.task-list-item { list-style: none; }
+.task-list-checkbox { margin: 0 8px 0 0; vertical-align: -2px; }
 
 .code-viewer {
   min-height: 240px;
@@ -1812,8 +1828,10 @@ main:is(.app-shell, .settings-shell) {
 .ai-chat-panel {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto auto;
+  min-width: 0;
   min-height: 100%;
   gap: 12px;
+  overflow: hidden;
 }
 .ai-chat-status {
   display: grid;
@@ -1863,17 +1881,20 @@ main:is(.app-shell, .settings-shell) {
 .ai-chat-messages {
   display: grid;
   align-content: start;
-  gap: 10px;
+  gap: 16px;
+  min-width: 0;
   min-height: 180px;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 .ai-message {
   display: grid;
-  gap: 6px;
-  border: 1px solid #d8e1e4;
-  border-radius: 8px;
-  background: #ffffff;
-  padding: 10px;
+  gap: 7px;
+  min-width: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 0;
 }
 .ai-message > span {
   color: #61717a;
@@ -1881,9 +1902,7 @@ main:is(.app-shell, .settings-shell) {
   font-weight: 800;
 }
 .ai-message-header {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 28px;
-  gap: 8px;
+  display: flex;
   align-items: center;
 }
 .ai-message-header > span {
@@ -1891,19 +1910,50 @@ main:is(.app-shell, .settings-shell) {
   font-size: 12px;
   font-weight: 800;
 }
+.ai-message-footer {
+  display: flex;
+  justify-content: flex-start;
+  min-height: 28px;
+}
 .ai-message-copy {
   width: 28px;
   height: 28px;
 }
-.ai-message.user {
-  background: #eef7f8;
-}
+.ai-message.user .ai-message-header,
+.ai-message.user .ai-message-footer { justify-content: flex-end; }
 .ai-message-body {
   max-width: none;
+  min-width: 0;
+  overflow-x: hidden;
   overflow-wrap: anywhere;
 }
 .ai-message-body > :first-child { margin-top: 0; }
 .ai-message-body > :last-child { margin-bottom: 0; }
+.ai-message-body h1 { font-size: 20px; margin: 14px 0 8px; }
+.ai-message-body h2 { font-size: 17px; margin: 14px 0 7px; }
+.ai-message-body h3 { font-size: 15px; margin: 12px 0 6px; }
+.ai-message-body .markdown-code-block,
+.ai-message-body .markdown-table-scroll {
+  min-width: 0;
+  max-width: 100%;
+}
+.ai-message-body .markdown-code-block-toolbar {
+  gap: 4px;
+  min-height: 30px;
+  padding: 5px 5px 0;
+}
+.ai-message-body .markdown-code-block pre {
+  padding: 4px 10px 10px;
+}
+.ai-message-body .markdown-code-action-button {
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+}
+.ai-message-body .markdown-code-icon svg {
+  width: 14px;
+  height: 14px;
+}
 .ai-message-streaming {
   color: #61717a;
   font-size: 13px;
@@ -1917,12 +1967,14 @@ main:is(.app-shell, .settings-shell) {
 .ai-chat-composer textarea {
   grid-column: 1;
   resize: vertical;
-  min-height: 74px;
+  min-height: 114px;
 }
 .ai-chat-action-rail {
   grid-column: 2;
   display: grid;
   gap: 6px;
+  align-self: stretch;
+  align-content: end;
 }
 .ai-chat-action-rail .icon-button {
   width: 34px;
@@ -2184,6 +2236,13 @@ main:is(.app-shell, .settings-shell) {
   color: var(--rw-dark-text);
 }
 
+.app-shell[data-color-mode="dark"] .ai-message,
+.app-shell[data-color-mode="dark"] .ai-message.user {
+  border-color: transparent;
+  background: transparent;
+  color: var(--rw-dark-text);
+}
+
 .settings-shell[data-color-mode="dark"] .settings-badge,
 .settings-shell[data-color-mode="dark"] .status-pill,
 .settings-shell[data-color-mode="dark"] .entry-status-pills span {
@@ -2369,9 +2428,15 @@ main:is(.app-shell, .settings-shell) {
   color: var(--rw-dark-text-soft);
 }
 
+.app-shell[data-color-mode="dark"] .markdown-body blockquote {
+  background: var(--rw-dark-panel-soft);
+  color: var(--rw-dark-text-soft);
+}
+
 .app-shell[data-color-mode="dark"] .markdown-body th,
 .app-shell[data-color-mode="dark"] .markdown-body td,
 .app-shell[data-color-mode="dark"] .markdown-body thead th,
+.app-shell[data-color-mode="dark"] .markdown-body blockquote,
 .app-shell[data-color-mode="dark"] .file-information,
 .app-shell[data-color-mode="dark"] .file-info-list div,
 .app-shell[data-color-mode="dark"] .file-facts div,

@@ -3,11 +3,13 @@ import path from "node:path";
 import sanitizeHtml from "sanitize-html";
 import { MARKDOWN_CODE_BLOCK_DATA_ATTR, injectMarkdownCodeToolbarButtons, installCodeBlockRule } from "../shared/markdownCodeBlocks.js";
 import { MARKDOWN_TABLE_SCROLL_DATA_ATTR, installTableScrollRule } from "../shared/markdownTableScroll.js";
+import { installTaskListRule } from "../shared/markdownTaskLists.js";
 
 const markdown = new MarkdownIt({ html: true, linkify: false, typographer: false });
 markdown.validateLink = () => true;
 installTableScrollRule(markdown);
 installCodeBlockRule(markdown);
+installTaskListRule(markdown);
 
 export type MarkdownRenderContext = {
   repoId: string;

@@ -121,8 +121,9 @@ beforeEach(() => {
     if (url === "/api/ai/chat" || url === "/api/ai/chat/stream") {
       const body = parseJsonBody(init?.body) as { target?: { kind?: string; entry?: string; provider?: { entry?: string } }; provider?: { entry?: string } };
       const target = body.target?.kind === "cli" ? body.target.entry : body.target?.provider?.entry || body.provider?.entry || "provider";
+      const content = `${target} says the active file says hello.\n\n- [x] Render task item`;
       const payload = {
-        message: { role: "assistant", content: `${target} says the active file says hello.` },
+        message: { role: "assistant", content },
         context: { repoId: "docs", path: "README.md", fileName: "README.md", fileKind: "markdown", viewerStatus: "displayable", lineCount: 12, byteLength: 120, contentIncluded: true, content: "# Hello" },
         status: { state: "ready", message: "Response received.", checkedAt: "2026-07-03T00:00:00.000Z" },
       };
@@ -131,6 +132,7 @@ beforeEach(() => {
           { type: "meta", context: payload.context },
           { type: "delta", content: `${target} says ` },
           { type: "delta", content: "the active file says hello." },
+          { type: "delta", content: "\n\n- [x] Render task item" },
           { type: "done", ...payload },
         ]);
       }
@@ -250,6 +252,21 @@ describe("App", () => {
     expect(stylesCss).toContain('--rw-dark-code: #0f171b;');
     expect(stylesCss).toContain('.app-shell[data-color-mode="dark"] .code-viewer');
     expect(stylesCss).toContain('.app-shell[data-color-mode="dark"] .ai-chat-status');
+  });
+
+  it("keeps AI Chat Markdown layout narrow while allowing only table and code block scrolling", () => {
+    expect(cssRule(".ai-chat-panel")).toContain("overflow: hidden;");
+    expect(cssRule(".ai-chat-messages")).toContain("overflow-x: hidden;");
+    expect(cssRule(".ai-message")).toContain("border: 0;");
+    expect(cssRule(".ai-message")).toContain("background: transparent;");
+    expect(cssRule(".ai-message-body")).toContain("overflow-x: hidden;");
+    expect(cssRule(".ai-message-footer")).toContain("justify-content: flex-start;");
+    expect(stylesCss).toContain(".ai-message.user .ai-message-footer { justify-content: flex-end; }");
+    expect(stylesCss).toContain(".markdown-body .markdown-code-block.wrapped pre,");
+    expect(stylesCss).toContain("min-width: 0;");
+    expect(cssRule(".ai-message-body h1")).toContain("font-size: 20px;");
+    expect(cssRule(".ai-message-body .markdown-code-action-button")).toContain("width: 26px;");
+    expect(stylesCss).toContain(".ai-chat-composer textarea {\n  grid-column: 1;\n  resize: vertical;\n  min-height: 114px;");
   });
 
   it("defines Reader layout density through app-shell custom properties", () => {
@@ -565,7 +582,7 @@ describe("App", () => {
     expect(screen.getByRole("tab", { name: "AI Chat" })).toBeTruthy();
     fireEvent.click(screen.getByRole("tab", { name: "Memo" }));
     const memo = screen.getByLabelText("Session memo") as HTMLTextAreaElement;
-    const memoContent = "# Scratch\n\n- Review this section\n\n| A | B |\n| --- | --- |\n| 1 | 2 |\n\n```js\nconsole.log(1)\n```";
+    const memoContent = "# Scratch\n\n- [x] Review this section\n\n| A | B |\n| --- | --- |\n| 1 | 2 |\n\n```js\nconsole.log(1)\n```";
     fireEvent.change(memo, { target: { value: memoContent } });
     expect(memo.value).toBe(memoContent);
 
@@ -573,6 +590,7 @@ describe("App", () => {
     expect(screen.getByRole("heading", { name: "Scratch" })).toBeTruthy();
     expect(screen.getByText("Review this section")).toBeTruthy();
     const memoPreview = screen.getByLabelText("Memo preview");
+    expect(within(memoPreview).getByRole("checkbox", { name: "completed task" })).toBeTruthy();
     expect(memoPreview.querySelector(".markdown-table-scroll")).toBeTruthy();
     expect(within(memoPreview).getByRole("button", { name: "Copy code block" })).toBeTruthy();
     expect(within(memoPreview).getByRole("button", { name: "Wrap code block" })).toBeTruthy();
@@ -913,8 +931,15 @@ describe("App", () => {
     fireEvent.click(screen.getByRole("tab", { name: "Outline" }));
     fireEvent.click(screen.getByRole("tab", { name: "AI Chat" }));
     expect(screen.getByText("codexCli says the active file says hello.")).toBeTruthy();
+    const userMessage = document.querySelector(".ai-message.user") as HTMLElement;
+    const aiMessage = document.querySelector(".ai-message.assistant") as HTMLElement;
+    expect(userMessage.querySelector(".ai-message-footer .ai-message-copy")).toBeTruthy();
+    expect(userMessage.querySelector(".ai-message-header .ai-message-copy")).toBeNull();
+    expect(aiMessage.querySelector(".ai-message-footer .ai-message-copy")).toBeTruthy();
+    expect(aiMessage.querySelector(".ai-message-header .ai-message-copy")).toBeNull();
+    expect(aiMessage.querySelector(".task-list-checkbox")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Copy AI message" }));
-    expect(clipboardWrite).toHaveBeenCalledWith("codexCli says the active file says hello.");
+    expect(clipboardWrite).toHaveBeenCalledWith("codexCli says the active file says hello.\n\n- [x] Render task item");
     await act(async () => {
       await new Promise((resolve) => window.setTimeout(resolve, 1700));
     });
