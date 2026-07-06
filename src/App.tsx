@@ -1298,7 +1298,7 @@ function RightPanel({ mode, onModeChange, file, outline, onHeadingSelect, memoTe
   onOpenSettings: () => void;
 }) {
   return (
-    <aside className="right-panel" aria-label="Reader side panel">
+    <aside className={`right-panel ${mode === "aiChat" ? "ai-chat-right-panel" : ""}`} aria-label="Reader side panel">
       <header className="right-panel-header">
         <div className="right-panel-tabs" role="tablist" aria-label="Side panel views">
           <button type="button" role="tab" aria-selected={mode === "outline"} className={mode === "outline" ? "active" : ""} onClick={() => onModeChange("outline")}>
@@ -1317,7 +1317,7 @@ function RightPanel({ mode, onModeChange, file, outline, onHeadingSelect, memoTe
       ) : mode === "memo" ? (
         <MemoPanel memoText={memoText} memoMode={memoMode} onMemoTextChange={onMemoTextChange} onMemoModeChange={onMemoModeChange} />
       ) : (
-        <section className="side-panel-body">
+        <section className="side-panel-body ai-chat-side-panel">
           <AIChatPanel
             aiSettings={aiSettings}
             session={aiChatSession}

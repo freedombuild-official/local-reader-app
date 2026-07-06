@@ -750,6 +750,12 @@ main:is(.app-shell, .settings-shell) {
 .right-panel-tabs button:first-child { border-left: 0; }
 .right-panel-tabs button.active { background: #123e45; color: #fff; }
 .side-panel-body { flex: 1; min-height: 0; padding: var(--rw-side-panel-padding); overflow: auto; scrollbar-width: thin; }
+.side-panel-body.ai-chat-side-panel {
+  display: grid;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
 .side-panel-body h2 { margin: 0 0 14px; font-size: 16px; letter-spacing: 0; }
 .file-information { margin: 0 0 20px; padding-bottom: 16px; border-bottom: 1px solid #dfe7ea; }
 .file-info-list { display: grid; gap: 0; margin: 0; font-size: 12px; }
@@ -1827,28 +1833,14 @@ main:is(.app-shell, .settings-shell) {
 }
 .ai-chat-panel {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto auto;
   min-width: 0;
+  height: 100%;
   min-height: 100%;
   gap: 12px;
   overflow: hidden;
 }
-.ai-chat-status {
-  display: grid;
-  gap: 3px;
-  border: 1px solid #d8e1e4;
-  border-radius: 7px;
-  background: #ffffff;
-  padding: 10px;
-}
-.ai-chat-status span {
-  color: #61717a;
-  font-size: 12px;
-  font-weight: 800;
-}
-.ai-chat-status strong {
-  overflow-wrap: anywhere;
-}
+.ai-chat-panel.ready { grid-template-rows: minmax(0, 1fr) auto auto; }
+.ai-chat-panel.not-ready { grid-template-rows: auto minmax(0, 1fr) auto; }
 .ai-chat-empty,
 .ai-chat-error {
   display: grid;
@@ -1884,9 +1876,12 @@ main:is(.app-shell, .settings-shell) {
   gap: 16px;
   min-width: 0;
   min-height: 180px;
+  padding-bottom: 10px;
   overflow-x: hidden;
   overflow-y: auto;
+  scrollbar-width: thin;
 }
+.ai-chat-transcript-bottom { width: 100%; height: 1px; }
 .ai-message {
   display: grid;
   gap: 7px;
@@ -1905,10 +1900,18 @@ main:is(.app-shell, .settings-shell) {
   display: flex;
   align-items: center;
 }
-.ai-message-header > span {
+.ai-message-role-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 20px;
+  border: 1px solid #ccd8dc;
+  border-radius: 999px;
+  background: #f7fafb;
   color: #61717a;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 800;
+  line-height: 1;
+  padding: 3px 7px;
 }
 .ai-message-footer {
   display: flex;
@@ -1946,13 +1949,43 @@ main:is(.app-shell, .settings-shell) {
   padding: 4px 10px 10px;
 }
 .ai-message-body .markdown-code-action-button {
-  width: 26px;
-  height: 26px;
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
   border-radius: 6px;
+  line-height: 1;
+  padding: 0;
+  overflow: hidden;
+}
+.ai-message-body .markdown-code-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  line-height: 0;
+  overflow: hidden;
 }
 .ai-message-body .markdown-code-icon svg {
+  display: block;
   width: 14px;
   height: 14px;
+  overflow: hidden;
+}
+.ai-message-body .markdown-code-copy-button[data-copy-state="idle"] .markdown-code-icon-copy,
+.ai-message-body .markdown-code-copy-button[data-copy-state="error"] .markdown-code-icon-copy {
+  display: inline-flex;
+}
+.ai-message-body .markdown-code-copy-button[data-copy-state="idle"] .markdown-code-icon-check,
+.ai-message-body .markdown-code-copy-button[data-copy-state="error"] .markdown-code-icon-check {
+  display: none;
+}
+.ai-message-body .markdown-code-copy-button[data-copy-state="copied"] .markdown-code-icon-copy {
+  display: none;
+}
+.ai-message-body .markdown-code-copy-button[data-copy-state="copied"] .markdown-code-icon-check {
+  display: inline-flex;
 }
 .ai-message-streaming {
   color: #61717a;
@@ -1963,6 +1996,11 @@ main:is(.app-shell, .settings-shell) {
   grid-template-columns: minmax(0, 1fr) 34px;
   gap: 8px;
   align-items: end;
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  background: #fbfcfd;
+  padding-top: 8px;
 }
 .ai-chat-composer textarea {
   grid-column: 1;
@@ -2057,6 +2095,10 @@ main:is(.app-shell, .settings-shell) {
   }
   .sidebar { min-height: 260px; max-height: 42vh; border-right: 0; border-bottom: 1px solid #d8e1e4; }
   .workspace { min-height: 58vh; }
+  .right-panel.ai-chat-right-panel {
+    height: 72vh;
+    min-height: 520px;
+  }
   .viewer-header { align-items: stretch; flex-direction: column; }
   .file-tab { flex-basis: 74%; }
   .html-frame, .pdf-frame { height: 62vh; }
@@ -2178,7 +2220,6 @@ main:is(.app-shell, .settings-shell) {
 .settings-shell[data-color-mode="dark"] .repo-access-row,
 .settings-shell[data-color-mode="dark"] .readiness-row,
 .settings-shell[data-color-mode="dark"] .model-behavior-panel .setting-row.inline-row,
-.app-shell[data-color-mode="dark"] .ai-chat-status,
 .app-shell[data-color-mode="dark"] .ai-chat-empty,
 .app-shell[data-color-mode="dark"] .ai-chat-error,
 .app-shell[data-color-mode="dark"] .ai-attachment-chip,
@@ -2241,6 +2282,11 @@ main:is(.app-shell, .settings-shell) {
   border-color: transparent;
   background: transparent;
   color: var(--rw-dark-text);
+}
+
+.app-shell[data-color-mode="dark"] .ai-message-role-chip {
+  border-color: var(--rw-dark-border);
+  background: var(--rw-dark-panel-soft);
 }
 
 .settings-shell[data-color-mode="dark"] .settings-badge,
@@ -2366,9 +2412,8 @@ main:is(.app-shell, .settings-shell) {
 .app-shell[data-color-mode="dark"] .file-info-list dt,
 .app-shell[data-color-mode="dark"] .outline-link small,
 .app-shell[data-color-mode="dark"] .memo-empty,
-.app-shell[data-color-mode="dark"] .ai-chat-status span,
 .app-shell[data-color-mode="dark"] .ai-chat-empty small,
-.app-shell[data-color-mode="dark"] .ai-message-header > span,
+.app-shell[data-color-mode="dark"] .ai-message-role-chip,
 .app-shell[data-color-mode="dark"] .ai-message-streaming,
 .app-shell[data-color-mode="dark"] .ai-attachment-chip small,
 .settings-shell[data-color-mode="dark"] .settings-heading p,

@@ -121,7 +121,8 @@ beforeEach(() => {
     if (url === "/api/ai/chat" || url === "/api/ai/chat/stream") {
       const body = parseJsonBody(init?.body) as { target?: { kind?: string; entry?: string; provider?: { entry?: string } }; provider?: { entry?: string } };
       const target = body.target?.kind === "cli" ? body.target.entry : body.target?.provider?.entry || body.provider?.entry || "provider";
-      const content = `${target} says the active file says hello.\n\n- [x] Render task item`;
+      const codeBlock = "```ts\nconst ok = true;\n```";
+      const content = `${target} says the active file says hello.\n\n- [x] Render task item\n\n${codeBlock}`;
       const payload = {
         message: { role: "assistant", content },
         context: { repoId: "docs", path: "README.md", fileName: "README.md", fileKind: "markdown", viewerStatus: "displayable", lineCount: 12, byteLength: 120, contentIncluded: true, content: "# Hello" },
@@ -132,7 +133,7 @@ beforeEach(() => {
           { type: "meta", context: payload.context },
           { type: "delta", content: `${target} says ` },
           { type: "delta", content: "the active file says hello." },
-          { type: "delta", content: "\n\n- [x] Render task item" },
+          { type: "delta", content: `\n\n- [x] Render task item\n\n${codeBlock}` },
           { type: "done", ...payload },
         ]);
       }
@@ -251,21 +252,41 @@ describe("App", () => {
     expect(stylesCss).toContain("--rw-dark-app: #10181c;");
     expect(stylesCss).toContain('--rw-dark-code: #0f171b;');
     expect(stylesCss).toContain('.app-shell[data-color-mode="dark"] .code-viewer');
-    expect(stylesCss).toContain('.app-shell[data-color-mode="dark"] .ai-chat-status');
+    expect(stylesCss).toContain('.app-shell[data-color-mode="dark"] .ai-message-role-chip');
   });
 
   it("keeps AI Chat Markdown layout narrow while allowing only table and code block scrolling", () => {
+    expect(cssRule(".right-panel.ai-chat-right-panel")).toContain("height: 72vh;");
+    expect(cssRule(".right-panel.ai-chat-right-panel")).toContain("min-height: 520px;");
+    expect(cssRule(".side-panel-body.ai-chat-side-panel")).toContain("height: 100%;");
+    expect(cssRule(".side-panel-body.ai-chat-side-panel")).toContain("overflow: hidden;");
     expect(cssRule(".ai-chat-panel")).toContain("overflow: hidden;");
+    expect(cssRule(".ai-chat-panel")).toContain("height: 100%;");
+    expect(cssRule(".ai-chat-panel.ready")).toContain("grid-template-rows: minmax(0, 1fr) auto auto;");
     expect(cssRule(".ai-chat-messages")).toContain("overflow-x: hidden;");
+    expect(cssRule(".ai-chat-messages")).toContain("overflow-y: auto;");
     expect(cssRule(".ai-message")).toContain("border: 0;");
     expect(cssRule(".ai-message")).toContain("background: transparent;");
+    expect(cssRule(".ai-message-role-chip")).toContain("border-radius: 999px;");
+    expect(cssRule(".ai-message-role-chip")).toContain("font-size: 11px;");
     expect(cssRule(".ai-message-body")).toContain("overflow-x: hidden;");
     expect(cssRule(".ai-message-footer")).toContain("justify-content: flex-start;");
     expect(stylesCss).toContain(".ai-message.user .ai-message-footer { justify-content: flex-end; }");
     expect(stylesCss).toContain(".markdown-body .markdown-code-block.wrapped pre,");
     expect(stylesCss).toContain("min-width: 0;");
     expect(cssRule(".ai-message-body h1")).toContain("font-size: 20px;");
-    expect(cssRule(".ai-message-body .markdown-code-action-button")).toContain("width: 26px;");
+    expect(cssRule(".ai-message-body .markdown-code-action-button")).toContain("display: inline-grid;");
+    expect(cssRule(".ai-message-body .markdown-code-action-button")).toContain("place-items: center;");
+    expect(cssRule(".ai-message-body .markdown-code-action-button")).toContain("width: 28px;");
+    expect(cssRule(".ai-message-body .markdown-code-action-button")).toContain("overflow: hidden;");
+    expect(cssRule(".ai-message-body .markdown-code-icon")).toContain("justify-content: center;");
+    expect(cssRule(".ai-message-body .markdown-code-icon svg")).toContain("width: 14px;");
+    expect(cssRule(".ai-message-body .markdown-code-icon svg")).toContain("overflow: hidden;");
+    expect(stylesCss).toContain('.ai-message-body .markdown-code-copy-button[data-copy-state="idle"] .markdown-code-icon-check,');
+    expect(stylesCss).toContain('.ai-message-body .markdown-code-copy-button[data-copy-state="error"] .markdown-code-icon-check {\n  display: none;\n}');
+    expect(stylesCss).toContain('.ai-message-body .markdown-code-copy-button[data-copy-state="copied"] .markdown-code-icon-check {\n  display: inline-flex;\n}');
+    expect(cssRule(".ai-chat-composer")).toContain("position: sticky;");
+    expect(cssRule(".ai-chat-composer")).toContain("bottom: 0;");
     expect(stylesCss).toContain(".ai-chat-composer textarea {\n  grid-column: 1;\n  resize: vertical;\n  min-height: 114px;");
   });
 
@@ -881,10 +902,12 @@ describe("App", () => {
 
   it("keeps AI Chat session across side panel modes and supports streaming composer actions", async () => {
     const clipboardWrite = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
+    const scrollIntoView = vi.fn();
     Object.defineProperty(navigator, "clipboard", {
       configurable: true,
       value: { writeText: clipboardWrite },
     });
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { value: scrollIntoView, configurable: true });
 
     render(<App />);
     expect(await screen.findByRole("heading", { name: "Hello" })).toBeTruthy();
@@ -900,6 +923,12 @@ describe("App", () => {
     fireEvent.click(screen.getByRole("button", { name: "Back to viewer" }));
     fireEvent.click(await screen.findByRole("tab", { name: "AI Chat" }));
     const messageInput = screen.getByLabelText("AI Chat message") as HTMLTextAreaElement;
+    const aiChatPanel = screen.getByLabelText("AI Chat");
+    expect(aiChatPanel.querySelector(".ai-chat-status")).toBeNull();
+    expect(within(aiChatPanel).queryByText("Codex CLI")).toBeNull();
+    expect(within(aiChatPanel).queryByText("codex / medium")).toBeNull();
+    const actionRailLabels = Array.from(aiChatPanel.querySelectorAll(".ai-chat-action-rail button")).map((button) => button.getAttribute("aria-label"));
+    expect(actionRailLabels).toEqual(["Upload file", "Voice input", "Send AI Chat message"]);
     fireEvent.change(messageInput, { target: { value: "Draft" } });
     fireEvent.click(screen.getByRole("tab", { name: "Memo" }));
     fireEvent.click(screen.getByRole("tab", { name: "AI Chat" }));
@@ -917,12 +946,29 @@ describe("App", () => {
     });
     expect(await screen.findByText("note.md")).toBeTruthy();
 
+    const transcript = screen.getByLabelText("AI Chat transcript") as HTMLDivElement;
+    Object.defineProperty(transcript, "scrollHeight", { value: 1200, configurable: true });
+    Object.defineProperty(transcript, "clientHeight", { value: 300, configurable: true });
+    Object.defineProperty(transcript, "scrollTop", { value: 0, configurable: true });
+    fireEvent.scroll(transcript);
+    scrollIntoView.mockClear();
+
     fireEvent.change(screen.getByLabelText("AI Chat message"), { target: { value: "Summarize with attachment." } });
     fireEvent.keyDown(screen.getByLabelText("AI Chat message"), { key: "Enter" });
     expect(await screen.findByText("codexCli says the active file says hello.")).toBeTruthy();
+    expect(scrollIntoView).not.toHaveBeenCalled();
+
+    Object.defineProperty(transcript, "scrollTop", { value: 900, configurable: true });
+    fireEvent.scroll(transcript);
+    fireEvent.change(screen.getByLabelText("AI Chat message"), { target: { value: "Follow up at the bottom." } });
+    await waitFor(() => expect((screen.getByRole("button", { name: "Send AI Chat message" }) as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.keyDown(screen.getByLabelText("AI Chat message"), { key: "Enter" });
+    await waitFor(() => expect(fetchCallsTo("/api/ai/chat/stream").length).toBeGreaterThan(1));
+    await waitFor(() => expect(scrollIntoView).toHaveBeenCalled());
+
     const streamCalls = fetchCallsTo("/api/ai/chat/stream");
     expect(streamCalls.length).toBeGreaterThan(0);
-    const streamBody = parseJsonBody(streamCalls.at(-1)?.[1]?.body);
+    const streamBody = parseJsonBody(streamCalls[0]?.[1]?.body);
     expect(streamBody).toMatchObject({
       attachments: [expect.objectContaining({ name: "note.md", contentIncluded: true, content: "Attached note" })],
       modelBehavior: { kind: "intelligence", level: "medium" },
@@ -930,19 +976,31 @@ describe("App", () => {
 
     fireEvent.click(screen.getByRole("tab", { name: "Outline" }));
     fireEvent.click(screen.getByRole("tab", { name: "AI Chat" }));
-    expect(screen.getByText("codexCli says the active file says hello.")).toBeTruthy();
+    expect(screen.getAllByText("codexCli says the active file says hello.").length).toBeGreaterThan(0);
     const userMessage = document.querySelector(".ai-message.user") as HTMLElement;
     const aiMessage = document.querySelector(".ai-message.assistant") as HTMLElement;
+    expect(within(userMessage).getByText("You").className).toContain("ai-message-role-chip");
+    expect(within(aiMessage).getByText("AI").className).toContain("ai-message-role-chip");
     expect(userMessage.querySelector(".ai-message-footer .ai-message-copy")).toBeTruthy();
     expect(userMessage.querySelector(".ai-message-header .ai-message-copy")).toBeNull();
     expect(aiMessage.querySelector(".ai-message-footer .ai-message-copy")).toBeTruthy();
     expect(aiMessage.querySelector(".ai-message-header .ai-message-copy")).toBeNull();
     expect(aiMessage.querySelector(".task-list-checkbox")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Copy AI message" }));
-    expect(clipboardWrite).toHaveBeenCalledWith("codexCli says the active file says hello.\n\n- [x] Render task item");
+    const aiCodeCopyButton = within(aiMessage).getByRole("button", { name: "Copy code block" }) as HTMLButtonElement;
+    const aiCodeWrapButton = within(aiMessage).getByRole("button", { name: "Wrap code block" }) as HTMLButtonElement;
+    expect(aiCodeCopyButton.dataset.copyState).toBe("idle");
+    expect(aiCodeCopyButton.querySelector(".markdown-code-icon-copy")).toBeTruthy();
+    expect(aiCodeCopyButton.querySelector(".markdown-code-icon-check")).toBeTruthy();
+    expect(aiCodeWrapButton.dataset.wrapState).toBe("off");
+    fireEvent.click(aiCodeCopyButton);
+    await waitFor(() => expect(aiCodeCopyButton.dataset.copyState).toBe("copied"));
+    expect(clipboardWrite).toHaveBeenCalledWith(expect.stringContaining("const ok = true;"));
+    fireEvent.click(within(aiMessage).getByRole("button", { name: "Copy AI message" }));
+    expect(clipboardWrite).toHaveBeenCalledWith("codexCli says the active file says hello.\n\n- [x] Render task item\n\n```ts\nconst ok = true;\n```");
     await act(async () => {
-      await new Promise((resolve) => window.setTimeout(resolve, 1700));
+      await new Promise((resolve) => window.setTimeout(resolve, 1900));
     });
+    expect(aiCodeCopyButton.dataset.copyState).toBe("idle");
   });
 
   it("keeps in-flight provider readiness bound to the tested entry and settings snapshot", async () => {

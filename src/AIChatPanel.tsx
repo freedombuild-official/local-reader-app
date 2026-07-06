@@ -3,7 +3,7 @@ import MarkdownIt from "markdown-it";
 import sanitizeHtml from "sanitize-html";
 import { Check, Copy, Mic, Plus, RotateCcw, Send, Square, X } from "lucide-react";
 import { streamAIChatMessage } from "./api";
-import { activeAIChatTarget, activeAIEntry, aiVerifiedReady, derivedAIStatus, effectiveAIStatus, type AISettingsState } from "./settingsState";
+import { activeAIChatTarget, activeAIEntry, aiVerifiedReady, type AISettingsState } from "./settingsState";
 import type { AIChatAttachment, AIChatMessage, AIChatSessionState, AIModelBehavior, FileResponse } from "./types";
 import { injectMarkdownCodeToolbarButtons, installCodeBlockRule } from "../shared/markdownCodeBlocks";
 import { installTableScrollRule } from "../shared/markdownTableScroll";
@@ -35,6 +35,7 @@ type SpeechRecognitionCtor = new () => SpeechRecognitionLike;
 const aiMarkdown = new MarkdownIt({ html: false, linkify: true });
 const MAX_ATTACHMENTS = 5;
 const MAX_ATTACHMENT_TEXT_BYTES = 64 * 1024;
+const TRANSCRIPT_BOTTOM_THRESHOLD_PX = 72;
 
 installTableScrollRule(aiMarkdown);
 installCodeBlockRule(aiMarkdown);
@@ -45,9 +46,11 @@ export function AIChatPanel({ aiSettings, session, onSessionChange, modelBehavio
   const [voiceActive, setVoiceActive] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const transcriptRef = useRef<HTMLDivElement | null>(null);
+  const transcriptBottomRef = useRef<HTMLDivElement | null>(null);
+  const autoScrollPinnedRef = useRef(true);
   const activeEntry = activeAIEntry(aiSettings);
   const target = activeAIChatTarget(aiSettings);
-  const status = activeEntry ? effectiveAIStatus(aiSettings, activeEntry.entry) : derivedAIStatus(null);
   const ready = Boolean(target && activeEntry && aiVerifiedReady(aiSettings, activeEntry.entry));
   const canSend = Boolean(ready && activeRepoId && activeFile?.path && session.draft.trim() && !session.pending);
   const voiceAvailable = Boolean(getSpeechRecognitionCtor());
@@ -66,6 +69,11 @@ export function AIChatPanel({ aiSettings, session, onSessionChange, modelBehavio
     onSessionChange(updater);
   }
 
+  function updateSessionAndFollow(updater: (session: AIChatSessionState) => AIChatSessionState) {
+    updateSession(updater);
+    scrollTranscriptToBottomIfPinned();
+  }
+
   async function sendMessage(content: string) {
     if (!target || !ready) {
       updateSession((current) => ({ ...current, error: "Open Settings to finish AI Chat setup." }));
@@ -80,7 +88,8 @@ export function AIChatPanel({ aiSettings, session, onSessionChange, modelBehavio
     const userMessage: AIChatMessage = { role: "user", content };
     const assistantMessage: AIChatMessage = { role: "assistant", content: "" };
     const nextMessages = [...session.messages, userMessage, assistantMessage];
-    updateSession((current) => ({
+    autoScrollPinnedRef.current = transcriptIsNearBottom();
+    updateSessionAndFollow((current) => ({
       ...current,
       messages: nextMessages,
       draft: "",
@@ -103,15 +112,15 @@ export function AIChatPanel({ aiSettings, session, onSessionChange, modelBehavio
         },
         (event) => {
           if (event.type === "delta") {
-            updateSession((current) => appendAssistantDelta(current, event.content));
+            updateSessionAndFollow((current) => appendAssistantDelta(current, event.content));
             return;
           }
           if (event.type === "done") {
-            updateSession((current) => replaceLastAssistant(current, event.message.content));
+            updateSessionAndFollow((current) => replaceLastAssistant(current, event.message.content));
             return;
           }
           if (event.type === "error") {
-            updateSession((current) => ({ ...current, error: event.error }));
+            updateSessionAndFollow((current) => ({ ...current, error: event.error }));
           }
         },
         controller.signal,
@@ -193,14 +202,26 @@ export function AIChatPanel({ aiSettings, session, onSessionChange, modelBehavio
     }
   }
 
+  function transcriptIsNearBottom(): boolean {
+    const transcript = transcriptRef.current;
+    if (!transcript) return true;
+    return transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight <= TRANSCRIPT_BOTTOM_THRESHOLD_PX;
+  }
+
+  function updateTranscriptPinning() {
+    autoScrollPinnedRef.current = transcriptIsNearBottom();
+  }
+
+  function scrollTranscriptToBottomIfPinned() {
+    if (!autoScrollPinnedRef.current) return;
+    window.requestAnimationFrame(() => {
+      transcriptBottomRef.current?.scrollIntoView({ block: "end" });
+    });
+  }
+
   return (
-    <section className="ai-chat-panel" aria-label="AI Chat">
-      {ready ? (
-        <div className="ai-chat-status" aria-label="AI Chat status">
-          <span>{aiEntryLabel(activeEntry?.entry || null)}</span>
-          <strong>{activeModelLabel(activeEntry, modelBehavior)}</strong>
-        </div>
-      ) : (
+    <section className={`ai-chat-panel ${ready ? "ready" : "not-ready"}`} aria-label="AI Chat">
+      {!ready ? (
         <div className="ai-chat-empty">
           <p>{activeEntry ? "AI Entry is not ready." : "AI Entry is required."}</p>
           <small>{activeEntry ? "Complete readiness in Settings." : "Select an entry in Settings."}</small>
@@ -208,13 +229,13 @@ export function AIChatPanel({ aiSettings, session, onSessionChange, modelBehavio
             Open Settings
           </button>
         </div>
-      )}
+      ) : null}
 
-      <div className="ai-chat-messages" aria-live="polite">
+      <div ref={transcriptRef} className="ai-chat-messages" aria-label="AI Chat transcript" aria-live="polite" onScroll={updateTranscriptPinning}>
         {renderedMessages.map((message) => (
-          <article key={message.id} className={`ai-message ${message.role}`}>
+          <article key={message.id} className={`ai-message ${message.role}`} aria-label={message.role === "user" ? "User message" : "AI message"}>
             <header className="ai-message-header">
-              <span>{message.role === "user" ? "You" : "AI"}</span>
+              <span className="ai-message-role-chip">{message.role === "user" ? "You" : "AI"}</span>
             </header>
             {message.content ? (
               <div className="markdown-body ai-message-body" onClick={onMarkdownClick} dangerouslySetInnerHTML={{ __html: message.html }} />
@@ -228,6 +249,7 @@ export function AIChatPanel({ aiSettings, session, onSessionChange, modelBehavio
             </footer>
           </article>
         ))}
+        <div ref={transcriptBottomRef} className="ai-chat-transcript-bottom" aria-hidden="true" />
       </div>
 
       {session.error ? (
@@ -367,22 +389,6 @@ function insertTextareaLineBreak(textarea: HTMLTextAreaElement, onDraftChange: (
 function getSpeechRecognitionCtor(): SpeechRecognitionCtor | null {
   const candidate = window as Window & { SpeechRecognition?: SpeechRecognitionCtor; webkitSpeechRecognition?: SpeechRecognitionCtor };
   return candidate.SpeechRecognition || candidate.webkitSpeechRecognition || null;
-}
-
-function aiEntryLabel(entry: string | null): string {
-  if (entry === "codexCli") return "Codex CLI";
-  if (entry === "claudeCli") return "Claude Code CLI";
-  if (entry === "localAi") return "Local AI";
-  if (entry === "aiApi") return "AI API";
-  return "AI Chat";
-}
-
-function activeModelLabel(entry: ReturnType<typeof activeAIEntry>, modelBehavior: AIModelBehavior): string {
-  if (!entry) return "No active entry";
-  const model = "model" in entry ? entry.model || "No model" : entry.binaryName;
-  if (modelBehavior.kind === "intelligence") return `${model} / ${modelBehavior.level}`;
-  if (modelBehavior.kind === "thinking") return `${model} / thinking ${modelBehavior.enabled ? "on" : "off"}`;
-  return model;
 }
 
 async function writeClipboardText(text: string): Promise<void> {
