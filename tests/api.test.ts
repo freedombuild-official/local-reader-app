@@ -484,6 +484,19 @@ describe("api", () => {
       expect(chat.message?.content).toContain("active file");
       expect(chat.context).toMatchObject({ path: "README.md", contentIncluded: true });
 
+      const streamResponse = await postJson(`${server.url}/api/ai/chat/stream`, {
+        target: { kind: "provider", provider },
+        messages: [{ role: "user", content: "Summarize this file with attachment." }],
+        context: { repoId: "docs", path: "README.md", includeContent: true },
+        attachments: [{ id: "a1", name: "note.md", mimeType: "text/markdown", sizeBytes: 5, contentIncluded: true, content: "Note." }],
+        modelBehavior: { kind: "intelligence", level: "medium" },
+      });
+      expect(streamResponse.status).toBe(200);
+      const streamEvents = await readJsonLines(streamResponse);
+      expect(streamEvents.map((event) => event.type)).toEqual(["meta", "delta", "done"]);
+      expect(streamEvents[1]).toMatchObject({ type: "delta", content: expect.stringContaining("active file") });
+      expect(streamEvents[2]).toMatchObject({ type: "done", message: { content: expect.stringContaining("active file") } });
+
       const excludedResponse = await postJson(`${server.url}/api/ai/chat`, {
         target: { kind: "provider", provider },
         messages: [{ role: "user", content: "Read hidden notes." }],
@@ -730,6 +743,11 @@ function postJson(url: string, payload: unknown): Promise<Response> {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
+}
+
+async function readJsonLines(response: Response): Promise<Array<{ type?: string; content?: string; message?: { content?: string } }>> {
+  const text = await response.text();
+  return text.split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line) as { type?: string; content?: string; message?: { content?: string } });
 }
 
 async function readFileText(filePath: string): Promise<string> {

@@ -26,16 +26,17 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { fetchFile, fetchHttpDeliveryStatus, fetchRepos, fetchTree, imageFileUrl, openRepository, pdfFileUrl, startHttpDelivery, stopHttpDelivery } from "./api";
-import type { DiffStatus, FileResponse, HttpDeliveryItemStatus, HttpDeliveryStatus, RepoListItem, RepoSyncStatus, TreeNode, TreeSnapshot } from "./types";
+import type { AIChatSessionState, DiffStatus, FileResponse, HttpDeliveryItemStatus, HttpDeliveryStatus, RepoListItem, RepoSyncStatus, TreeNode, TreeSnapshot } from "./types";
 import { AIChatPanel } from "./AIChatPanel";
 import { SettingsView } from "./SettingsView";
-import { defaultAISettings, defaultBasicSettings, loadBasicSettings, normalizeReaderFontScale, persistBasicSettings, type AISettingsState, type BasicSettings, type ReaderFontScale } from "./settingsState";
+import { activeAIModelBehavior, defaultAISettings, defaultBasicSettings, loadBasicSettings, normalizeReaderFontScale, persistBasicSettings, type AISettingsState, type BasicSettings, type ReaderFontScale } from "./settingsState";
 import { injectMarkdownCodeToolbarButtons, installCodeBlockRule } from "../shared/markdownCodeBlocks";
 import { installTableScrollRule } from "../shared/markdownTableScroll";
 
 type TreeCache = TreeSnapshot;
 type ViewMode = "rendered" | "source" | "raw";
 type AppView = "viewer" | "settings";
+type SettingsCategory = "basic" | "repositories" | "aiChat";
 type RightPanelMode = "outline" | "memo" | "aiChat";
 type MemoMode = "raw" | "render";
 type CopyState = "idle" | "copied" | "error";
@@ -78,12 +79,21 @@ const MAX_FILE_TABS = 5;
 const HTTP_DELIVERY_MAX_SESSIONS = 5;
 const TREE_ROW_HEIGHT_PX = 31;
 const HTML_VIEWER_BASE_FONT_SIZE_PX = 16;
+const defaultAIChatSession: AIChatSessionState = {
+  messages: [],
+  draft: "",
+  pending: false,
+  error: "",
+  lastRequest: "",
+  attachments: [],
+};
 const memoMarkdown = new MarkdownIt({ html: false, linkify: true });
 installTableScrollRule(memoMarkdown);
 installCodeBlockRule(memoMarkdown);
 
 export function App() {
   const [appView, setAppView] = useState<AppView>("viewer");
+  const [settingsCategory, setSettingsCategory] = useState<SettingsCategory>("basic");
   const [basicSettings, setBasicSettings] = useState<BasicSettings>(defaultBasicSettings);
   const [basicSaveError, setBasicSaveError] = useState("");
   const [aiSettings, setAISettings] = useState<AISettingsState>(defaultAISettings);
@@ -95,6 +105,7 @@ export function App() {
   const [tabsByRepo, setTabsByRepo] = useState<TabsByRepo>({});
   const [activeTabByRepo, setActiveTabByRepo] = useState<ActiveTabByRepo>({});
   const [rightPanelMode, setRightPanelMode] = useState<RightPanelMode>("outline");
+  const [aiChatSession, setAIChatSession] = useState<AIChatSessionState>(defaultAIChatSession);
   const [memoText, setMemoText] = useState("");
   const [memoMode, setMemoMode] = useState<MemoMode>("raw");
   const [loading, setLoading] = useState(true);
@@ -146,10 +157,20 @@ export function App() {
       ? `HTTP Delivery supports up to ${HTTP_DELIVERY_MAX_SESSIONS} files`
       : "Start HTTP Delivery";
   const readerTypographyStyle = useMemo(() => buildReaderTypographyStyle(basicSettings.readerFontScale), [basicSettings.readerFontScale]);
+  const aiModelBehavior = useMemo(() => activeAIModelBehavior(aiSettings), [aiSettings]);
 
   const updateBasicSettings = useCallback((settings: BasicSettings) => {
     setBasicSettings(settings);
     setBasicSaveError(persistBasicSettings(settings));
+  }, []);
+
+  const updateAIChatSession = useCallback((updater: (session: AIChatSessionState) => AIChatSessionState) => {
+    setAIChatSession((current) => updater(current));
+  }, []);
+
+  const openSettings = useCallback((category: SettingsCategory = "basic") => {
+    setSettingsCategory(category);
+    setAppView("settings");
   }, []);
 
   const loadTree = useCallback(async (repoId: string, path: string) => {
@@ -540,6 +561,7 @@ export function App() {
       <SettingsView
         basicSettings={basicSettings}
         aiSettings={aiSettings}
+        initialCategory={settingsCategory}
         basicSaveError={basicSaveError}
         onBack={() => setAppView("viewer")}
         onBasicSettingsChange={updateBasicSettings}
@@ -635,7 +657,7 @@ export function App() {
           </div>
         ) : null}
         <div className="sidebar-settings-zone" aria-label="Reader-Wiki settings">
-          <button type="button" className="icon-button sidebar-settings-button" aria-label="Open Settings" title="Open Settings" onClick={() => setAppView("settings")}>
+          <button type="button" className="icon-button sidebar-settings-button" aria-label="Open Settings" title="Open Settings" onClick={() => openSettings("basic")}>
             <SettingsIcon aria-hidden="true" focusable="false" />
           </button>
         </div>
@@ -700,8 +722,11 @@ export function App() {
         onMemoTextChange={setMemoText}
         onMemoModeChange={setMemoMode}
         aiSettings={aiSettings}
+        aiChatSession={aiChatSession}
+        onAIChatSessionChange={updateAIChatSession}
+        aiModelBehavior={aiModelBehavior}
         activeRepoId={activeRepoId}
-        onOpenSettings={() => setAppView("settings")}
+        onOpenSettings={() => openSettings("aiChat")}
       />
     </main>
   );
@@ -1253,7 +1278,7 @@ function HttpDeliveryPanel({ status, stoppingItemIds, error, onStop }: {
   );
 }
 
-function RightPanel({ mode, onModeChange, file, outline, onHeadingSelect, memoText, memoMode, onMemoTextChange, onMemoModeChange, aiSettings, activeRepoId, onOpenSettings }: {
+function RightPanel({ mode, onModeChange, file, outline, onHeadingSelect, memoText, memoMode, onMemoTextChange, onMemoModeChange, aiSettings, aiChatSession, onAIChatSessionChange, aiModelBehavior, activeRepoId, onOpenSettings }: {
   mode: RightPanelMode;
   onModeChange: (mode: RightPanelMode) => void;
   file: FileResponse | null;
@@ -1264,6 +1289,9 @@ function RightPanel({ mode, onModeChange, file, outline, onHeadingSelect, memoTe
   onMemoTextChange: (value: string) => void;
   onMemoModeChange: (mode: MemoMode) => void;
   aiSettings: AISettingsState;
+  aiChatSession: AIChatSessionState;
+  onAIChatSessionChange: (updater: (session: AIChatSessionState) => AIChatSessionState) => void;
+  aiModelBehavior: ReturnType<typeof activeAIModelBehavior>;
   activeRepoId: string;
   onOpenSettings: () => void;
 }) {
@@ -1288,7 +1316,16 @@ function RightPanel({ mode, onModeChange, file, outline, onHeadingSelect, memoTe
         <MemoPanel memoText={memoText} memoMode={memoMode} onMemoTextChange={onMemoTextChange} onMemoModeChange={onMemoModeChange} />
       ) : (
         <section className="side-panel-body">
-          <AIChatPanel aiSettings={aiSettings} activeRepoId={activeRepoId} activeFile={file} onOpenSettings={onOpenSettings} onMarkdownClick={handleMarkdownClick} />
+          <AIChatPanel
+            aiSettings={aiSettings}
+            session={aiChatSession}
+            onSessionChange={onAIChatSessionChange}
+            modelBehavior={aiModelBehavior}
+            activeRepoId={activeRepoId}
+            activeFile={file}
+            onOpenSettings={onOpenSettings}
+            onMarkdownClick={handleMarkdownClick}
+          />
         </section>
       )}
     </aside>

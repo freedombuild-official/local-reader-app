@@ -1,6 +1,7 @@
 import type {
   AIChatRequest,
   AIChatResponse,
+  AIChatStreamEvent,
   AIConnectionStatus,
   AICliEntryKind,
   AIProviderSettings,
@@ -111,6 +112,37 @@ export async function sendAIChatMessage(request: AIChatRequest, signal?: AbortSi
     body: JSON.stringify(request),
     signal,
   });
+}
+
+export async function streamAIChatMessage(request: AIChatRequest, onEvent: (event: AIChatStreamEvent) => void, signal?: AbortSignal): Promise<void> {
+  const response = await fetch("/api/ai/chat/stream", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(request),
+    signal,
+    cache: "no-store",
+  });
+  if (!response.ok) {
+    const data = (await response.json().catch(() => ({}))) as { error?: string };
+    throw new Error(data.error || `HTTP ${response.status}`);
+  }
+  if (!response.body) throw new Error("AI Chat stream is not available in this browser.");
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  while (true) {
+    const { value, done } = await reader.read();
+    buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+    const lines = buffer.split(/\r?\n/);
+    buffer = lines.pop() || "";
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      onEvent(JSON.parse(line) as AIChatStreamEvent);
+    }
+    if (done) break;
+  }
+  if (buffer.trim()) onEvent(JSON.parse(buffer) as AIChatStreamEvent);
 }
 
 export function imageFileUrl(repoId: string, path: string, assetVersion = ""): string {

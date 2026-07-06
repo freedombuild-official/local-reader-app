@@ -1,4 +1,16 @@
-import type { AIChatExecutionTarget, AIConnectionStatus, AICliEntryKind, AIEntryKind, AIEntrySettings, AIProviderEntryKind, AIProviderSettings, CliAIEntryReadiness, CliAIEntrySettings } from "./types";
+import type {
+  AIChatExecutionTarget,
+  AIConnectionStatus,
+  AICliEntryKind,
+  AIEntryKind,
+  AIEntrySettings,
+  AIIntelligenceLevel,
+  AIModelBehavior,
+  AIProviderEntryKind,
+  AIProviderSettings,
+  CliAIEntryReadiness,
+  CliAIEntrySettings,
+} from "./types";
 
 export const READER_FONT_SCALE_OPTIONS = [1, 1.5, 2] as const;
 export type ReaderFontScale = (typeof READER_FONT_SCALE_OPTIONS)[number];
@@ -14,7 +26,13 @@ export type AISettingsState = {
   entries: Record<AIEntryKind, AIEntrySettings>;
   statuses: Record<AIEntryKind, AIConnectionStatus | null>;
   lastCheckedAtByEntry: Record<AIEntryKind, string>;
+  modelBehaviorByEntry: Record<AIEntryKind, AIModelBehavior>;
 };
+
+export type AIModelBehaviorCapability =
+  | { kind: "none"; label: string; description: string }
+  | { kind: "intelligence"; label: string; description: string; levels: AIIntelligenceLevel[] }
+  | { kind: "thinking"; label: string; description: string };
 
 const BASIC_SETTINGS_KEY = "readerWiki.basicSettings.v1";
 
@@ -74,6 +92,12 @@ export const defaultAISettings: AISettingsState = {
     codexCli: "",
     claudeCli: "",
   },
+  modelBehaviorByEntry: {
+    aiApi: { kind: "intelligence", level: "medium" },
+    localAi: { kind: "none" },
+    codexCli: { kind: "intelligence", level: "medium" },
+    claudeCli: { kind: "none" },
+  },
 };
 
 export function loadBasicSettings(): { settings: BasicSettings; error: string } {
@@ -123,6 +147,32 @@ export function activeAIChatTarget(settings: AISettingsState): AIChatExecutionTa
   if (!entry || !aiVerifiedReady(settings, entry.entry)) return null;
   if (isProviderSettings(entry)) return { kind: "provider", provider: entry };
   return { kind: "cli", entry: entry.entry };
+}
+
+export function activeAIModelBehavior(settings: AISettingsState): AIModelBehavior {
+  const entry = normalizeOptionalAIEntryKind(settings.activeEntry);
+  if (!entry) return { kind: "none" };
+  return aiModelBehavior(settings, entry);
+}
+
+export function aiModelBehavior(settings: AISettingsState, entry: AIEntryKind): AIModelBehavior {
+  const normalized = normalizeAIEntryKind(entry);
+  return normalizeAIModelBehavior(settings.modelBehaviorByEntry[normalized], aiModelBehaviorCapability(settings, normalized));
+}
+
+export function aiModelBehaviorCapability(settings: AISettingsState, entry: AIEntryKind): AIModelBehaviorCapability {
+  return modelBehaviorCapabilityForEntry(settings.entries[normalizeAIEntryKind(entry)]);
+}
+
+export function updateAIModelBehavior(settings: AISettingsState, entry: AIEntryKind, behavior: AIModelBehavior): AISettingsState {
+  const normalized = normalizeAIEntryKind(entry);
+  return {
+    ...settings,
+    modelBehaviorByEntry: {
+      ...settings.modelBehaviorByEntry,
+      [normalized]: normalizeAIModelBehavior(behavior, aiModelBehaviorCapability(settings, normalized)),
+    },
+  };
 }
 
 export function aiEntrySettings(settings: AISettingsState, entry: AIEntryKind): AIEntrySettings {
@@ -270,14 +320,16 @@ export function normalizeAISettingsState(value: AISettingsState): AISettingsStat
   const entries = value.entries as Partial<Record<AIEntryKind, AIEntrySettings>>;
   const statuses = value.statuses as Partial<Record<AIEntryKind, AIConnectionStatus | null>>;
   const checkedAtByEntry = value.lastCheckedAtByEntry as Partial<Record<AIEntryKind, string>>;
+  const modelBehaviorByEntry = (value.modelBehaviorByEntry || {}) as Partial<Record<AIEntryKind, AIModelBehavior>>;
+  const nextEntries = {
+    aiApi: { ...defaultAISettings.entries.aiApi, ...(entries.aiApi || {}), entry: "aiApi" } as AIProviderSettings,
+    localAi: { ...defaultAISettings.entries.localAi, ...(entries.localAi || {}), entry: "localAi" } as AIProviderSettings,
+    codexCli: normalizeCliSettings("codexCli", entries.codexCli),
+    claudeCli: normalizeCliSettings("claudeCli", entries.claudeCli),
+  };
   return {
     activeEntry,
-    entries: {
-      aiApi: { ...defaultAISettings.entries.aiApi, ...(entries.aiApi || {}), entry: "aiApi" } as AIProviderSettings,
-      localAi: { ...defaultAISettings.entries.localAi, ...(entries.localAi || {}), entry: "localAi" } as AIProviderSettings,
-      codexCli: normalizeCliSettings("codexCli", entries.codexCli),
-      claudeCli: normalizeCliSettings("claudeCli", entries.claudeCli),
-    },
+    entries: nextEntries,
     statuses: {
       aiApi: statuses.aiApi || null,
       localAi: statuses.localAi || null,
@@ -289,6 +341,12 @@ export function normalizeAISettingsState(value: AISettingsState): AISettingsStat
       localAi: checkedAtByEntry.localAi || "",
       codexCli: checkedAtByEntry.codexCli || "",
       claudeCli: checkedAtByEntry.claudeCli || "",
+    },
+    modelBehaviorByEntry: {
+      aiApi: normalizeAIModelBehavior(modelBehaviorByEntry.aiApi, modelBehaviorCapabilityForEntry(nextEntries.aiApi)),
+      localAi: normalizeAIModelBehavior(modelBehaviorByEntry.localAi, modelBehaviorCapabilityForEntry(nextEntries.localAi)),
+      codexCli: normalizeAIModelBehavior(modelBehaviorByEntry.codexCli, modelBehaviorCapabilityForEntry(nextEntries.codexCli)),
+      claudeCli: normalizeAIModelBehavior(modelBehaviorByEntry.claudeCli, modelBehaviorCapabilityForEntry(nextEntries.claudeCli)),
     },
   };
 }
@@ -339,6 +397,66 @@ function normalizeOptionalAIEntryKind(entry: unknown): AIEntryKind | null {
 function normalizeAIEntryKind(entry: unknown): AIEntryKind {
   if (entry === "aiApi" || entry === "localAi" || entry === "codexCli" || entry === "claudeCli") return entry;
   return "aiApi";
+}
+
+function modelBehaviorCapabilityForEntry(entry: AIEntrySettings): AIModelBehaviorCapability {
+  if (isCliSettings(entry)) {
+    if (entry.entry === "codexCli") {
+      return {
+        kind: "intelligence",
+        label: "Codex intelligence",
+        description: "Choose the response depth used when the read-only Codex CLI adapter receives the chat prompt.",
+        levels: ["low", "medium", "high", "xhigh"],
+      };
+    }
+    return {
+      kind: "none",
+      label: "Claude Code default",
+      description: "Claude Code CLI uses its configured default model behavior. Reader-Wiki does not override it.",
+    };
+  }
+
+  const model = entry.model.trim().toLowerCase();
+  const provider = (entry.provider || "").toLowerCase();
+  const runtime = (entry.runtime || "").toLowerCase();
+  if (model.includes("qwen")) {
+    return {
+      kind: "thinking",
+      label: "Thinking mode",
+      description: "Toggle thinking mode for Qwen-style models when the endpoint supports it.",
+    };
+  }
+  if (provider === "openai" || model.startsWith("gpt-") || /^o\d/.test(model) || model.includes("gpt")) {
+    return {
+      kind: "intelligence",
+      label: "Intelligence",
+      description: "Choose the response depth for GPT-style models.",
+      levels: ["low", "medium", "high"],
+    };
+  }
+  if (entry.entry === "localAi" && (runtime === "ollama" || provider === "openaicompatible")) {
+    return {
+      kind: "none",
+      label: "Model default",
+      description: "This local model does not advertise a Reader-Wiki behavior control.",
+    };
+  }
+  return {
+    kind: "none",
+    label: "Model default",
+    description: "No behavior control is available for this active model.",
+  };
+}
+
+function normalizeAIModelBehavior(value: AIModelBehavior | undefined, capability: AIModelBehaviorCapability): AIModelBehavior {
+  if (capability.kind === "intelligence") {
+    const level = value?.kind === "intelligence" && capability.levels.includes(value.level) ? value.level : "medium";
+    return { kind: "intelligence", level };
+  }
+  if (capability.kind === "thinking") {
+    return { kind: "thinking", enabled: value?.kind === "thinking" ? value.enabled === true : true };
+  }
+  return { kind: "none" };
 }
 
 function aiStatus(

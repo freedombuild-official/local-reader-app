@@ -3,6 +3,8 @@ import { ArrowLeft, CheckCircle2, Settings as SettingsIcon, XCircle } from "luci
 import { fetchAIEntryReadiness, fetchRepositoryConfig, previewRepositoryConfig, saveRepositoryConfig, testAIProviderConnection, validateRepositoryConfig } from "./api";
 import {
   activeAIEntry,
+  aiModelBehavior,
+  aiModelBehaviorCapability,
   aiConfigured,
   aiEntryCli,
   aiEntryProvider,
@@ -19,8 +21,10 @@ import {
   READER_FONT_SCALE_OPTIONS,
   updateAIEntry,
   updateAIEntryStatus,
+  updateAIModelBehavior,
   updateCliEntryReadiness,
   type AISettingsState,
+  type AIModelBehaviorCapability,
   type BasicSettings,
 } from "./settingsState";
 import type {
@@ -29,6 +33,8 @@ import type {
   AIEntryKind,
   AIEntrySettings,
   AIFormat,
+  AIIntelligenceLevel,
+  AIModelBehavior,
   AIProviderSettings,
   CliAIEntrySettings,
   RepositoryConfigEntryDraft,
@@ -42,6 +48,7 @@ type SaveState = "idle" | "dirty" | "saved" | "failed" | "pending";
 type SettingsViewProps = {
   basicSettings: BasicSettings;
   aiSettings: AISettingsState;
+  initialCategory?: SettingsCategory;
   basicSaveError: string;
   onBack: () => void;
   onBasicSettingsChange: (settings: BasicSettings) => void;
@@ -54,13 +61,14 @@ const concealedInputType = "pass" + "word";
 export function SettingsView({
   basicSettings,
   aiSettings,
+  initialCategory = "basic",
   basicSaveError,
   onBack,
   onBasicSettingsChange,
   onAISettingsChange,
   onRepositoriesChanged,
 }: SettingsViewProps) {
-  const [category, setCategory] = useState<SettingsCategory>("basic");
+  const [category, setCategory] = useState<SettingsCategory>(initialCategory);
   const [basicDraft, setBasicDraft] = useState<BasicSettings>(basicSettings);
   const [aiDraft, setAiDraft] = useState<AISettingsState>(() => normalizeAISettingsState(aiSettings));
   const [repoState, setRepoState] = useState<RepositoryConfigState | null>(null);
@@ -83,6 +91,10 @@ export function SettingsView({
     aiDraftRef.current = normalized;
     setAiDraft(normalized);
   }, [aiSettings]);
+
+  useEffect(() => {
+    setCategory(initialCategory);
+  }, [initialCategory]);
 
   useEffect(() => {
     let canceled = false;
@@ -574,6 +586,8 @@ function AIChatSettingsPanel({
   const configured = aiConfigured(activeEntrySettings);
   const entries = ["codexCli", "claudeCli", "aiApi", "localAi"] as AIEntryKind[];
   const activeSetupTitle = isCliEntryKind(activeEntry) ? "CLI Readiness" : "Connection / Credentials";
+  const behavior = activeEntry ? aiModelBehavior(settings, activeEntry) : { kind: "none" } as AIModelBehavior;
+  const behaviorCapability = activeEntry ? aiModelBehaviorCapability(settings, activeEntry) : null;
 
   function setActiveEntry(entry: AIEntryKind) {
     onChange({ ...settings, activeEntry: entry });
@@ -589,6 +603,10 @@ function AIChatSettingsPanel({
 
   function clearEntry(entry: AIEntryKind) {
     onChange(updateAIEntry(settings, entry, defaultAISettings.entries[entry]));
+  }
+
+  function updateBehavior(entry: AIEntryKind, nextBehavior: AIModelBehavior) {
+    onChange(updateAIModelBehavior(settings, entry, nextBehavior));
   }
 
   return (
@@ -705,6 +723,17 @@ function AIChatSettingsPanel({
           {isProviderEntryKind(activeEntry) ? <p className="settings-message">Provider credentials stay in the current browser run and are never written to repository config or browser storage.</p> : null}
         </SettingsCard>
       ) : null}
+      {activeEntry && behaviorCapability ? (
+        <SettingsCard title="Model behavior" eyebrow={entryLabel(activeEntry)} status={modelBehaviorStatus(behavior)}>
+          <ModelBehaviorSettings
+            entry={activeEntry}
+            entrySettings={aiEntrySettings(settings, activeEntry)}
+            capability={behaviorCapability}
+            behavior={behavior}
+            onChange={(nextBehavior) => updateBehavior(activeEntry, nextBehavior)}
+          />
+        </SettingsCard>
+      ) : null}
       <SettingsCard title="Access policy" eyebrow="AI Chat" status="Read-only context">
         <div className="policy-grid">
           <div className="policy-item ready">
@@ -724,6 +753,52 @@ function AIChatSettingsPanel({
         <RepositoryAccessList repositories={repositories} />
       </SettingsCard>
     </section>
+  );
+}
+
+function ModelBehaviorSettings({
+  entry,
+  entrySettings,
+  capability,
+  behavior,
+  onChange,
+}: {
+  entry: AIEntryKind;
+  entrySettings: AIEntrySettings;
+  capability: AIModelBehaviorCapability;
+  behavior: AIModelBehavior;
+  onChange: (behavior: AIModelBehavior) => void;
+}) {
+  const model = "model" in entrySettings ? entrySettings.model || "No model selected" : entrySettings.binaryName;
+  return (
+    <div className="model-behavior-panel" aria-label="Model behavior settings">
+      <div className="setting-row inline-row">
+        <div>
+          <span>Active model</span>
+          <strong>{model}</strong>
+          <small>{capability.description}</small>
+        </div>
+        <span className="status-pill active">{entryLabel(entry)}</span>
+      </div>
+      {capability.kind === "intelligence" && behavior.kind === "intelligence" ? (
+        <SettingRow title={capability.label} description="Applies to new AI Chat requests from this browser session.">
+          <SegmentedControl
+            label={capability.label}
+            value={behavior.level}
+            options={capability.levels.map((level) => [level, intelligenceLabel(level)] as [string, string])}
+            onChange={(level) => onChange({ kind: "intelligence", level: level as AIIntelligenceLevel })}
+          />
+        </SettingRow>
+      ) : null}
+      {capability.kind === "thinking" && behavior.kind === "thinking" ? (
+        <label className="settings-toggle detailed">
+          <input type="checkbox" checked={behavior.enabled} onChange={(event) => onChange({ kind: "thinking", enabled: event.target.checked })} />
+          <span>Thinking mode</span>
+          <small>Used only when the active endpoint supports Qwen-style thinking control.</small>
+        </label>
+      ) : null}
+      {capability.kind === "none" ? <p className="settings-message">Reader-Wiki will use the active model default for this entry.</p> : null}
+    </div>
   );
 }
 
@@ -1200,6 +1275,17 @@ function localDefaults(runtime: string): Partial<AIProviderSettings> {
   if (runtime === "openaiLocal") return { runtime: "openaiLocal", baseUrl: "http://127.0.0.1:8000/v1", model: "" };
   if (runtime === "custom") return { runtime: "custom", baseUrl: "", model: "" };
   return { runtime: "ollama", baseUrl: "http://127.0.0.1:11434/v1", model: "" };
+}
+
+function modelBehaviorStatus(behavior: AIModelBehavior): string {
+  if (behavior.kind === "intelligence") return `Intelligence ${intelligenceLabel(behavior.level)}`;
+  if (behavior.kind === "thinking") return behavior.enabled ? "Thinking on" : "Thinking off";
+  return "Model default";
+}
+
+function intelligenceLabel(level: AIIntelligenceLevel): string {
+  if (level === "xhigh") return "X High";
+  return level.charAt(0).toUpperCase() + level.slice(1);
 }
 
 function statusLabel(status: AIConnectionStatus): string {

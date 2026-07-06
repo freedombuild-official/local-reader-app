@@ -3,12 +3,14 @@ import { mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { HttpError } from "./errors.js";
-import type { AIChatContext, AIChatMessage, AIConnectionStatus, AICliEntryKind } from "./types.js";
+import type { AIChatAttachment, AIChatContext, AIChatMessage, AIConnectionStatus, AICliEntryKind, AIModelBehavior } from "./types.js";
 
 type CliChatRequest = {
   entry: AICliEntryKind;
   messages: AIChatMessage[];
   context: AIChatContext;
+  attachments?: AIChatAttachment[];
+  modelBehavior?: AIModelBehavior;
   runner?: AICommandRunner;
 };
 
@@ -33,7 +35,7 @@ const CLI_MAX_BUFFER = 1024 * 1024;
 export async function requestCliAIChatCompletion(request: CliChatRequest): Promise<{ content: string; status: AIConnectionStatus }> {
   const runner = request.runner || runAICommand;
   const cwd = await ensureSafeCwd();
-  const prompt = buildCliPrompt(request.context, request.messages);
+  const prompt = buildCliPrompt(request.context, request.messages, request.attachments || [], request.modelBehavior);
   try {
     const result = request.entry === "codexCli"
       ? await runCxChat(runner, cwd, prompt)
@@ -92,8 +94,10 @@ export function safeCliEnv(_entry: AICliEntryKind): NodeJS.ProcessEnv {
   return env;
 }
 
-function buildCliPrompt(context: AIChatContext, messages: AIChatMessage[]): string {
+function buildCliPrompt(context: AIChatContext, messages: AIChatMessage[], attachments: AIChatAttachment[], modelBehavior: AIModelBehavior | undefined): string {
   const transcript = messages.map((message) => `${message.role === "assistant" ? "Assistant" : "User"}: ${message.content}`).join("\n\n");
+  const behavior = modelBehaviorPrompt(modelBehavior);
+  const attachmentText = attachmentsPrompt(attachments);
   const metadata = [
     "You are answering inside Reader-Wiki AI Chat.",
     "Use only the read-only context below.",
@@ -108,7 +112,22 @@ function buildCliPrompt(context: AIChatContext, messages: AIChatMessage[]): stri
     `Byte length: ${context.byteLength}`,
   ].join("\n");
   const content = context.contentIncluded ? context.content : "File content was not included.";
-  return `${metadata}\n\nFile content:\n${content}\n\nConversation:\n${transcript}\n\nAnswer concisely from the file context.`;
+  return [metadata, `File content:\n${content}`, behavior, attachmentText, `Conversation:\n${transcript}`, "Answer concisely from the file context."].filter(Boolean).join("\n\n");
+}
+
+function modelBehaviorPrompt(modelBehavior: AIModelBehavior | undefined): string {
+  if (!modelBehavior || modelBehavior.kind === "none") return "";
+  if (modelBehavior.kind === "intelligence") return `Requested response depth: ${modelBehavior.level}.`;
+  return `Thinking mode: ${modelBehavior.enabled ? "enabled" : "disabled"}. Do not reveal hidden reasoning; provide only the final answer.`;
+}
+
+function attachmentsPrompt(attachments: AIChatAttachment[]): string {
+  const items = attachments.slice(0, 5).map((attachment, index) => {
+    const metadata = `Attachment ${index + 1}: ${attachment.name} (${attachment.mimeType || "unknown"}, ${attachment.sizeBytes} bytes, ${attachment.contentIncluded ? "content included" : "metadata only"})`;
+    if (!attachment.contentIncluded) return metadata;
+    return `${metadata}\n${attachment.content.slice(0, 12000)}`;
+  });
+  return items.length ? `Session-only attachments:\n${items.join("\n\n")}` : "";
 }
 
 async function runCxChat(runner: AICommandRunner, cwd: string, prompt: string): Promise<string> {

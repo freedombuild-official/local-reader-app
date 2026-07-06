@@ -1,5 +1,18 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { activeAIChatTarget, activeAIProvider, aiReady, defaultAISettings, effectiveAIStatus, loadBasicSettings, normalizeAISettingsState, persistBasicSettings, type AISettingsState } from "../src/settingsState";
+import {
+  activeAIChatTarget,
+  activeAIModelBehavior,
+  activeAIProvider,
+  aiModelBehaviorCapability,
+  aiReady,
+  defaultAISettings,
+  effectiveAIStatus,
+  loadBasicSettings,
+  normalizeAISettingsState,
+  persistBasicSettings,
+  updateAIModelBehavior,
+  type AISettingsState,
+} from "../src/settingsState";
 import type { AIProviderSettings, CliAIEntrySettings } from "../src/types";
 
 describe("settings state", () => {
@@ -160,6 +173,32 @@ describe("settings state", () => {
       kind: "cli",
       entry: "codexCli",
     });
+  });
+
+  it("normalizes AI model behavior by active entry and model capability", () => {
+    const codexSettings = { ...defaultAISettings, activeEntry: "codexCli" as const };
+    expect(aiModelBehaviorCapability(codexSettings, "codexCli")).toMatchObject({ kind: "intelligence", levels: ["low", "medium", "high", "xhigh"] });
+    expect(activeAIModelBehavior(codexSettings)).toEqual({ kind: "intelligence", level: "medium" });
+    expect(activeAIModelBehavior(updateAIModelBehavior(codexSettings, "codexCli", { kind: "intelligence", level: "xhigh" }))).toEqual({ kind: "intelligence", level: "xhigh" });
+
+    const qwenLocal: AIProviderSettings = { ...(defaultAISettings.entries.localAi as AIProviderSettings), model: "qwen3:latest" };
+    const qwenSettings = {
+      ...defaultAISettings,
+      activeEntry: "localAi" as const,
+      entries: { ...defaultAISettings.entries, localAi: qwenLocal },
+    };
+    expect(aiModelBehaviorCapability(qwenSettings, "localAi")).toMatchObject({ kind: "thinking" });
+    expect(activeAIModelBehavior(qwenSettings)).toEqual({ kind: "thinking", enabled: true });
+    expect(activeAIModelBehavior(updateAIModelBehavior(qwenSettings, "localAi", { kind: "thinking", enabled: false }))).toEqual({ kind: "thinking", enabled: false });
+
+    const unknownLocal: AIProviderSettings = { ...qwenLocal, model: "llama-local" };
+    const unknownSettings = {
+      ...defaultAISettings,
+      activeEntry: "localAi" as const,
+      entries: { ...defaultAISettings.entries, localAi: unknownLocal },
+    };
+    expect(aiModelBehaviorCapability(unknownSettings, "localAi")).toMatchObject({ kind: "none" });
+    expect(activeAIModelBehavior(unknownSettings)).toEqual({ kind: "none" });
   });
 });
 

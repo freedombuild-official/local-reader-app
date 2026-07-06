@@ -1,10 +1,12 @@
 import { HttpError } from "./errors.js";
-import type { AIChatContext, AIChatMessage, AIConnectionStatus, AIProviderSettings } from "./types.js";
+import type { AIChatAttachment, AIChatContext, AIChatMessage, AIConnectionStatus, AIModelBehavior, AIProviderSettings } from "./types.js";
 
 type ProviderRequest = {
   provider: AIProviderSettings;
   messages?: AIChatMessage[];
   context?: AIChatContext;
+  attachments?: AIChatAttachment[];
+  modelBehavior?: AIModelBehavior;
   signal?: AbortSignal;
 };
 
@@ -62,6 +64,24 @@ export async function requestAIChatCompletion(request: ProviderRequest): Promise
   }
 }
 
+export async function requestAIChatCompletionStream(request: ProviderRequest, onDelta: (content: string) => void): Promise<{ content: string; status: AIConnectionStatus }> {
+  const readiness = providerReadiness(request.provider);
+  if (readiness.state !== "ready") throw new HttpError(400, readiness.message);
+  try {
+    const baseUrl = providerBaseUrl(request.provider).replace(/\/+$/, "");
+    const content = request.provider.apiFormat === "openaiCompatible" || request.provider.provider === "openaiCompatible" || request.provider.provider === "openai" || request.provider.entry === "localAi"
+      ? await requestOpenAICompatibleTextStream(baseUrl, request.provider, request.messages || [], request.context, request.attachments || [], request.modelBehavior, request.signal, onDelta)
+      : await requestProviderText(request);
+    if (!(request.provider.apiFormat === "openaiCompatible" || request.provider.provider === "openaiCompatible" || request.provider.provider === "openai" || request.provider.entry === "localAi")) {
+      onDelta(content);
+    }
+    return { content, status: status("ready", "success", "success", "Response received.", "Continue the conversation or test again if the endpoint changes.") };
+  } catch (error) {
+    const failed = safeProviderErrorStatus(error);
+    throw new HttpError(502, failed.message);
+  }
+}
+
 export function providerReadiness(provider: AIProviderSettings): AIConnectionStatus {
   if (!provider.entry) return status("notConfigured", "not_configured", "info", "Select an AI entry.", "Choose an AI Entry.");
   if (!provider.model.trim()) return status("notConfigured", "not_configured", "warning", "Model is required.", "Enter the model name shown by your provider.");
@@ -78,15 +98,15 @@ export function providerReadiness(provider: AIProviderSettings): AIConnectionSta
   return status("ready", "needs_test", "info", "Connection can be tested.", "Run Test connection before using this entry.");
 }
 
-async function requestProviderText({ provider, messages = [], context, signal }: ProviderRequest): Promise<string> {
+async function requestProviderText({ provider, messages = [], context, attachments = [], modelBehavior, signal }: ProviderRequest): Promise<string> {
   const baseUrl = providerBaseUrl(provider).replace(/\/+$/, "");
   if (provider.apiFormat === "anthropic" || provider.provider === "anthropic") {
-    return requestAnthropicText(baseUrl, provider, messages, context, signal);
+    return requestAnthropicText(baseUrl, provider, messages, context, attachments, modelBehavior, signal);
   }
   if (provider.apiFormat === "google" || provider.provider === "google") {
-    return requestGoogleText(baseUrl, provider, messages, context, signal);
+    return requestGoogleText(baseUrl, provider, messages, context, attachments, modelBehavior, signal);
   }
-  return requestOpenAICompatibleText(baseUrl, provider, messages, context, signal);
+  return requestOpenAICompatibleText(baseUrl, provider, messages, context, attachments, modelBehavior, signal);
 }
 
 async function requestOpenAICompatibleText(
@@ -94,6 +114,8 @@ async function requestOpenAICompatibleText(
   provider: AIProviderSettings,
   messages: AIChatMessage[],
   context: AIChatContext | undefined,
+  attachments: AIChatAttachment[],
+  modelBehavior: AIModelBehavior | undefined,
   signal: AbortSignal | undefined,
 ): Promise<string> {
   const response = await fetch(`${baseUrl}/chat/completions`, {
@@ -104,7 +126,7 @@ async function requestOpenAICompatibleText(
     },
     body: JSON.stringify({
       model: provider.model,
-      messages: buildOpenAIMessages(messages, context),
+      messages: buildOpenAIMessages(messages, context, attachments, modelBehavior),
     }),
     signal,
   });
@@ -113,11 +135,74 @@ async function requestOpenAICompatibleText(
   return data.choices?.[0]?.message?.content || "";
 }
 
+async function requestOpenAICompatibleTextStream(
+  baseUrl: string,
+  provider: AIProviderSettings,
+  messages: AIChatMessage[],
+  context: AIChatContext | undefined,
+  attachments: AIChatAttachment[],
+  modelBehavior: AIModelBehavior | undefined,
+  signal: AbortSignal | undefined,
+  onDelta: (content: string) => void,
+): Promise<string> {
+  const response = await fetch(`${baseUrl}/chat/completions`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(provider.credential ? { Authorization: `Bearer ${provider.credential}` } : {}),
+    },
+    body: JSON.stringify({
+      model: provider.model,
+      messages: buildOpenAIMessages(messages, context, attachments, modelBehavior),
+      stream: true,
+    }),
+    signal,
+  });
+  if (!response.ok) throw new ProviderHttpError(response.status);
+  if ((response.headers.get("content-type") || "").includes("application/json")) {
+    const data = (await response.json().catch(() => ({}))) as { choices?: Array<{ message?: { content?: string } }>; error?: { message?: string } };
+    const text = data.choices?.[0]?.message?.content || "";
+    if (text) onDelta(text);
+    return text;
+  }
+  if (!response.body) {
+    const text = await requestOpenAICompatibleText(baseUrl, provider, messages, context, attachments, modelBehavior, signal);
+    onDelta(text);
+    return text;
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let content = "";
+  while (true) {
+    const { value, done } = await reader.read();
+    buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+    const lines = buffer.split(/\r?\n/);
+    buffer = lines.pop() || "";
+    for (const line of lines) {
+      const chunk = parseOpenAIStreamLine(line);
+      if (!chunk) continue;
+      content += chunk;
+      onDelta(chunk);
+    }
+    if (done) break;
+  }
+  const lastChunk = parseOpenAIStreamLine(buffer);
+  if (lastChunk) {
+    content += lastChunk;
+    onDelta(lastChunk);
+  }
+  return content;
+}
+
 async function requestAnthropicText(
   baseUrl: string,
   provider: AIProviderSettings,
   messages: AIChatMessage[],
   context: AIChatContext | undefined,
+  attachments: AIChatAttachment[],
+  modelBehavior: AIModelBehavior | undefined,
   signal: AbortSignal | undefined,
 ): Promise<string> {
   const response = await fetch(`${baseUrl}/v1/messages`, {
@@ -129,7 +214,7 @@ async function requestAnthropicText(
     },
     body: JSON.stringify({
       model: provider.model,
-      messages: buildAnthropicMessages(messages, context),
+      messages: buildAnthropicMessages(messages, context, attachments, modelBehavior),
     }),
     signal,
   });
@@ -143,6 +228,8 @@ async function requestGoogleText(
   provider: AIProviderSettings,
   messages: AIChatMessage[],
   context: AIChatContext | undefined,
+  attachments: AIChatAttachment[],
+  modelBehavior: AIModelBehavior | undefined,
   signal: AbortSignal | undefined,
 ): Promise<string> {
   const url = new URL(`${baseUrl}/v1beta/models/${encodeURIComponent(provider.model)}:generateContent`);
@@ -151,7 +238,7 @@ async function requestGoogleText(
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      contents: buildGoogleMessages(messages, context),
+      contents: buildGoogleMessages(messages, context, attachments, modelBehavior),
     }),
     signal,
   });
@@ -160,29 +247,31 @@ async function requestGoogleText(
   return data.candidates?.[0]?.content?.parts?.map((part) => part.text || "").join("\n").trim() || "";
 }
 
-function buildOpenAIMessages(messages: AIChatMessage[], context: AIChatContext | undefined): AIChatMessage[] {
+function buildOpenAIMessages(messages: AIChatMessage[], context: AIChatContext | undefined, attachments: AIChatAttachment[], modelBehavior: AIModelBehavior | undefined): AIChatMessage[] {
   return [
-    { role: "user", content: systemContextPrompt(context) },
+    { role: "user", content: systemContextPrompt(context, attachments, modelBehavior) },
     ...messages,
   ];
 }
 
-function buildAnthropicMessages(messages: AIChatMessage[], context: AIChatContext | undefined): Array<{ role: "user" | "assistant"; content: string }> {
+function buildAnthropicMessages(messages: AIChatMessage[], context: AIChatContext | undefined, attachments: AIChatAttachment[], modelBehavior: AIModelBehavior | undefined): Array<{ role: "user" | "assistant"; content: string }> {
   return [
-    { role: "user", content: systemContextPrompt(context) },
+    { role: "user", content: systemContextPrompt(context, attachments, modelBehavior) },
     ...messages,
   ];
 }
 
-function buildGoogleMessages(messages: AIChatMessage[], context: AIChatContext | undefined): Array<{ role: string; parts: Array<{ text: string }> }> {
+function buildGoogleMessages(messages: AIChatMessage[], context: AIChatContext | undefined, attachments: AIChatAttachment[], modelBehavior: AIModelBehavior | undefined): Array<{ role: string; parts: Array<{ text: string }> }> {
   return [
-    { role: "user", parts: [{ text: systemContextPrompt(context) }] },
+    { role: "user", parts: [{ text: systemContextPrompt(context, attachments, modelBehavior) }] },
     ...messages.map((message) => ({ role: message.role === "assistant" ? "model" : "user", parts: [{ text: message.content }] })),
   ];
 }
 
-function systemContextPrompt(context: AIChatContext | undefined): string {
-  if (!context) return "You are helping with a local Reader-Wiki file. Do not request shell access or file changes.";
+function systemContextPrompt(context: AIChatContext | undefined, attachments: AIChatAttachment[] = [], modelBehavior: AIModelBehavior | undefined = undefined): string {
+  const behavior = modelBehaviorPrompt(modelBehavior);
+  const attachmentText = attachmentsPrompt(attachments);
+  if (!context) return ["You are helping with a local Reader-Wiki file. Do not request shell access or file changes.", behavior, attachmentText].filter(Boolean).join("\n\n");
   const metadata = [
     `Repository: ${context.repoId}`,
     `Path: ${context.path}`,
@@ -192,9 +281,37 @@ function systemContextPrompt(context: AIChatContext | undefined): string {
     `Bytes: ${context.byteLength}`,
   ].join("\n");
   if (!context.contentIncluded) {
-    return `${metadata}\n\nThe file content is not included. Use only the metadata above. Do not request shell access or file changes.`;
+    return [metadata, "The file content is not included. Use only the metadata above. Do not request shell access or file changes.", behavior, attachmentText].filter(Boolean).join("\n\n");
   }
-  return `${metadata}\n\nFile content:\n${context.content}\n\nAnswer from this read-only context. Do not request shell access or file changes.`;
+  return [metadata, `File content:\n${context.content}`, behavior, attachmentText, "Answer from this read-only context. Do not request shell access or file changes."].filter(Boolean).join("\n\n");
+}
+
+function modelBehaviorPrompt(modelBehavior: AIModelBehavior | undefined): string {
+  if (!modelBehavior || modelBehavior.kind === "none") return "";
+  if (modelBehavior.kind === "intelligence") return `Requested response depth: ${modelBehavior.level}.`;
+  return `Thinking mode: ${modelBehavior.enabled ? "enabled" : "disabled"}. Do not reveal hidden reasoning; provide only the final answer.`;
+}
+
+function attachmentsPrompt(attachments: AIChatAttachment[]): string {
+  const items = attachments.slice(0, 5).map((attachment, index) => {
+    const metadata = `Attachment ${index + 1}: ${attachment.name} (${attachment.mimeType || "unknown"}, ${attachment.sizeBytes} bytes, ${attachment.contentIncluded ? "content included" : "metadata only"})`;
+    if (!attachment.contentIncluded) return metadata;
+    return `${metadata}\n${attachment.content.slice(0, 12000)}`;
+  });
+  return items.length ? `Session-only attachments:\n${items.join("\n\n")}` : "";
+}
+
+function parseOpenAIStreamLine(line: string): string {
+  const trimmed = line.trim();
+  if (!trimmed || !trimmed.startsWith("data:")) return "";
+  const payload = trimmed.slice(5).trim();
+  if (!payload || payload === "[DONE]") return "";
+  try {
+    const data = JSON.parse(payload) as { choices?: Array<{ delta?: { content?: string } }> };
+    return data.choices?.[0]?.delta?.content || "";
+  } catch {
+    return "";
+  }
 }
 
 function providerBaseUrl(provider: AIProviderSettings): string {

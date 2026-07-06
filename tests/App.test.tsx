@@ -118,14 +118,23 @@ beforeEach(() => {
       const body = parseJsonBody(init?.body) as { entry?: string };
       return json(cliReadiness(String(body.entry || "codexCli")));
     }
-    if (url === "/api/ai/chat") {
+    if (url === "/api/ai/chat" || url === "/api/ai/chat/stream") {
       const body = parseJsonBody(init?.body) as { target?: { kind?: string; entry?: string; provider?: { entry?: string } }; provider?: { entry?: string } };
       const target = body.target?.kind === "cli" ? body.target.entry : body.target?.provider?.entry || body.provider?.entry || "provider";
-      return json({
+      const payload = {
         message: { role: "assistant", content: `${target} says the active file says hello.` },
         context: { repoId: "docs", path: "README.md", fileName: "README.md", fileKind: "markdown", viewerStatus: "displayable", lineCount: 12, byteLength: 120, contentIncluded: true, content: "# Hello" },
         status: { state: "ready", message: "Response received.", checkedAt: "2026-07-03T00:00:00.000Z" },
-      });
+      };
+      if (url === "/api/ai/chat/stream") {
+        return streamJsonLines([
+          { type: "meta", context: payload.context },
+          { type: "delta", content: `${target} says ` },
+          { type: "delta", content: "the active file says hello." },
+          { type: "done", ...payload },
+        ]);
+      }
+      return json(payload);
     }
     if (url === "/api/repo-open") {
       return repoOpenHandler(parseJsonBody(init?.body));
@@ -240,7 +249,7 @@ describe("App", () => {
     expect(stylesCss).toContain("--rw-dark-app: #10181c;");
     expect(stylesCss).toContain('--rw-dark-code: #0f171b;');
     expect(stylesCss).toContain('.app-shell[data-color-mode="dark"] .code-viewer');
-    expect(stylesCss).toContain('.app-shell[data-color-mode="dark"] .ai-chat-context');
+    expect(stylesCss).toContain('.app-shell[data-color-mode="dark"] .ai-chat-status');
   });
 
   it("defines Reader layout density through app-shell custom properties", () => {
@@ -588,7 +597,7 @@ describe("App", () => {
     fireEvent.click(screen.getByRole("tab", { name: "Memo" }));
     fireEvent.change(screen.getByLabelText("Session memo"), { target: { value: "keep this memo" } });
 
-    fireEvent.click(screen.getByRole("button", { name: "Open Settings" }));
+    fireEvent.click(openSettingsButton());
     expect(await screen.findByRole("heading", { name: "Settings" })).toBeTruthy();
     expect(screen.getByRole("tab", { name: "Basic" })).toBeTruthy();
     expect(screen.getByRole("tab", { name: "Repositories" })).toBeTruthy();
@@ -649,7 +658,7 @@ describe("App", () => {
     expect(await screen.findByLabelText("Raw")).toBeTruthy();
     expect(cssRule(".code-viewer")).toContain("font-size: var(--reader-code-font-size, 13px);");
 
-    fireEvent.click(screen.getByRole("button", { name: "Open Settings" }));
+    fireEvent.click(openSettingsButton());
     expect((screen.getByRole("button", { name: "×2" }) as HTMLButtonElement).getAttribute("aria-pressed")).toBe("true");
     expect((screen.getByRole("button", { name: "Dark" }) as HTMLButtonElement).getAttribute("aria-pressed")).toBe("true");
     expect((screen.getByRole("button", { name: "Compact" }) as HTMLButtonElement).getAttribute("aria-pressed")).toBe("true");
@@ -680,7 +689,7 @@ describe("App", () => {
   it("shows real repository config state, validates, previews YAML, and saves from Settings", async () => {
     render(<App />);
     expect(await screen.findByRole("heading", { name: "Hello" })).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Open Settings" }));
+    fireEvent.click(openSettingsButton());
     fireEvent.click(await screen.findByRole("tab", { name: "Repositories" }));
 
     expect(screen.getByText("Docs")).toBeTruthy();
@@ -731,9 +740,12 @@ describe("App", () => {
     render(<App />);
     expect(await screen.findByRole("heading", { name: "Hello" })).toBeTruthy();
     fireEvent.click(screen.getByRole("tab", { name: "AI Chat" }));
-    expect(screen.getByText("AI Chat needs an active AI Entry before it can answer from the active file context.")).toBeTruthy();
-    expect((screen.getByRole("button", { name: "Send AI Chat message" }) as HTMLButtonElement).disabled).toBe(true);
-    fireEvent.click(screen.getByRole("button", { name: "Open Settings" }));
+    expect(screen.getByText("AI Entry is required.")).toBeTruthy();
+    expect(screen.queryByText("Read-only context")).toBeNull();
+    expect(screen.queryByText("Ask about the active file. Reader-Wiki sends read-only context only.")).toBeNull();
+    expect(screen.queryByLabelText("AI Chat message")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Send AI Chat message" })).toBeNull();
+    fireEvent.click(openSettingsButton());
     expect(await screen.findByRole("heading", { name: "Settings" })).toBeTruthy();
     fireEvent.click(screen.getByRole("tab", { name: "AI Chat" }));
     expect(screen.queryByRole("heading", { name: "AI Chat behavior" })).toBeNull();
@@ -806,10 +818,10 @@ describe("App", () => {
     expect(fetchCallsTo("/api/ai/test-connection")).toHaveLength(0);
     fireEvent.click(screen.getByRole("button", { name: "Back to viewer" }));
     fireEvent.click(await screen.findByRole("tab", { name: "AI Chat" }));
-    fireEvent.change(screen.getByLabelText("AI Chat message"), { target: { value: "What does this file say?" } });
-    expect((screen.getByRole("button", { name: "Send AI Chat message" }) as HTMLButtonElement).disabled).toBe(true);
-    expect(screen.getByText("AI Chat needs a connected AI Entry before it can answer from the active file context.")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Open AI Chat Settings" }));
+    expect(screen.getByText("AI Entry is not ready.")).toBeTruthy();
+    expect(screen.queryByLabelText("AI Chat message")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Send AI Chat message" })).toBeNull();
+    fireEvent.click(openSettingsButton());
     fireEvent.click(await screen.findByRole("tab", { name: "AI Chat" }));
     const testedAiApiAuth = screen.getByLabelText("AI API connection");
     fireEvent.click(within(testedAiApiAuth).getByRole("button", { name: "Test connection" }));
@@ -827,15 +839,16 @@ describe("App", () => {
     fireEvent.click(await screen.findByRole("tab", { name: "AI Chat" }));
     fireEvent.change(screen.getByLabelText("AI Chat message"), { target: { value: "What does this file say?" } });
     expect((screen.getByRole("button", { name: "Send AI Chat message" }) as HTMLButtonElement).disabled).toBe(false);
-    fireEvent.click(screen.getByRole("button", { name: "Open Settings" }));
+    fireEvent.click(openSettingsButton());
     fireEvent.click(await screen.findByRole("tab", { name: "AI Chat" }));
     const changedAiApiAuth = screen.getByLabelText("AI API connection");
     fireEvent.change(within(changedAiApiAuth).getByLabelText("Model"), { target: { value: "model-b" } });
     fireEvent.click(screen.getByRole("button", { name: "Back to viewer" }));
     fireEvent.click(await screen.findByRole("tab", { name: "AI Chat" }));
-    fireEvent.change(screen.getByLabelText("AI Chat message"), { target: { value: "What does this file say after model change?" } });
-    expect((screen.getByRole("button", { name: "Send AI Chat message" }) as HTMLButtonElement).disabled).toBe(true);
-    fireEvent.click(screen.getByRole("button", { name: "Open AI Chat Settings" }));
+    expect(screen.getByText("AI Entry is not ready.")).toBeTruthy();
+    expect(screen.queryByLabelText("AI Chat message")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Send AI Chat message" })).toBeNull();
+    fireEvent.click(openSettingsButton());
     fireEvent.click(await screen.findByRole("tab", { name: "AI Chat" }));
     const retestedAiApiAuth = screen.getByLabelText("AI API connection");
     fireEvent.click(within(retestedAiApiAuth).getByRole("button", { name: "Test connection" }));
@@ -848,10 +861,69 @@ describe("App", () => {
     expect(await screen.findByText("aiApi says the active file says hello.")).toBeTruthy();
   });
 
+  it("keeps AI Chat session across side panel modes and supports streaming composer actions", async () => {
+    const clipboardWrite = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: clipboardWrite },
+    });
+
+    render(<App />);
+    expect(await screen.findByRole("heading", { name: "Hello" })).toBeTruthy();
+    fireEvent.click(openSettingsButton());
+    expect(await screen.findByRole("heading", { name: "Settings" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("tab", { name: "AI Chat" }));
+    const codexEntry = screen.getByLabelText(["Co", "dex CLI entry"].join(""));
+    fireEvent.click(within(codexEntry).getByRole("button", { name: "Set active" }));
+    const codexAuth = screen.getByLabelText(["Co", "dex CLI readiness"].join(""));
+    fireEvent.click(within(codexAuth).getByRole("button", { name: "Check readiness" }));
+    expect((await screen.findAllByText(["Co", "dex CLI read-only wrapper is ready."].join(""))).length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getByRole("button", { name: "Back to viewer" }));
+    fireEvent.click(await screen.findByRole("tab", { name: "AI Chat" }));
+    const messageInput = screen.getByLabelText("AI Chat message") as HTMLTextAreaElement;
+    fireEvent.change(messageInput, { target: { value: "Draft" } });
+    fireEvent.click(screen.getByRole("tab", { name: "Memo" }));
+    fireEvent.click(screen.getByRole("tab", { name: "AI Chat" }));
+    expect((screen.getByLabelText("AI Chat message") as HTMLTextAreaElement).value).toBe("Draft");
+
+    const newlineInput = screen.getByLabelText("AI Chat message") as HTMLTextAreaElement;
+    newlineInput.setSelectionRange(newlineInput.value.length, newlineInput.value.length);
+    fireEvent.keyDown(newlineInput, { key: "Enter", ctrlKey: true });
+    await waitFor(() => expect((screen.getByLabelText("AI Chat message") as HTMLTextAreaElement).value).toBe("Draft\n"));
+
+    const fileInput = document.querySelector(".ai-chat-composer input[type='file']") as HTMLInputElement;
+    const file = new File(["Attached note"], "note.md", { type: "text/markdown" });
+    await act(async () => {
+      fireEvent.change(fileInput, { target: { files: [file] } });
+    });
+    expect(await screen.findByText("note.md")).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText("AI Chat message"), { target: { value: "Summarize with attachment." } });
+    fireEvent.keyDown(screen.getByLabelText("AI Chat message"), { key: "Enter" });
+    expect(await screen.findByText("codexCli says the active file says hello.")).toBeTruthy();
+    const streamCalls = fetchCallsTo("/api/ai/chat/stream");
+    expect(streamCalls.length).toBeGreaterThan(0);
+    const streamBody = parseJsonBody(streamCalls.at(-1)?.[1]?.body);
+    expect(streamBody).toMatchObject({
+      attachments: [expect.objectContaining({ name: "note.md", contentIncluded: true, content: "Attached note" })],
+      modelBehavior: { kind: "intelligence", level: "medium" },
+    });
+
+    fireEvent.click(screen.getByRole("tab", { name: "Outline" }));
+    fireEvent.click(screen.getByRole("tab", { name: "AI Chat" }));
+    expect(screen.getByText("codexCli says the active file says hello.")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Copy AI message" }));
+    expect(clipboardWrite).toHaveBeenCalledWith("codexCli says the active file says hello.");
+    await act(async () => {
+      await new Promise((resolve) => window.setTimeout(resolve, 1700));
+    });
+  });
+
   it("keeps in-flight provider readiness bound to the tested entry and settings snapshot", async () => {
     render(<App />);
     expect(await screen.findByRole("heading", { name: "Hello" })).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Open Settings" }));
+    fireEvent.click(openSettingsButton());
     expect(await screen.findByRole("heading", { name: "Settings" })).toBeTruthy();
     fireEvent.click(screen.getByRole("tab", { name: "AI Chat" }));
 
@@ -889,7 +961,7 @@ describe("App", () => {
   it("enables CLI AI Chat after entry readiness succeeds", async () => {
     render(<App />);
     expect(await screen.findByRole("heading", { name: "Hello" })).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Open Settings" }));
+    fireEvent.click(openSettingsButton());
     expect(await screen.findByRole("heading", { name: "Settings" })).toBeTruthy();
     fireEvent.click(screen.getByRole("tab", { name: "AI Chat" }));
 
@@ -922,7 +994,7 @@ describe("App", () => {
     fireEvent.click(screen.getByRole("button", { name: "Send AI Chat message" }));
     expect(await screen.findByText("codexCli says the active file says hello.")).toBeTruthy();
 
-    fireEvent.click(screen.getByRole("button", { name: "Open Settings" }));
+    fireEvent.click(openSettingsButton());
     fireEvent.click(await screen.findByRole("tab", { name: "AI Chat" }));
     const claudeEntry = screen.getByLabelText("Claude Code CLI entry");
     fireEvent.click(within(claudeEntry).getByRole("button", { name: "Set active" }));
@@ -935,9 +1007,10 @@ describe("App", () => {
     expect((screen.getByLabelText("Claude Code CLI readiness details") as HTMLDetailsElement).open).toBe(false);
     fireEvent.click(screen.getByRole("button", { name: "Back to viewer" }));
     fireEvent.click(await screen.findByRole("tab", { name: "AI Chat" }));
-    fireEvent.change(screen.getByLabelText("AI Chat message"), { target: { value: "Before Claude readiness." } });
-    expect((screen.getByRole("button", { name: "Send AI Chat message" }) as HTMLButtonElement).disabled).toBe(true);
-    fireEvent.click(screen.getByRole("button", { name: "Open AI Chat Settings" }));
+    expect(screen.getByText("AI Entry is not ready.")).toBeTruthy();
+    expect(screen.queryByLabelText("AI Chat message")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Send AI Chat message" })).toBeNull();
+    fireEvent.click(openSettingsButton());
     fireEvent.click(await screen.findByRole("tab", { name: "AI Chat" }));
     claudeAuth = screen.getByLabelText("Claude Code CLI readiness");
     fireEvent.click(within(claudeAuth).getByRole("button", { name: "Check readiness" }));
@@ -965,6 +1038,11 @@ function createMockOpenedTab(): MockOpenedTab {
   });
   openedHttpDeliveryTabs.push(tab);
   return tab;
+}
+
+function openSettingsButton(): HTMLElement {
+  const buttons = screen.getAllByRole("button", { name: "Open Settings" });
+  return buttons[buttons.length - 1] as HTMLElement;
 }
 
 function fileTabTitles(): string[] {
@@ -1179,4 +1257,11 @@ function parseJsonBody(body: BodyInit | null | undefined): Record<string, unknow
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), { status, headers: { "Content-Type": "application/json" } });
+}
+
+function streamJsonLines(events: unknown[]): Response {
+  return new Response(events.map((event) => JSON.stringify(event)).join("\n") + "\n", {
+    status: 200,
+    headers: { "Content-Type": "application/x-ndjson" },
+  });
 }

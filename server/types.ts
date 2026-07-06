@@ -218,6 +218,22 @@ export type AIChatMessage = {
   content: string;
 };
 
+export type AIIntelligenceLevel = "low" | "medium" | "high" | "xhigh";
+
+export type AIModelBehavior =
+  | { kind: "none" }
+  | { kind: "intelligence"; level: AIIntelligenceLevel }
+  | { kind: "thinking"; enabled: boolean };
+
+export type AIChatAttachment = {
+  id: string;
+  name: string;
+  mimeType: string;
+  sizeBytes: number;
+  contentIncluded: boolean;
+  content: string;
+};
+
 export type AIChatContextRequest = {
   repoId: string;
   path: string;
@@ -256,6 +272,8 @@ export type AIChatRequest = {
   provider?: AIProviderSettings;
   messages: AIChatMessage[];
   context: AIChatContextRequest;
+  attachments?: AIChatAttachment[];
+  modelBehavior?: AIModelBehavior;
 };
 
 export type AIChatResponse = {
@@ -263,3 +281,9 @@ export type AIChatResponse = {
   context: AIChatContext;
   status: AIConnectionStatus;
 };
+
+export type AIChatStreamEvent =
+  | { type: "meta"; context: AIChatContext; status?: AIConnectionStatus }
+  | { type: "delta"; content: string }
+  | { type: "done"; message: AIChatMessage; context: AIChatContext; status: AIConnectionStatus }
+  | { type: "error"; error: string };
