@@ -1199,6 +1199,9 @@ main:is(.app-shell, .settings-shell) {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
 }
+.settings-summary-grid.compact {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
 .settings-summary-grid > div {
   display: grid;
   gap: 4px;
@@ -1242,8 +1245,8 @@ main:is(.app-shell, .settings-shell) {
 }
 .repo-list-main {
   display: grid;
-  grid-template-columns: minmax(0, 1.3fr) minmax(0, 1.7fr) minmax(120px, 0.8fr) minmax(110px, 0.7fr) minmax(110px, 0.7fr);
-  align-items: start;
+  grid-template-columns: minmax(160px, 0.85fr) minmax(0, 1.45fr) auto;
+  align-items: center;
   gap: 12px;
   width: 100%;
   border: 0;
@@ -1267,11 +1270,18 @@ main:is(.app-shell, .settings-shell) {
   margin-top: 2px;
   overflow-wrap: anywhere;
 }
+.repo-list-title,
+.repo-list-root {
+  min-width: 0;
+}
 .repo-row-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
   justify-content: flex-end;
+}
+.repo-row-details {
+  margin-top: -2px;
 }
 .chip-list {
   display: flex;
@@ -1352,6 +1362,36 @@ main:is(.app-shell, .settings-shell) {
 .validation-item small {
   color: #61717a;
   margin-top: 2px;
+}
+.settings-details {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  border: 1px solid #d8e1e4;
+  border-radius: 7px;
+  background: #ffffff;
+  color: #24333a;
+  padding: 12px;
+}
+.settings-details.wide {
+  grid-column: 1 / -1;
+}
+.settings-details summary {
+  width: fit-content;
+  max-width: 100%;
+  color: #405058;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 850;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+.settings-details summary:focus-visible {
+  outline: 2px solid #4b9faf;
+  outline-offset: 3px;
+}
+.settings-details[open] summary {
+  margin-bottom: 8px;
 }
 .permission-grid,
 .policy-grid {
@@ -1979,6 +2019,7 @@ main:is(.app-shell, .settings-shell) {
 .settings-shell[data-color-mode="dark"] .setting-row.inline-row,
 .settings-shell[data-color-mode="dark"] .settings-toggle.detailed,
 .settings-shell[data-color-mode="dark"] .repo-list-row,
+.settings-shell[data-color-mode="dark"] .settings-details,
 .settings-shell[data-color-mode="dark"] .chip-list span,
 .settings-shell[data-color-mode="dark"] .validation-item,
 .settings-shell[data-color-mode="dark"] .toggle-card,
@@ -2180,6 +2221,7 @@ main:is(.app-shell, .settings-shell) {
 .settings-shell[data-color-mode="dark"] .settings-status-card span,
 .settings-shell[data-color-mode="dark"] .settings-status-card small,
 .settings-shell[data-color-mode="dark"] .settings-card-heading span,
+.settings-shell[data-color-mode="dark"] .settings-details summary,
 .settings-shell[data-color-mode="dark"] .settings-summary-grid span,
 .settings-shell[data-color-mode="dark"] .settings-field span,
 .settings-shell[data-color-mode="dark"] .setting-row small,

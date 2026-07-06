@@ -426,77 +426,38 @@ function RepositoriesSettingsPanel({
   const checks = validation?.checks || [];
   const selectedEntryChecks = selectedRepo ? checks.filter((item) => item.id.startsWith(`entry:${selectedRepoIndex}:`)) : [];
   const configChecks = checks.filter((item) => !item.id.startsWith("entry:"));
-  const configStatus = repoState?.parseError ? "Parse error" : saveStateLabel(saveState);
+  const validationIssues = checks.filter((item) => item.status !== "ready");
+  const validationSummary = validation ? validation.valid ? "Ready" : `${validationIssues.length} issue${validationIssues.length === 1 ? "" : "s"}` : "Not validated";
+  const statusMessageClass = repoState?.parseError || saveState === "failed" ? "error" : saveState === "pending" ? "warning" : saveState === "saved" ? "success" : "";
+  const statusMessage = repoState?.parseError || message || "Repository config loaded.";
   return (
     <section className="settings-page repositories-page" aria-label="Repositories settings">
-      <SettingsCard title="Repository config" eyebrow="Config Source" status={configStatus}>
-        <div className="settings-summary-grid">
-          <SummaryItem label="Config file" value={repoState?.configPath || "Loading..."} />
-          <SummaryItem label="Source mode" value={repoState?.sourceMode === "env" ? "READER_WIKI_CONFIG" : "Default repositories.yaml"} />
-          <SummaryItem label="Write access" value={repoState?.writable ? "Writable" : "Not writable"} />
-          <SummaryItem label="Last validation" value={validation?.valid ? "Ready" : "Needs review"} />
-        </div>
-        {repoState?.parseError ? <p className="settings-message error">{repoState.parseError}</p> : null}
-        <div className="settings-action-row">
-          <button type="button" className="secondary-button" onClick={onValidate}>
-            Validate config
-          </button>
-          <button type="button" className="secondary-button" onClick={onPreview}>
-            Preview YAML
-          </button>
-        </div>
-        <p className={`settings-message ${saveState === "failed" ? "error" : ""}`}>{message || "Repository config loaded."}</p>
-        {previewOpen ? (
-          <pre className="yaml-preview" aria-label="Generated YAML preview">
-            <code>{yamlPreview}</code>
-          </pre>
-        ) : null}
-        {yamlPreview ? (
-          <button type="button" className="text-button" onClick={() => onPreviewOpenChange(!previewOpen)}>
-            {previewOpen ? "Hide YAML preview" : "Show last YAML preview"}
-          </button>
-        ) : null}
-      </SettingsCard>
-
       <SettingsCard title="Repositories list" eyebrow="Registered Repositories" status={`${repoDraft.length} entries`}>
+        <p className={`settings-message ${statusMessageClass}`}>{statusMessage}</p>
         <div className="repo-list" aria-label="Registered repositories">
           {repoDraft.map((repo, index) => (
             <div key={`${repo.id}-${index}`} className={`repo-list-row${index === selectedRepoIndex ? " active" : ""}`}>
               <button type="button" className="repo-list-main" onClick={() => onSelectedRepoChange(index)}>
-                <span>
+                <span className="repo-list-title">
                   <strong>{repo.label || "Untitled repository"}</strong>
                   <small>{repo.id || "missing-id"}</small>
                 </span>
-                <span>
+                <span className="repo-list-root">
                   <strong>Root</strong>
                   <small>{repo.root || "Missing root path"}</small>
                 </span>
-                <span>
-                  <strong>Default path</strong>
-                  <small>{repo.defaultPath || "No default path"}</small>
-                </span>
-                <span>
-                  <strong>Status</strong>
-                  <small>{entryStatusLabel(checks, index)}</small>
-                </span>
-                <span>
-                  <strong>Fetch remote</strong>
-                  <small>{repo.fetchRemote ? "Fetch-only enabled" : "Fetch off"}</small>
-                </span>
+                <span className={`status-pill ${entryStatusClass(checks, index)}`}>{entryStatusLabel(checks, index)}</span>
               </button>
+              <details className="settings-details repo-row-details" aria-label={`${repo.label || repo.id || "Repository"} details`}>
+                <summary>Details</summary>
+                <div className="settings-summary-grid compact">
+                  <SummaryItem label="Default path" value={repo.defaultPath || "No default path"} />
+                  <SummaryItem label="Fetch remote" value={repo.fetchRemote ? "Fetch-only enabled" : "Fetch off"} />
+                </div>
+              </details>
               <div className="repo-row-actions">
                 <button type="button" className="secondary-button" onClick={() => onSelectedRepoChange(index)}>
                   Edit
-                </button>
-                <button
-                  type="button"
-                  className="secondary-button"
-                  onClick={() => {
-                    onSelectedRepoChange(index);
-                    onValidate();
-                  }}
-                >
-                  Validate
                 </button>
                 <button type="button" className="danger-button" onClick={() => onRemoveRepository(index)}>
                   Remove from list
@@ -509,9 +470,6 @@ function RepositoriesSettingsPanel({
           <button type="button" className="secondary-button" onClick={onAddRepository}>
             Add repository
           </button>
-          <button type="button" className="danger-button" onClick={() => onRemoveRepository()} disabled={!selectedRepo}>
-            Remove from list
-          </button>
         </div>
         <p className="settings-message">Remove from list only edits the config draft. Reader-Wiki does not delete repository directories.</p>
       </SettingsCard>
@@ -522,41 +480,74 @@ function RepositoriesSettingsPanel({
             <Field label="Repository ID" value={selectedRepo.id} onChange={(id) => onUpdateSelectedRepo({ id })} />
             <Field label="Label" value={selectedRepo.label} onChange={(label) => onUpdateSelectedRepo({ label })} />
             <Field label="Root absolute path" value={selectedRepo.root} onChange={(root) => onUpdateSelectedRepo({ root })} wide />
-            <Field label="Default path" value={selectedRepo.defaultPath} onChange={(defaultPath) => onUpdateSelectedRepo({ defaultPath })} />
-            <label className="settings-field wide">
-              <span>Excludes</span>
-              <textarea value={selectedRepo.excludes.join("\n")} rows={4} onChange={(event) => onUpdateSelectedRepo({ excludes: event.target.value.split("\n").map((item) => item.trim()).filter(Boolean) })} />
-            </label>
-            <div className="chip-list wide" aria-label="Exclude chips">
-              {selectedRepo.excludes.length ? selectedRepo.excludes.map((exclude) => <span key={exclude}>{exclude}</span>) : <span>No excludes configured</span>}
-            </div>
-            <label className="settings-toggle wide">
-              <input type="checkbox" checked={selectedRepo.fetchRemote} onChange={(event) => onUpdateSelectedRepo({ fetchRemote: event.target.checked })} />
-              <span>Fetch-only Git sync</span>
-            </label>
-            <div className="settings-action-row wide">
-              <button type="button" className="secondary-button" onClick={onValidate}>
-                Validate entry
-              </button>
-            </div>
+            <details className="settings-details wide" aria-label="Advanced repository options">
+              <summary>Advanced repository options</summary>
+              <div className="repo-form-grid">
+                <Field label="Default path" value={selectedRepo.defaultPath} onChange={(defaultPath) => onUpdateSelectedRepo({ defaultPath })} />
+                <label className="settings-field wide">
+                  <span>Excludes</span>
+                  <textarea value={selectedRepo.excludes.join("\n")} rows={4} onChange={(event) => onUpdateSelectedRepo({ excludes: event.target.value.split("\n").map((item) => item.trim()).filter(Boolean) })} />
+                </label>
+                <div className="chip-list wide" aria-label="Exclude chips">
+                  {selectedRepo.excludes.length ? selectedRepo.excludes.map((exclude) => <span key={exclude}>{exclude}</span>) : <span>No excludes configured</span>}
+                </div>
+                <label className="settings-toggle wide">
+                  <input type="checkbox" checked={selectedRepo.fetchRemote} onChange={(event) => onUpdateSelectedRepo({ fetchRemote: event.target.checked })} />
+                  <span>Fetch-only Git sync</span>
+                </label>
+                {selectedRepo.fetchRemote ? <p className="settings-message warning wide">Fetch-only means no pull, checkout, merge, reset, or working tree changes.</p> : null}
+              </div>
+            </details>
           </div>
         ) : (
           <p className="settings-message">Add a repository entry to start editing.</p>
         )}
-        {selectedRepo?.fetchRemote ? <p className="settings-message warning">Fetch-only means no pull, checkout, merge, reset, or working tree changes.</p> : null}
       </SettingsCard>
 
-      <SettingsCard title="Repository entry checks" eyebrow="Validation" status={selectedEntryChecks.length && selectedEntryChecks.every((item) => item.status === "ready") ? "Ready" : "Needs review"}>
+      <details className="settings-details" aria-label="Config details">
+        <summary>Config details</summary>
+        <div className="settings-summary-grid">
+          <SummaryItem label="Config file" value={repoState?.configPath || "Loading..."} />
+          <SummaryItem label="Source mode" value={repoState?.sourceMode === "env" ? "READER_WIKI_CONFIG" : "Default repositories.yaml"} />
+          <SummaryItem label="Write access" value={repoState?.writable ? "Writable" : "Not writable"} />
+          <SummaryItem label="Last validation" value={validation?.valid ? "Ready" : "Needs review"} />
+        </div>
+        {repoState?.parseError ? <p className="settings-message error">{repoState.parseError}</p> : null}
+        <p className={`settings-message ${statusMessageClass}`}>{statusMessage}</p>
+      </details>
+
+      <details className="settings-details" aria-label="Validation details">
+        <summary>Validation details</summary>
+        <div className="setting-row inline-row">
+          <div>
+            <span>Validation status</span>
+            <strong>{validationSummary}</strong>
+            <small>{validationIssues[0]?.message || (validation?.valid ? "Repository config is valid." : "Run validation to see repository config checks.")}</small>
+          </div>
+          <button type="button" className="secondary-button" onClick={onValidate}>
+            Validate config
+          </button>
+        </div>
+        <div className="subsection-title">Repository entry checks</div>
         <div className="validation-list">
           {selectedEntryChecks.length ? selectedEntryChecks.map((item) => <ValidationRow key={item.id} item={item} />) : <p className="settings-message">Run validation to see entry checks.</p>}
         </div>
-      </SettingsCard>
-
-      <SettingsCard title="Config checks" eyebrow="Validation" status={validation?.valid ? "Ready" : "Needs review"}>
+        <div className="subsection-title">Config checks</div>
         <div className="validation-list">
           {configChecks.length ? configChecks.map((item) => <ValidationRow key={item.id} item={item} />) : <p className="settings-message">Run validation to see config checks.</p>}
         </div>
-      </SettingsCard>
+      </details>
+
+      <details className="settings-details" aria-label="YAML preview" open={previewOpen} onToggle={(event) => onPreviewOpenChange(event.currentTarget.open)}>
+        <summary>YAML preview</summary>
+        {yamlPreview ? (
+          <pre className="yaml-preview" aria-label="Generated YAML preview">
+            <code>{yamlPreview}</code>
+          </pre>
+        ) : (
+          <p className="settings-message">Generate a YAML preview to inspect the saved shape before writing config.</p>
+        )}
+      </details>
     </section>
   );
 }
@@ -1061,6 +1052,12 @@ function entryStatusLabel(checks: RepositoryConfigValidation["checks"], index: n
   const entryChecks = checks.filter((item) => item.id.startsWith(`entry:${index}:`));
   if (!entryChecks.length) return "Not validated";
   return entryChecks.every((item) => item.status === "ready") ? "Ready" : "Needs review";
+}
+
+function entryStatusClass(checks: RepositoryConfigValidation["checks"], index: number): string {
+  const entryChecks = checks.filter((item) => item.id.startsWith(`entry:${index}:`));
+  if (!entryChecks.length) return "";
+  return entryChecks.every((item) => item.status === "ready") ? "success" : "error";
 }
 
 function entryLabel(entry: AIEntryKind): string {

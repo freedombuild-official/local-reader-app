@@ -276,6 +276,7 @@ describe("App", () => {
     expect(cssRule(".readiness-details")).toContain("border-top: 1px solid #e0e7ea;");
     expect(cssRule(".policy-grid")).toContain("repeat(3, minmax(0, 1fr))");
     expect(cssRule(".endpoint-settings-panel")).toContain("grid-column: 1 / -1;");
+    expect(cssRule(".settings-details")).toContain("border: 1px solid #d8e1e4;");
   });
 
   it("drops stale tree preload responses when switching repositories", async () => {
@@ -682,18 +683,42 @@ describe("App", () => {
     fireEvent.click(screen.getByRole("button", { name: "Open Settings" }));
     fireEvent.click(await screen.findByRole("tab", { name: "Repositories" }));
 
-    expect(await screen.findByText("/tmp/reader-wiki/repositories.yaml")).toBeTruthy();
-    expect(screen.getByText("Default repositories.yaml")).toBeTruthy();
     expect(screen.getByText("Docs")).toBeTruthy();
     expect(screen.getByText("/tmp/docs")).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "Repository config" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Repository entry checks" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Config checks" })).toBeNull();
+
+    const rowDetails = screen.getByLabelText("Docs details") as HTMLDetailsElement;
+    expect(rowDetails.open).toBe(false);
+    fireEvent.click(within(rowDetails).getByText("Details"));
+    expect(rowDetails.open).toBe(true);
     expect(screen.getByText("README.md")).toBeTruthy();
+
+    const advancedOptions = screen.getByLabelText("Advanced repository options") as HTMLDetailsElement;
+    expect(advancedOptions.open).toBe(false);
+    fireEvent.click(within(advancedOptions).getByText("Advanced repository options"));
+    expect(advancedOptions.open).toBe(true);
     expect(screen.getByText(".git")).toBeTruthy();
     expect(screen.getByText("node_modules")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Validate entry" }));
+
+    const configDetails = screen.getByLabelText("Config details") as HTMLDetailsElement;
+    expect(configDetails.open).toBe(false);
+    fireEvent.click(within(configDetails).getByText("Config details"));
+    expect(configDetails.open).toBe(true);
+    expect(screen.getByText("/tmp/reader-wiki/repositories.yaml")).toBeTruthy();
+    expect(screen.getByText("Default repositories.yaml")).toBeTruthy();
+
+    const validationDetails = screen.getByLabelText("Validation details") as HTMLDetailsElement;
+    expect(validationDetails.open).toBe(false);
+    fireEvent.click(within(validationDetails).getByText("Validation details"));
+    expect(validationDetails.open).toBe(true);
+    fireEvent.click(within(validationDetails).getByRole("button", { name: "Validate config" }));
     expect(await screen.findByText("docs root is absolute path")).toBeTruthy();
     fireEvent.click(screen.getAllByRole("button", { name: "Preview YAML" })[0]);
+    const yamlDetails = await screen.findByLabelText("YAML preview") as HTMLDetailsElement;
+    expect(yamlDetails.open).toBe(true);
     expect(await screen.findByLabelText("Generated YAML preview")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Validate config" }));
     expect((await screen.findAllByText("Repository config is valid.")).length).toBeGreaterThan(0);
     fireEvent.change(screen.getByLabelText("Label"), { target: { value: "Docs updated" } });
     expect(screen.getAllByText("Unsaved").length).toBeGreaterThan(0);
