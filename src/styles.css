@@ -137,7 +137,6 @@ main:is(.app-shell, .settings-shell) {
   overflow: hidden;
 }
 
-.sidebar-header { padding-right: 34px; }
 .sidebar-header h1 { margin: 0; font-size: 24px; letter-spacing: 0; }
 .sidebar-header p { margin: 6px 0 20px; color: #61717a; font-size: 13px; }
 .icon-button {
@@ -159,18 +158,15 @@ main:is(.app-shell, .settings-shell) {
   outline: 0;
 }
 .icon-button svg { width: 16px; height: 16px; }
-.tree-action-button { flex: 0 0 auto; }
-.sidebar-tree-action {
-  position: absolute;
-  top: 12px;
-  right: 14px;
-  z-index: 3;
-  border-color: #d8e1e4;
-  background: #ffffff;
-  box-shadow: 0 1px 3px rgba(17, 32, 39, 0.08);
-}
 .repo-picker-label { display: block; color: #3f515a; font-size: 12px; font-weight: 700; margin-bottom: 6px; }
+.repo-picker-row { display: flex; align-items: center; gap: 8px; width: 100%; }
 .repo-picker { width: 100%; border: 1px solid #c6d1d6; border-radius: 7px; padding: 9px 10px; background: #fff; color: #172026; }
+.repo-picker-row .repo-picker { flex: 1 1 auto; min-width: 0; width: auto; }
+.repo-action-button { flex: 0 0 auto; border-color: #d8e1e4; background: #ffffff; color: #5f7078; box-shadow: 0 1px 3px rgba(17, 32, 39, 0.08); }
+.repo-action-button:hover:not(:disabled), .repo-action-button:focus-visible:not(:disabled) { border-color: #c6d1d6; background: #eef4f6; color: #172026; }
+.repo-action-button:disabled { cursor: default; opacity: 0.5; }
+.repo-reload-button.loading svg { animation: repo-reload-spin 900ms linear infinite; }
+@keyframes repo-reload-spin { to { transform: rotate(360deg); } }
 .repo-root { margin: 8px 0 6px; color: #63737b; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .repo-sync-status {
   margin: 0 0 14px;
@@ -2233,6 +2229,7 @@ main:is(.app-shell, .settings-shell) {
 }
 
 .app-shell[data-color-mode="dark"] .repo-picker,
+.app-shell[data-color-mode="dark"] .repo-action-button,
 .app-shell[data-color-mode="dark"] .segmented,
 .app-shell[data-color-mode="dark"] .segmented button,
 .app-shell[data-color-mode="dark"] .mode-label,
@@ -2326,7 +2323,6 @@ main:is(.app-shell, .settings-shell) {
   background: var(--rw-dark-danger-bg);
 }
 
-.app-shell[data-color-mode="dark"] .sidebar-tree-action,
 .app-shell[data-color-mode="dark"] .sidebar-settings-button,
 .app-shell[data-color-mode="dark"] .viewer-copy-button,
 .settings-shell[data-color-mode="dark"] .settings-mark {
@@ -2346,14 +2342,13 @@ main:is(.app-shell, .settings-shell) {
   color: var(--rw-dark-icon-strong);
 }
 
-.app-shell[data-color-mode="dark"] .icon-button.sidebar-tree-action,
+.app-shell[data-color-mode="dark"] .icon-button.repo-action-button,
 .app-shell[data-color-mode="dark"] .icon-button.sidebar-settings-button {
   border-color: var(--rw-dark-border-strong);
   background: var(--rw-dark-panel-soft);
   color: var(--rw-dark-icon-strong);
 }
 
-.app-shell[data-color-mode="dark"] .sidebar-tree-action svg,
 .app-shell[data-color-mode="dark"] .sidebar-settings-button svg,
 .app-shell[data-color-mode="dark"] .tree-chevron svg {
   stroke-width: 2.3;

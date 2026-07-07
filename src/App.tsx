@@ -18,6 +18,7 @@ import {
   ListCollapse,
   MessageSquare,
   Package,
+  RefreshCw,
   ScrollText,
   Settings as SettingsIcon,
   ShieldCheck,
@@ -119,6 +120,7 @@ export function App() {
   const [httpDeliveryError, setHttpDeliveryError] = useState("");
   const [httpDeliveryPendingPath, setHttpDeliveryPendingPath] = useState("");
   const [httpDeliveryStoppingIds, setHttpDeliveryStoppingIds] = useState<Set<string>>(() => new Set());
+  const [repositoryReloadingRepoId, setRepositoryReloadingRepoId] = useState("");
   const [treeScrollTop, setTreeScrollTop] = useState(0);
   const [treeHorizontalScrollLeft, setTreeHorizontalScrollLeft] = useState(0);
   const treeSectionRef = useRef<HTMLDivElement | null>(null);
@@ -126,12 +128,18 @@ export function App() {
   const pathMenuRef = useRef<HTMLDivElement | null>(null);
   const viewerBodyRef = useRef<HTMLDivElement | null>(null);
   const repoLoadTokenRef = useRef(0);
+  const repoReloadTokenRef = useRef(0);
+  const activeRepoIdRef = useRef("");
 
   useEffect(() => {
     const loaded = loadBasicSettings();
     setBasicSettings(loaded.settings);
     setBasicSaveError(loaded.error);
   }, []);
+
+  useEffect(() => {
+    activeRepoIdRef.current = activeRepoId;
+  }, [activeRepoId]);
 
   const activeRepo = useMemo(() => repos.find((repo) => repo.id === activeRepoId) || null, [activeRepoId, repos]);
   const activeRepoSyncStatus = activeRepoId ? repoSyncByRepo[activeRepoId] || null : null;
@@ -158,6 +166,7 @@ export function App() {
     : httpDeliveryAtCapacity
       ? `HTTP Delivery supports up to ${HTTP_DELIVERY_MAX_SESSIONS} files`
       : "Start HTTP Delivery";
+  const repositoryReloading = Boolean(activeRepoId && repositoryReloadingRepoId === activeRepoId);
   const readerTypographyStyle = useMemo(() => buildReaderTypographyStyle(basicSettings.readerFontScale), [basicSettings.readerFontScale]);
   const aiModelBehavior = useMemo(() => activeAIModelBehavior(aiSettings), [aiSettings]);
 
@@ -255,6 +264,8 @@ export function App() {
     async (repo: RepoListItem) => {
       const loadToken = repoLoadTokenRef.current + 1;
       repoLoadTokenRef.current = loadToken;
+      repoReloadTokenRef.current += 1;
+      setRepositoryReloadingRepoId("");
       setActiveRepoId(repo.id);
       setTreeCache({});
       setExpanded(new Set([""]));
@@ -290,6 +301,48 @@ export function App() {
     },
     [activeTabByRepo, openFile, refreshFileTab, tabsByRepo],
   );
+
+  const reloadActiveRepositoryView = useCallback(async () => {
+    if (!activeRepoId) return;
+    const repoId = activeRepoId;
+    const reloadToken = repoReloadTokenRef.current + 1;
+    repoReloadTokenRef.current = reloadToken;
+    const tabsSnapshot = tabsByRepo[repoId] || [];
+
+    setRepositoryReloadingRepoId(repoId);
+    setError("");
+    setTabNotice("");
+    setRepoSyncByRepo((current) => ({
+      ...current,
+      [repoId]: { state: "syncing", message: "Reloading repository metadata...", fetched: false },
+    }));
+
+    try {
+      const opened = await openRepository(repoId);
+      const stillActive = repoReloadTokenRef.current === reloadToken && activeRepoIdRef.current === repoId && opened.repoId === repoId;
+      if (stillActive) {
+        setTreeCache(opened.tree);
+        setRepoSyncByRepo((current) => ({ ...current, [repoId]: opened.sync }));
+      }
+      if (opened.repoId === repoId && tabsSnapshot.length) {
+        await Promise.all(tabsSnapshot.map((tab) => refreshFileTab(repoId, tab.id, tab.path)));
+      }
+    } catch (reloadError) {
+      const message = reloadError instanceof Error ? reloadError.message : String(reloadError);
+      const stillActive = repoReloadTokenRef.current === reloadToken && activeRepoIdRef.current === repoId;
+      if (stillActive) {
+        setRepoSyncByRepo((current) => ({
+          ...current,
+          [repoId]: { state: "warning", message, fetched: false },
+        }));
+        setError(message);
+      }
+    } finally {
+      if (repoReloadTokenRef.current === reloadToken) {
+        setRepositoryReloadingRepoId("");
+      }
+    }
+  }, [activeRepoId, refreshFileTab, tabsByRepo]);
 
   const reloadRepositoriesAfterSettingsSave = useCallback(async () => {
     const nextRepos = await fetchRepos();
@@ -578,15 +631,6 @@ export function App() {
   return (
     <main className={appShellClass} data-color-mode={basicSettings.colorMode}>
       <aside className="sidebar" aria-label="Repositories and files">
-        <button
-          type="button"
-          className="icon-button tree-action-button sidebar-tree-action"
-          aria-label="Collapse all folders"
-          title="Collapse all folders"
-          onClick={collapseAllFolders}
-        >
-          <ListCollapse aria-hidden="true" focusable="false" strokeWidth={1.8} />
-        </button>
         <header className="sidebar-header">
           <h1>Reader-Wiki</h1>
           <p>Local read-only repository viewer</p>
@@ -595,21 +639,43 @@ export function App() {
         <label className="repo-picker-label" htmlFor="repo-picker">
           Repository
         </label>
-        <select
-          id="repo-picker"
-          className="repo-picker"
-          value={activeRepoId}
-          onChange={(event) => {
-            const repo = repos.find((candidate) => candidate.id === event.target.value);
-            if (repo) void selectRepo(repo);
-          }}
-        >
-          {repos.map((repo) => (
-            <option key={repo.id} value={repo.id}>
-              {repo.label}
-            </option>
-          ))}
-        </select>
+        <div className="repo-picker-row">
+          <select
+            id="repo-picker"
+            className="repo-picker"
+            value={activeRepoId}
+            onChange={(event) => {
+              const repo = repos.find((candidate) => candidate.id === event.target.value);
+              if (repo) void selectRepo(repo);
+            }}
+          >
+            {repos.map((repo) => (
+              <option key={repo.id} value={repo.id}>
+                {repo.label}
+              </option>
+            ))}
+          </select>
+          <button
+            type="button"
+            className={`icon-button repo-action-button repo-reload-button${repositoryReloading ? " loading" : ""}`}
+            aria-label="Reload repository"
+            title="Reload repository"
+            disabled={!activeRepoId || repositoryReloading}
+            aria-busy={repositoryReloading ? "true" : undefined}
+            onClick={() => void reloadActiveRepositoryView()}
+          >
+            <RefreshCw aria-hidden="true" focusable="false" strokeWidth={1.9} />
+          </button>
+          <button
+            type="button"
+            className="icon-button repo-action-button repo-collapse-button"
+            aria-label="Collapse all folders"
+            title="Collapse all folders"
+            onClick={collapseAllFolders}
+          >
+            <ListCollapse aria-hidden="true" focusable="false" strokeWidth={1.8} />
+          </button>
+        </div>
         {activeRepo ? <p className="repo-root" title={activeRepo.root}>{activeRepo.root}</p> : null}
         {visibleRepoSyncStatus ? (
           <p className={`repo-sync-status ${visibleRepoSyncStatus.state}`} aria-live="polite">

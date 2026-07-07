@@ -56,6 +56,14 @@ function fetchCallsTo(pathname: string) {
   return fetchMock.mock.calls.filter(([input]) => String(input) === pathname);
 }
 
+function fileFetchCallsFor(pathname: string) {
+  return fetchMock.mock.calls.filter(([input]) => {
+    const value = String(input);
+    if (!value.startsWith("/api/file")) return false;
+    return new URL(`http://reader-wiki.local${value}`).searchParams.get("path") === pathname;
+  });
+}
+
 function installLocalStorageMock(): void {
   const store = new Map<string, string>();
   Object.defineProperty(window, "localStorage", {
@@ -325,6 +333,121 @@ describe("App", () => {
     expect(cssRule(".policy-grid")).toContain("repeat(3, minmax(0, 1fr))");
     expect(cssRule(".endpoint-settings-panel")).toContain("grid-column: 1 / -1;");
     expect(cssRule(".settings-details")).toContain("border: 1px solid #d8e1e4;");
+  });
+
+  it("reloads the active repository tree and all open file tabs without resetting side state", async () => {
+    render(<App />);
+
+    expect(await screen.findByRole("heading", { name: "Hello" })).toBeTruthy();
+    const repoPickerRow = document.querySelector(".repo-picker-row") as HTMLElement;
+    expect(repoPickerRow).toBeTruthy();
+    expect(cssRule(".repo-picker-row")).toContain("display: flex;");
+    expect(cssRule(".repo-picker-row .repo-picker")).toContain("min-width: 0;");
+    expect(cssRule(".repo-action-button")).toContain("flex: 0 0 auto;");
+    expect(document.querySelector(".sidebar-tree-action")).toBeNull();
+    expect(Array.from(repoPickerRow.children).map((child) => child.getAttribute("aria-label") || child.id)).toEqual([
+      "repo-picker",
+      "Reload repository",
+      "Collapse all folders",
+    ]);
+    expect(repoPickerRow.querySelector('[aria-label="Reload repository"]')).toBeTruthy();
+    expect(repoPickerRow.querySelector('[aria-label="Collapse all folders"]')).toBeTruthy();
+    expect(document.querySelector(".viewer-copy-actions")?.querySelector('[aria-label="Reload repository"]')).toBeNull();
+    expect(document.querySelector(".viewer-copy-actions")?.querySelector('[aria-label="Collapse all folders"]')).toBeNull();
+
+    fireEvent.doubleClick(screen.getByRole("tab", { name: "README.md" }));
+    fireEvent.click(screen.getByRole("button", { name: "guide.md" }));
+    expect(await screen.findByRole("heading", { name: "Guide" })).toBeTruthy();
+    expect(fileTabTitles()).toEqual(["README.md", "guide.md"]);
+
+    fireEvent.click(screen.getByRole("tab", { name: "Memo" }));
+    fireEvent.change(screen.getByLabelText("Session memo"), { target: { value: "reload memo" } });
+
+    fireEvent.click(openSettingsButton());
+    expect(await screen.findByRole("heading", { name: "Settings" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("tab", { name: "AI Chat" }));
+    const codexCliEntry = screen.getByLabelText(["Co", "dex CLI entry"].join(""));
+    fireEvent.click(within(codexCliEntry).getByRole("button", { name: "Set active" }));
+    const codexCliReadiness = screen.getByLabelText(["Co", "dex CLI readiness"].join(""));
+    await waitFor(() => expect(within(codexCliReadiness).getByRole("button", { name: "Check again" })).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "Back to viewer" }));
+    fireEvent.click(screen.getByRole("tab", { name: "AI Chat" }));
+    const chatInput = await screen.findByLabelText("AI Chat message");
+    fireEvent.change(chatInput, { target: { value: "reload draft" } });
+
+    const readmeFetchesBeforeReload = fileFetchCallsFor("README.md").length;
+    const guideFetchesBeforeReload = fileFetchCallsFor("guide.md").length;
+    const repoOpenCallsBeforeReload = fetchCallsTo("/api/repo-open").length;
+    repoOpenHandler = (body) => {
+      const repoId = String(body.repoId || "docs");
+      return json({
+        repoId,
+        sync: { state: "synced", message: "Git remote metadata fetched.", fetched: true },
+        tree: {
+          "": [
+            ...treeNodes,
+            { name: "fresh.md", path: "fresh.md", type: "file", extension: ".md" },
+          ],
+          docs: docsTreeNodes,
+        },
+      });
+    };
+
+    fireEvent.click(screen.getByRole("button", { name: "Reload repository" }));
+
+    expect(await screen.findByRole("button", { name: "fresh.md" })).toBeTruthy();
+    expect(fetchCallsTo("/api/repo-open").length).toBe(repoOpenCallsBeforeReload + 1);
+    await waitFor(() => expect(fileFetchCallsFor("README.md").length).toBeGreaterThan(readmeFetchesBeforeReload));
+    await waitFor(() => expect(fileFetchCallsFor("guide.md").length).toBeGreaterThan(guideFetchesBeforeReload));
+    expect(fileTabTitles()).toEqual(["README.md", "guide.md"]);
+    expect(screen.getByRole("tab", { name: "AI Chat" }).getAttribute("aria-selected")).toBe("true");
+    expect((screen.getByLabelText("AI Chat message") as HTMLTextAreaElement).value).toBe("reload draft");
+
+    fireEvent.click(screen.getByRole("tab", { name: "Memo" }));
+    expect((screen.getByLabelText("Session memo") as HTMLTextAreaElement).value).toBe("reload memo");
+  });
+
+  it("drops stale repository reload tree responses after switching repositories", async () => {
+    let resolveReload: ((response: Response) => void) | undefined;
+    render(<App />);
+
+    expect(await screen.findByRole("heading", { name: "Hello" })).toBeTruthy();
+    repoOpenHandler = (body) => {
+      const repoId = String(body.repoId || "docs");
+      if (repoId === "docs") {
+        return new Promise<Response>((resolve) => {
+          resolveReload = resolve;
+        });
+      }
+      return json({
+        repoId,
+        sync: { state: "synced", message: "Alt metadata fetched.", fetched: true },
+        tree: altTreeSnapshot,
+      });
+    };
+
+    fireEvent.click(screen.getByRole("button", { name: "Reload repository" }));
+    await waitFor(() => expect(resolveReload).toBeTruthy());
+    fireEvent.change(screen.getByLabelText("Repository"), { target: { value: "alt" } });
+    expect(await screen.findByRole("heading", { name: "Alt" })).toBeTruthy();
+
+    await act(async () => {
+      resolveReload?.(json({
+        repoId: "docs",
+        sync: { state: "synced", message: "Docs metadata fetched late.", fetched: true },
+        tree: {
+          "": [
+            ...treeNodes,
+            { name: "fresh.md", path: "fresh.md", type: "file", extension: ".md" },
+          ],
+          docs: docsTreeNodes,
+        },
+      }));
+    });
+
+    expect(screen.getByRole("button", { name: "ALT.md" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "fresh.md" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "README.md" })).toBeNull();
   });
 
   it("drops stale tree preload responses when switching repositories", async () => {
