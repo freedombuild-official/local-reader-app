@@ -321,6 +321,7 @@ describe("App", () => {
     expect(cssRule(".settings-main")).toContain("overflow-y: auto;");
     expect(cssRule(".yaml-preview")).toContain("overflow: auto;");
     expect(cssRule(".readiness-details")).toContain("border-top: 1px solid #e0e7ea;");
+    expect(cssRule(".entry-card")).toContain("align-content: start;");
     expect(cssRule(".policy-grid")).toContain("repeat(3, minmax(0, 1fr))");
     expect(cssRule(".endpoint-settings-panel")).toContain("grid-column: 1 / -1;");
     expect(cssRule(".settings-details")).toContain("border: 1px solid #d8e1e4;");

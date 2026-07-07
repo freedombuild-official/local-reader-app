@@ -1518,6 +1518,9 @@ main:is(.app-shell, .settings-shell) {
   background: #fbfcfd;
   padding: 12px;
 }
+.entry-card {
+  align-content: start;
+}
 .active-entry-summary strong,
 .active-entry-summary small,
 .entry-card h4,
