@@ -827,6 +827,10 @@ describe("App", () => {
     const nextAiApiEntry = aiApiEntry;
     fireEvent.click(within(nextAiApiEntry).getByRole("button", { name: "Set active" }));
     expect(within(nextAiApiEntry).getByRole("button", { name: "Clear active entry" })).toBeTruthy();
+    expect((document.querySelector(".active-entry-summary") as HTMLElement).textContent).toContain("This entry is selected for AI Chat.");
+    expect(within(nextAiApiEntry).queryByText("Enter the API credential for this provider.")).toBeNull();
+    expect(fetchCallsTo("/api/ai/test-connection")).toHaveLength(0);
+    expect(fetchCallsTo("/api/ai/entry-readiness")).toHaveLength(0);
     const connectionHeading = screen.getByRole("heading", { name: "Connection / Credentials" });
     expect(aiEntryHeading.compareDocumentPosition(connectionHeading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(connectionHeading.compareDocumentPosition(accessHeading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -918,8 +922,9 @@ describe("App", () => {
     const codexEntry = screen.getByLabelText(["Co", "dex CLI entry"].join(""));
     fireEvent.click(within(codexEntry).getByRole("button", { name: "Set active" }));
     const codexAuth = screen.getByLabelText(["Co", "dex CLI readiness"].join(""));
-    fireEvent.click(within(codexAuth).getByRole("button", { name: "Check readiness" }));
-    expect((await screen.findAllByText(["Co", "dex CLI read-only wrapper is ready."].join(""))).length).toBeGreaterThan(0);
+    expect(fetchCallsTo("/api/ai/entry-readiness")).toHaveLength(1);
+    await waitFor(() => expect(within(codexAuth).getByRole("button", { name: "Check again" })).toBeTruthy());
+    expect(within(codexAuth).getByText("Ready to use for AI Chat.")).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Back to viewer" }));
     fireEvent.click(await screen.findByRole("tab", { name: "AI Chat" }));
@@ -1054,6 +1059,7 @@ describe("App", () => {
     const codexEntry = screen.getByLabelText(codexEntryLabel);
     fireEvent.click(within(codexEntry).getByRole("button", { name: "Set active" }));
     const codexAuth = screen.getByLabelText(codexAuthLabel);
+    expect(fetchCallsTo("/api/ai/entry-readiness")).toHaveLength(1);
     expect(screen.getByRole("heading", { name: "CLI Readiness" })).toBeTruthy();
     expect(screen.queryByRole("heading", { name: "Connection / Credentials" })).toBeNull();
     expect(within(codexAuth).getAllByText("Not checked").length).toBeGreaterThan(0);
@@ -1065,8 +1071,8 @@ describe("App", () => {
     expect(within(codexDetailsBefore).getByLabelText("Readiness checklist").textContent).toContain("Existing sign-in");
     expect(within(codexDetailsBefore).getByLabelText("Readiness checklist").textContent).toContain("Read-only wrapper");
     expect(within(codexDetailsBefore).getByLabelText("Readiness checklist").textContent).toContain("Execution mode");
-    fireEvent.click(within(codexAuth).getByRole("button", { name: "Check readiness" }));
-    expect((await screen.findAllByText(["Co", "dex CLI read-only wrapper is ready."].join(""))).length).toBeGreaterThan(0);
+    expect(within(codexDetailsBefore).getByLabelText("Readiness checklist").textContent).toContain("Last check");
+    await waitFor(() => expect(within(codexAuth).getByRole("button", { name: "Check again" })).toBeTruthy());
     expect(within(codexAuth).getAllByText("Success").length).toBeGreaterThan(0);
     expect(within(codexAuth).getByText("Ready to use for AI Chat.")).toBeTruthy();
     expect(within(codexAuth).getByRole("button", { name: "Check again" })).toBeTruthy();
@@ -1089,17 +1095,9 @@ describe("App", () => {
     expect(screen.queryByRole("heading", { name: "Connection / Credentials" })).toBeNull();
     expect(screen.queryByText("Test active entry")).toBeNull();
     expect((screen.getByLabelText("Claude Code CLI readiness details") as HTMLDetailsElement).open).toBe(false);
-    fireEvent.click(screen.getByRole("button", { name: "Back to viewer" }));
-    fireEvent.click(await screen.findByRole("tab", { name: "AI Chat" }));
-    expect(screen.getByText("AI Entry is not ready.")).toBeTruthy();
-    expect(screen.queryByLabelText("AI Chat message")).toBeNull();
-    expect(screen.queryByRole("button", { name: "Send AI Chat message" })).toBeNull();
-    fireEvent.click(openSettingsButton());
-    fireEvent.click(await screen.findByRole("tab", { name: "AI Chat" }));
-    claudeAuth = screen.getByLabelText("Claude Code CLI readiness");
-    fireEvent.click(within(claudeAuth).getByRole("button", { name: "Check readiness" }));
-    expect((await screen.findAllByText("Claude Code CLI read-only wrapper is ready.")).length).toBeGreaterThan(0);
-
+    expect(fetchCallsTo("/api/ai/entry-readiness")).toHaveLength(2);
+    await waitFor(() => expect(within(claudeAuth).getByRole("button", { name: "Check again" })).toBeTruthy());
+    expect(within(claudeAuth).getByText("Ready to use for AI Chat.")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Back to viewer" }));
     fireEvent.click(await screen.findByRole("tab", { name: "AI Chat" }));
     fireEvent.change(screen.getByLabelText("AI Chat message"), { target: { value: "Summarize through other CLI." } });

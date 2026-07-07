@@ -213,9 +213,9 @@ export function SettingsView({
     setRepoMessage("Repository entry removed from the draft list. The directory was not touched.");
   }
 
-  async function testEntry(entry: AIEntryKind) {
+  async function testEntry(entry: AIEntryKind, settingsSnapshot?: AISettingsState) {
     const entryAtStart = entry;
-    const settingsAtStart = aiDraftRef.current;
+    const settingsAtStart = settingsSnapshot ? normalizeAISettingsState(settingsSnapshot) : aiDraftRef.current;
     const providerFingerprint = isProviderEntryKind(entryAtStart) ? providerSettingsFingerprint(aiEntryProvider(settingsAtStart, entryAtStart)) : "";
     setTestingEntry(entry);
     try {
@@ -244,7 +244,7 @@ export function SettingsView({
         return updateAIEntryStatus(current, entryAtStart, failed);
       });
     } finally {
-      setTestingEntry(null);
+      setTestingEntry((current) => (current === entryAtStart ? null : current));
     }
   }
 
@@ -348,7 +348,7 @@ export function SettingsView({
             repositories={repoDraft}
             dirty={aiDirty}
             onChange={commitAISettings}
-            onTestEntry={(entry) => void testEntry(entry)}
+            onTestEntry={(entry, settingsSnapshot) => void testEntry(entry, settingsSnapshot)}
           />
         ) : null}
       </section>
@@ -579,7 +579,7 @@ function AIChatSettingsPanel({
   repositories: RepositoryConfigEntryDraft[];
   dirty: boolean;
   onChange: (settings: AISettingsState) => void;
-  onTestEntry: (entry: AIEntryKind) => void;
+  onTestEntry: (entry: AIEntryKind, settingsSnapshot?: AISettingsState) => void;
 }) {
   const activeEntrySettings = activeAIEntry(settings);
   const activeEntry = settings.activeEntry;
@@ -590,7 +590,11 @@ function AIChatSettingsPanel({
   const behaviorCapability = activeEntry ? aiModelBehaviorCapability(settings, activeEntry) : null;
 
   function setActiveEntry(entry: AIEntryKind) {
-    onChange({ ...settings, activeEntry: entry });
+    const nextSettings = { ...settings, activeEntry: entry };
+    onChange(nextSettings);
+    if (isCliEntryKind(entry)) {
+      onTestEntry(entry, nextSettings);
+    }
   }
 
   function clearActiveEntry() {
@@ -615,7 +619,7 @@ function AIChatSettingsPanel({
         <div className="active-entry-summary">
           <span>Active AI Entry</span>
           <strong>{activeEntry ? entryLabel(activeEntry) : "No active AI Entry"}</strong>
-          <small>{activeEntry ? status.nextAction || "Only this entry is used for AI Chat." : "Choose one entry before checking readiness or sending AI Chat."}</small>
+          <small>{activeEntry ? "This entry is selected for AI Chat. Readiness and connection details are shown below." : "Choose one entry before checking readiness or sending AI Chat."}</small>
           {dirty ? <small>AI Chat settings have unsaved changes.</small> : null}
         </div>
         <div className="entry-grid" aria-label="AI Entry choices">
@@ -639,7 +643,7 @@ function AIChatSettingsPanel({
               entry="codexCli"
               title={entryLabel("codexCli")}
               subtitle="Existing CLI readiness"
-              note="Uses installed CLI authentication and fixed read-only invocation. No login, logout, browser launch, or repository writes are started here."
+              note="Checks installed CLI sign-in and the read-only wrapper. No login, browser launch, or repository writes are started here."
               configured={configured}
               lastCheckedAt={settings.lastCheckedAtByEntry.codexCli}
               status={effectiveAIStatus(settings, "codexCli")}
@@ -661,7 +665,7 @@ function AIChatSettingsPanel({
               entry="claudeCli"
               title={entryLabel("claudeCli")}
               subtitle="Existing CLI readiness"
-              note="Uses installed CLI authentication and a non-persistent print invocation with tools disabled. No login, logout, browser auth, or credential handling is started here."
+              note="Checks installed CLI sign-in and the tool-restricted print wrapper. No login, browser auth, or credential handling is started here."
               configured={configured}
               lastCheckedAt={settings.lastCheckedAtByEntry.claudeCli}
               status={effectiveAIStatus(settings, "claudeCli")}
@@ -850,12 +854,21 @@ function AuthenticationEntryCard({
       <details className="readiness-details" aria-label={`${title} readiness details`}>
         <summary>Details</summary>
         <div className="readiness-list" aria-label={checklistLabel}>
-          <ReadinessRow label="Active entry" status="ready" value={title} />
-          {cliEntry ? null : <ReadinessRow label="Connection fields" status={configured ? "ready" : "warning"} value={configured ? "Configured" : "Incomplete"} />}
-          <ReadinessRow label={cliEntry ? "Readiness check" : "Connection check"} status={readinessRowStatus(status)} value={statusLabelText || statusLabel(status)} detail={status.message} />
-          <ReadinessRow label="Next action" status={readinessRowStatus(status)} value={status.nextAction || "No action available"} />
-          <ReadinessRow label="Last check" status={lastCheckedAt ? "ready" : "warning"} value={formatLastCheck(lastCheckedAt)} />
-          {detailsChildren}
+          {cliEntry ? (
+            <>
+              {detailsChildren}
+              <ReadinessRow label="Last check" status={lastCheckedAt ? "ready" : "warning"} value={formatLastCheck(lastCheckedAt)} />
+            </>
+          ) : (
+            <>
+              <ReadinessRow label="Active entry" status="ready" value={title} />
+              <ReadinessRow label="Connection fields" status={configured ? "ready" : "warning"} value={configured ? "Configured" : "Incomplete"} />
+              <ReadinessRow label="Connection check" status={readinessRowStatus(status)} value={statusLabelText || statusLabel(status)} detail={status.message} />
+              <ReadinessRow label="Next action" status={readinessRowStatus(status)} value={status.nextAction || "No action available"} />
+              <ReadinessRow label="Last check" status={lastCheckedAt ? "ready" : "warning"} value={formatLastCheck(lastCheckedAt)} />
+              {detailsChildren}
+            </>
+          )}
         </div>
       </details>
     </article>
@@ -1067,7 +1080,6 @@ function AIEntryCard({
         <span className={active ? "ready" : ""}>{active ? "Active" : "Inactive"}</span>
         <span className={status.state === "ready" ? "ready" : status.state === "failed" ? "error" : ""}>{aiEntryStatusLabel(entry, status)}</span>
       </div>
-      {active ? <p className="settings-message">{status.nextAction || status.message}</p> : null}
       <button type="button" className="secondary-button" onClick={active ? onClearActive : onSetActive}>
         {active ? "Clear active entry" : "Set active"}
       </button>
