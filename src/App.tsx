@@ -1596,7 +1596,7 @@ function MemoPanel({ memoText, memoMode, onMemoTextChange, onMemoModeChange }: {
   onMemoModeChange: (mode: MemoMode) => void;
 }) {
   const [copyState, setCopyState] = useState<CopyState>("idle");
-  const renderedMemoHtml = useMemo(() => renderMemoMarkdown(memoText), [memoText]);
+  const renderedMemoHtml = useMemo(() => renderMemoMarkdown(stripYamlFrontmatterForRender(memoText)), [memoText]);
   const hasMemo = memoText.trim().length > 0;
   const copyLabel = copyState === "copied" ? "Memo copied" : copyState === "error" ? "Memo copy failed" : "Copy memo";
 
@@ -1857,6 +1857,19 @@ function withOutlineHeadingIds(html: string, outline: OutlineItem[]): string {
     heading.setAttribute("data-outline-id", item.id);
   });
   return document.body.innerHTML;
+}
+
+function stripYamlFrontmatterForRender(content: string): string {
+  const normalized = content.replace(/\r\n?/g, "\n");
+  if (!normalized.startsWith("---\n")) return content;
+  const lines = normalized.split("\n");
+  for (let index = 1; index < lines.length; index += 1) {
+    const marker = lines[index].trim();
+    if (marker === "---" || marker === "...") {
+      return lines.slice(index + 1).join("\n");
+    }
+  }
+  return content;
 }
 
 function renderMemoMarkdown(content: string): string {

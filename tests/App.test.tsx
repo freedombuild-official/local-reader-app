@@ -319,7 +319,7 @@ describe("App", () => {
     expect(cssRule(".sidebar")).toContain("padding: var(--rw-sidebar-padding-y) var(--rw-sidebar-padding-x);");
     expect(cssRule(".tree-row")).toContain("min-height: var(--rw-tree-row-min-height);");
     expect(cssRule(".viewer-body")).toContain("padding: var(--rw-viewer-padding-top) var(--rw-viewer-padding-x) var(--rw-viewer-padding-bottom);");
-    expect(cssRule(".viewer-copy-actions")).toContain("transform: translateY(-16px);");
+    expect(cssRule(".viewer-copy-actions")).toContain("transform: translateY(-22px);");
     expect(cssRule(".side-panel-body")).toContain("padding: var(--rw-side-panel-padding);");
     expect(stylesCss).toContain(".ai-context-chip-list,\n.ai-attachment-list,\n.ai-rule-chip-list {");
     expect(stylesCss).toContain("flex-wrap: nowrap;");
@@ -770,7 +770,25 @@ describe("App", () => {
     expect(screen.getByRole("tab", { name: "AI Chat" })).toBeTruthy();
     fireEvent.click(screen.getByRole("tab", { name: "Memo" }));
     const memo = screen.getByLabelText("Session memo") as HTMLTextAreaElement;
-    const memoContent = "# Scratch\n\n- [x] Review this section\n\n| A | B |\n| --- | --- |\n| 1 | 2 |\n\n```js\nconsole.log(1)\n```";
+    const memoContent = [
+      "---",
+      "title: Scratch source",
+      "status: draft",
+      "---",
+      "# Scratch",
+      "",
+      "- [x] Review this section",
+      "",
+      "Long link: https://example.com/really/long/path/that/should/not/move/the/memo/preview/horizontally",
+      "",
+      "| A | B |",
+      "| --- | --- |",
+      "| 1 | 2 |",
+      "",
+      "```js",
+      "console.log('a very long memo code line that should wrap inside the preview instead of forcing horizontal movement');",
+      "```",
+    ].join("\n");
     fireEvent.change(memo, { target: { value: memoContent } });
     expect(memo.value).toBe(memoContent);
 
@@ -778,10 +796,20 @@ describe("App", () => {
     expect(screen.getByRole("heading", { name: "Scratch" })).toBeTruthy();
     expect(screen.getByText("Review this section")).toBeTruthy();
     const memoPreview = screen.getByLabelText("Memo preview");
+    expect(within(memoPreview).queryByText("title: Scratch source")).toBeNull();
+    expect(within(memoPreview).queryByText("status: draft")).toBeNull();
     expect(within(memoPreview).getByRole("checkbox", { name: "completed task" })).toBeTruthy();
     expect(memoPreview.querySelector(".markdown-table-scroll")).toBeTruthy();
+    expect(cssRule(".memo-preview")).toContain("overflow-x: hidden;");
+    expect(cssRule(".memo-preview .markdown-table-scroll")).toContain("overflow-x: hidden;");
+    expect(cssRule(".memo-preview pre")).toContain("white-space: pre-wrap;");
+    expect(cssRule(".memo-preview pre code")).toContain("min-width: 0;");
     expect(within(memoPreview).getByRole("button", { name: "Copy code block" })).toBeTruthy();
     expect(within(memoPreview).getByRole("button", { name: "Wrap code block" })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Raw" }));
+    expect((screen.getByLabelText("Session memo") as HTMLTextAreaElement).value).toBe(memoContent);
+    fireEvent.click(screen.getByRole("button", { name: "Render" }));
 
     fireEvent.click(screen.getByRole("button", { name: "Copy memo" }));
     await waitFor(() => expect(clipboardWrite).toHaveBeenCalledWith(memoContent));

@@ -528,7 +528,7 @@ main:is(.app-shell, .settings-shell) {
   height: 0;
   pointer-events: none;
   gap: 7px;
-  transform: translateY(-16px);
+  transform: translateY(-22px);
 }
 .viewer-copy-button {
   display: inline-grid;
@@ -935,7 +935,44 @@ main:is(.app-shell, .settings-shell) {
   overflow-wrap: anywhere;
 }
 .memo-textarea:focus { outline: 0; }
-.memo-preview { max-width: none; margin: 0; }
+.memo-preview {
+  max-width: none;
+  min-width: 0;
+  margin: 0;
+  overflow-x: hidden;
+  overflow-wrap: anywhere;
+}
+.memo-preview p,
+.memo-preview li,
+.memo-preview blockquote,
+.memo-preview a {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.memo-preview .markdown-table-scroll {
+  overflow-x: hidden;
+}
+.memo-preview table {
+  width: 100%;
+  min-width: 0;
+  table-layout: fixed;
+}
+.memo-preview th,
+.memo-preview td {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.memo-preview pre {
+  overflow-x: hidden;
+  white-space: pre-wrap;
+}
+.memo-preview pre code {
+  min-width: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
 .memo-empty { margin: 0; color: #6a7a82; font-size: 13px; }
 
 .settings-shell {
