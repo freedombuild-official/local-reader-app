@@ -18,6 +18,7 @@ import {
   ListCollapse,
   MessageSquare,
   Package,
+  RadioTower,
   RefreshCw,
   ScrollText,
   Settings as SettingsIcon,
@@ -122,12 +123,14 @@ export function App() {
   const [httpDeliveryError, setHttpDeliveryError] = useState("");
   const [httpDeliveryPendingPath, setHttpDeliveryPendingPath] = useState("");
   const [httpDeliveryStoppingIds, setHttpDeliveryStoppingIds] = useState<Set<string>>(() => new Set());
+  const [httpDeliveryPopoverOpen, setHttpDeliveryPopoverOpen] = useState(false);
   const [repositoryReloadingRepoId, setRepositoryReloadingRepoId] = useState("");
   const [treeScrollTop, setTreeScrollTop] = useState(0);
   const [treeHorizontalScrollLeft, setTreeHorizontalScrollLeft] = useState(0);
   const treeSectionRef = useRef<HTMLDivElement | null>(null);
   const treeHorizontalScrollRef = useRef<HTMLDivElement | null>(null);
   const pathMenuRef = useRef<HTMLDivElement | null>(null);
+  const httpDeliveryPopoverRootRef = useRef<HTMLDivElement | null>(null);
   const viewerBodyRef = useRef<HTMLDivElement | null>(null);
   const repoLoadTokenRef = useRef(0);
   const repoReloadTokenRef = useRef(0);
@@ -168,6 +171,7 @@ export function App() {
     : httpDeliveryAtCapacity
       ? `HTTP Delivery supports up to ${HTTP_DELIVERY_MAX_SESSIONS} files`
       : "Start HTTP Delivery";
+  const httpDeliveryActiveCount = httpDeliveryStatus.items.length;
   const repositoryReloading = Boolean(activeRepoId && repositoryReloadingRepoId === activeRepoId);
   const readerTypographyStyle = useMemo(() => buildReaderTypographyStyle(basicSettings.readerFontScale), [basicSettings.readerFontScale]);
   const aiModelBehavior = useMemo(() => activeAIModelBehavior(aiSettings), [aiSettings]);
@@ -400,6 +404,24 @@ export function App() {
       window.removeEventListener("keydown", closeMenuOnEscape);
     };
   }, [pathMenu]);
+
+  useEffect(() => {
+    if (!httpDeliveryPopoverOpen) return undefined;
+    function closePopover(event: MouseEvent) {
+      const target = event.target;
+      if (target instanceof Node && httpDeliveryPopoverRootRef.current?.contains(target)) return;
+      setHttpDeliveryPopoverOpen(false);
+    }
+    function closePopoverOnEscape(event: KeyboardEvent) {
+      if (event.key === "Escape") setHttpDeliveryPopoverOpen(false);
+    }
+    window.addEventListener("click", closePopover);
+    window.addEventListener("keydown", closePopoverOnEscape);
+    return () => {
+      window.removeEventListener("click", closePopover);
+      window.removeEventListener("keydown", closePopoverOnEscape);
+    };
+  }, [httpDeliveryPopoverOpen]);
 
   useEffect(() => {
     setFileCopyState("idle");
@@ -664,42 +686,61 @@ export function App() {
         <label className="repo-picker-label" htmlFor="repo-picker">
           Repository
         </label>
-        <div className="repo-picker-row">
-          <select
-            id="repo-picker"
-            className="repo-picker"
-            value={activeRepoId}
-            onChange={(event) => {
-              const repo = repos.find((candidate) => candidate.id === event.target.value);
-              if (repo) void selectRepo(repo);
-            }}
-          >
-            {repos.map((repo) => (
-              <option key={repo.id} value={repo.id}>
-                {repo.label}
-              </option>
-            ))}
-          </select>
-          <button
-            type="button"
-            className={`icon-button repo-action-button repo-reload-button${repositoryReloading ? " loading" : ""}`}
-            aria-label="Reload repository"
-            title="Reload repository"
-            disabled={!activeRepoId || repositoryReloading}
-            aria-busy={repositoryReloading ? "true" : undefined}
-            onClick={() => void reloadActiveRepositoryView()}
-          >
-            <RefreshCw aria-hidden="true" focusable="false" strokeWidth={1.9} />
-          </button>
-          <button
-            type="button"
-            className="icon-button repo-action-button repo-collapse-button"
-            aria-label="Collapse all folders"
-            title="Collapse all folders"
-            onClick={collapseAllFolders}
-          >
-            <ListCollapse aria-hidden="true" focusable="false" strokeWidth={1.8} />
-          </button>
+        <div className="repo-action-zone" ref={httpDeliveryPopoverRootRef}>
+          <div className="repo-picker-row">
+            <select
+              id="repo-picker"
+              className="repo-picker"
+              value={activeRepoId}
+              onChange={(event) => {
+                const repo = repos.find((candidate) => candidate.id === event.target.value);
+                if (repo) void selectRepo(repo);
+              }}
+            >
+              {repos.map((repo) => (
+                <option key={repo.id} value={repo.id}>
+                  {repo.label}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              className={`icon-button repo-action-button repo-reload-button${repositoryReloading ? " loading" : ""}`}
+              aria-label="Reload repository"
+              title="Reload repository"
+              disabled={!activeRepoId || repositoryReloading}
+              aria-busy={repositoryReloading ? "true" : undefined}
+              onClick={() => void reloadActiveRepositoryView()}
+            >
+              <RefreshCw aria-hidden="true" focusable="false" strokeWidth={1.9} />
+            </button>
+            <button
+              type="button"
+              className={`icon-button repo-action-button repo-http-delivery-button${httpDeliveryPopoverOpen ? " active" : ""}`}
+              aria-label="HTTP Delivery"
+              title="HTTP Delivery"
+              aria-haspopup="dialog"
+              aria-expanded={httpDeliveryPopoverOpen}
+              onClick={() => setHttpDeliveryPopoverOpen((open) => !open)}
+            >
+              <RadioTower aria-hidden="true" focusable="false" strokeWidth={1.8} />
+              {httpDeliveryActiveCount ? <span className="repo-action-badge" aria-hidden="true">{httpDeliveryActiveCount}</span> : null}
+            </button>
+            <button
+              type="button"
+              className="icon-button repo-action-button repo-collapse-button"
+              aria-label="Collapse all folders"
+              title="Collapse all folders"
+              onClick={collapseAllFolders}
+            >
+              <ListCollapse aria-hidden="true" focusable="false" strokeWidth={1.8} />
+            </button>
+          </div>
+          {httpDeliveryPopoverOpen ? (
+            <div className="http-delivery-popover" role="dialog" aria-label="HTTP Delivery sessions">
+              <HttpDeliveryPanel status={httpDeliveryStatus} stoppingItemIds={httpDeliveryStoppingIds} error={httpDeliveryError} onStop={(deliveryId) => void stopDeliveryItem(deliveryId)} />
+            </div>
+          ) : null}
         </div>
         {activeRepo ? <p className="repo-root" title={activeRepo.root}>{activeRepo.root}</p> : null}
         {visibleRepoSyncStatus ? (
@@ -707,7 +748,6 @@ export function App() {
             {visibleRepoSyncStatus.message}
           </p>
         ) : null}
-        <HttpDeliveryPanel status={httpDeliveryStatus} stoppingItemIds={httpDeliveryStoppingIds} error={httpDeliveryError} onStop={(deliveryId) => void stopDeliveryItem(deliveryId)} />
         {repos.length === 0 && !loading ? <p className="state-text">No repositories are configured.</p> : null}
         {activeRepoId ? (
           <div className="tree-section" ref={treeSectionRef} onScroll={(event) => setTreeScrollTop(event.currentTarget.scrollTop)}>

@@ -159,12 +159,33 @@ main:is(.app-shell, .settings-shell) {
 }
 .icon-button svg { width: 16px; height: 16px; }
 .repo-picker-label { display: block; color: #3f515a; font-size: 12px; font-weight: 700; margin-bottom: 6px; }
+.repo-action-zone { position: relative; }
 .repo-picker-row { display: flex; align-items: center; gap: 8px; width: 100%; }
 .repo-picker { width: 100%; border: 1px solid #c6d1d6; border-radius: 7px; padding: 9px 10px; background: #fff; color: #172026; }
 .repo-picker-row .repo-picker { flex: 1 1 auto; min-width: 0; width: auto; }
 .repo-action-button { flex: 0 0 auto; border-color: #d8e1e4; background: #ffffff; color: #5f7078; box-shadow: 0 1px 3px rgba(17, 32, 39, 0.08); }
 .repo-action-button:hover:not(:disabled), .repo-action-button:focus-visible:not(:disabled) { border-color: #c6d1d6; background: #eef4f6; color: #172026; }
 .repo-action-button:disabled { cursor: default; opacity: 0.5; }
+.repo-http-delivery-button { position: relative; }
+.repo-http-delivery-button.active { border-color: #9fb1ba; background: #eef4f6; color: #172026; }
+.repo-action-badge {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  display: inline-grid;
+  place-items: center;
+  min-width: 16px;
+  height: 16px;
+  border: 1px solid #ffffff;
+  border-radius: 999px;
+  background: #287888;
+  color: #ffffff;
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1;
+  padding: 0 4px;
+  pointer-events: none;
+}
 .repo-reload-button.loading svg { animation: repo-reload-spin 900ms linear infinite; }
 @keyframes repo-reload-spin { to { transform: rotate(360deg); } }
 .repo-root { margin: 8px 0 6px; color: #63737b; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -181,11 +202,20 @@ main:is(.app-shell, .settings-shell) {
 .repo-sync-status.skipped { border-left-color: #98a7ae; color: #61717a; }
 .repo-sync-status.warning { border-left-color: var(--git-changed); color: #835a05; }
 
+.http-delivery-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 30;
+  width: min(282px, calc(100vw - 24px));
+  max-width: calc(100vw - 24px);
+}
 .http-delivery-control {
-  margin: 0 0 14px;
+  margin: 0;
   border: 1px solid #d8e1e4;
   border-radius: 7px;
   background: #fbfcfd;
+  box-shadow: 0 12px 30px rgba(17, 32, 39, 0.18);
   padding: 9px;
 }
 .http-delivery-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 7px; }
@@ -2305,6 +2335,7 @@ main:is(.app-shell, .settings-shell) {
 .app-shell[data-color-mode="dark"] .segmented button.active,
 .app-shell[data-color-mode="dark"] .right-panel-tabs button.active,
 .app-shell[data-color-mode="dark"] .memo-mode-toggle button.active,
+.app-shell[data-color-mode="dark"] .repo-http-delivery-button.active,
 .app-shell[data-color-mode="dark"] .viewer-copy-button.http-delivery-open-button.active,
 .settings-shell[data-color-mode="dark"] .primary-button,
 .settings-shell[data-color-mode="dark"] .settings-segmented button.active,
@@ -2320,6 +2351,12 @@ main:is(.app-shell, .settings-shell) {
   border-color: var(--rw-dark-accent-strong);
   background: var(--rw-dark-accent-selected);
   color: var(--rw-dark-text);
+}
+
+.app-shell[data-color-mode="dark"] .repo-action-badge {
+  border-color: var(--rw-dark-panel);
+  background: var(--rw-dark-accent-strong);
+  color: var(--rw-dark-panel);
 }
 
 .app-shell[data-color-mode="dark"] .ai-message,
@@ -2496,6 +2533,7 @@ main:is(.app-shell, .settings-shell) {
 }
 
 .app-shell[data-color-mode="dark"] .markdown-body a,
+.app-shell[data-color-mode="dark"] .http-delivery-item-text,
 .settings-shell[data-color-mode="dark"] .text-button {
   color: var(--rw-dark-accent);
 }

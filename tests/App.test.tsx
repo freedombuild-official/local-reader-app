@@ -346,18 +346,24 @@ describe("App", () => {
     expect(await screen.findByRole("heading", { name: "Hello" })).toBeTruthy();
     const repoPickerRow = document.querySelector(".repo-picker-row") as HTMLElement;
     expect(repoPickerRow).toBeTruthy();
+    expect(cssRule(".repo-action-zone")).toContain("position: relative;");
     expect(cssRule(".repo-picker-row")).toContain("display: flex;");
     expect(cssRule(".repo-picker-row .repo-picker")).toContain("min-width: 0;");
     expect(cssRule(".repo-action-button")).toContain("flex: 0 0 auto;");
+    expect(cssRule(".http-delivery-popover")).toContain("position: absolute;");
+    expect(cssRule(".repo-action-badge")).toContain("position: absolute;");
     expect(document.querySelector(".sidebar-tree-action")).toBeNull();
     expect(Array.from(repoPickerRow.children).map((child) => child.getAttribute("aria-label") || child.id)).toEqual([
       "repo-picker",
       "Reload repository",
+      "HTTP Delivery",
       "Collapse all folders",
     ]);
     expect(repoPickerRow.querySelector('[aria-label="Reload repository"]')).toBeTruthy();
+    expect(repoPickerRow.querySelector('[aria-label="HTTP Delivery"]')).toBeTruthy();
     expect(repoPickerRow.querySelector('[aria-label="Collapse all folders"]')).toBeTruthy();
     expect(document.querySelector(".viewer-copy-actions")?.querySelector('[aria-label="Reload repository"]')).toBeNull();
+    expect(document.querySelector(".viewer-copy-actions")?.querySelector('[aria-label="HTTP Delivery"]')).toBeNull();
     expect(document.querySelector(".viewer-copy-actions")?.querySelector('[aria-label="Collapse all folders"]')).toBeNull();
 
     fireEvent.doubleClick(screen.getByRole("tab", { name: "README.md" }));
@@ -656,14 +662,33 @@ describe("App", () => {
   it("starts, reuses, and stops HTTP Delivery from the viewer and tab menu", async () => {
     render(<App />);
     expect(await screen.findByRole("heading", { name: "Hello" })).toBeTruthy();
-    expect(document.querySelector(".http-delivery-count")?.textContent).toBe("0/5");
-    expect(screen.getByText("No active files")).toBeTruthy();
+    const deliveryControlButton = screen.getByRole("button", { name: "HTTP Delivery" });
+    expect(document.querySelector(".http-delivery-count")).toBeNull();
+    expect(screen.queryByText("No active files")).toBeNull();
+    expect(deliveryControlButton.querySelector(".repo-action-badge")).toBeNull();
+
+    fireEvent.click(deliveryControlButton);
+    let deliveryDialog = screen.getByRole("dialog", { name: "HTTP Delivery sessions" });
+    expect(within(deliveryDialog).getByText("No active files")).toBeTruthy();
+    expect(deliveryDialog.querySelector(".http-delivery-count")?.textContent).toBe("0/5");
+
+    fireEvent.click(document.body);
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "HTTP Delivery sessions" })).toBeNull());
+
+    fireEvent.click(deliveryControlButton);
+    expect(screen.getByRole("dialog", { name: "HTTP Delivery sessions" })).toBeTruthy();
+    fireEvent.keyDown(window, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "HTTP Delivery sessions" })).toBeNull());
 
     fireEvent.click(screen.getByRole("button", { name: "Start HTTP Delivery" }));
-    await waitFor(() => expect(document.querySelector(".http-delivery-count")?.textContent).toBe("1/5"));
+    await waitFor(() => expect(deliveryControlButton.querySelector(".repo-action-badge")?.textContent).toBe("1"));
     expect(windowOpenMock).toHaveBeenCalledWith("about:blank", "_blank");
     await waitFor(() => expect(openedHttpDeliveryTabs[0]?.location.href).toBe("/delivery/item-1/README.md"));
-    expect(screen.getByRole("link", { name: "README.md" }).getAttribute("href")).toBe("/delivery/item-1/README.md");
+
+    fireEvent.click(deliveryControlButton);
+    deliveryDialog = screen.getByRole("dialog", { name: "HTTP Delivery sessions" });
+    expect(deliveryDialog.querySelector(".http-delivery-count")?.textContent).toBe("1/5");
+    expect(within(deliveryDialog).getByRole("link", { name: "README.md" }).getAttribute("href")).toBe("/delivery/item-1/README.md");
 
     fireEvent.contextMenu(screen.getByRole("tab", { name: "README.md" }), { clientX: 80, clientY: 40 });
     const menuItems = within(screen.getByRole("menu")).getAllByRole("menuitem").map((item) => item.textContent);
@@ -673,9 +698,12 @@ describe("App", () => {
     expect(windowOpenMock).toHaveBeenCalledTimes(2);
     await waitFor(() => expect(openedHttpDeliveryTabs[1]?.location.href).toBe("/delivery/item-1/README.md"));
 
-    fireEvent.click(screen.getByRole("button", { name: "Stop HTTP Delivery for README.md" }));
-    await waitFor(() => expect(document.querySelector(".http-delivery-count")?.textContent).toBe("0/5"));
-    expect(screen.getByText("No active files")).toBeTruthy();
+    if (!screen.queryByRole("dialog", { name: "HTTP Delivery sessions" })) fireEvent.click(deliveryControlButton);
+    deliveryDialog = screen.getByRole("dialog", { name: "HTTP Delivery sessions" });
+    fireEvent.click(within(deliveryDialog).getByRole("button", { name: "Stop HTTP Delivery for README.md" }));
+    await waitFor(() => expect(deliveryDialog.querySelector(".http-delivery-count")?.textContent).toBe("0/5"));
+    expect(within(deliveryDialog).getByText("No active files")).toBeTruthy();
+    expect(deliveryControlButton.querySelector(".repo-action-badge")).toBeNull();
   });
 
   it("falls back to the item link when HTTP Delivery popup opening is blocked", async () => {
@@ -685,10 +713,13 @@ describe("App", () => {
     expect(await screen.findByRole("heading", { name: "Hello" })).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Start HTTP Delivery" }));
-    await waitFor(() => expect(document.querySelector(".http-delivery-count")?.textContent).toBe("1/5"));
+    const deliveryControlButton = screen.getByRole("button", { name: "HTTP Delivery" });
+    await waitFor(() => expect(deliveryControlButton.querySelector(".repo-action-badge")?.textContent).toBe("1"));
     expect(windowOpenMock).toHaveBeenCalledTimes(1);
     expect(openedHttpDeliveryTabs).toHaveLength(0);
-    expect(screen.getByRole("link", { name: "README.md" }).getAttribute("href")).toBe("/delivery/item-1/README.md");
+    fireEvent.click(deliveryControlButton);
+    const deliveryDialog = screen.getByRole("dialog", { name: "HTTP Delivery sessions" });
+    expect(within(deliveryDialog).getByRole("link", { name: "README.md" }).getAttribute("href")).toBe("/delivery/item-1/README.md");
     expect(document.querySelector(".http-delivery-status.error")).toBeNull();
   });
 
