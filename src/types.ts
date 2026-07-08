@@ -213,6 +213,57 @@ export type AIChatAttachment = {
   content: string;
 };
 
+export type AIChatContextRole = "primary" | "rule";
+export type AIChatPathKind = "file" | "directory";
+export type AIChatContextSource = "tree-menu" | "manual" | "auto-root-rule" | "legacy";
+
+export type AIChatContextPathRequest = {
+  path: string;
+  kind?: AIChatPathKind;
+  source?: AIChatContextSource;
+  includeContent?: boolean;
+};
+
+export type AIChatContextRequest = {
+  repoId: string;
+  path?: string;
+  includeContent?: boolean;
+  primaryPaths?: AIChatContextPathRequest[];
+  rulePaths?: AIChatContextPathRequest[];
+};
+
+export type AIChatContextItem = {
+  repoId: string;
+  role: AIChatContextRole;
+  source: AIChatContextSource;
+  path: string;
+  name: string;
+  kind: AIChatPathKind;
+  fileKind?: FileResponse["kind"];
+  viewerStatus: FileInformation["viewerStatus"] | "directory";
+  lineCount: number;
+  byteLength: number;
+  contentIncluded: boolean;
+  content: string;
+};
+
+export type AIChatContext = {
+  repoId: string;
+  systemPromptVersion: string;
+  primaryItems: AIChatContextItem[];
+  ruleItems: AIChatContextItem[];
+};
+
+export type AIChatContextChip = {
+  id: string;
+  repoId: string;
+  path: string;
+  kind: AIChatPathKind;
+  role: AIChatContextRole;
+  source: AIChatContextSource;
+  removable: boolean;
+};
+
 export type AIChatSessionState = {
   messages: AIChatMessage[];
   draft: string;
@@ -220,27 +271,13 @@ export type AIChatSessionState = {
   error: string;
   lastRequest: string;
   attachments: AIChatAttachment[];
+  contextChips: AIChatContextChip[];
+  dismissedRulePathKeys: string[];
 };
 
-export type AIChatContextRequest = {
-  repoId: string;
-  path: string;
-  includeContent?: boolean;
-};
-
-export type AIChatContext = {
-  repoId: string;
-  path: string;
-  fileName: string;
-  fileKind: FileResponse["kind"];
-  viewerStatus: FileInformation["viewerStatus"];
-  lineCount: number;
-  byteLength: number;
-  contentIncluded: boolean;
-  content: string;
-};
-
-export type AIChatExecutionTarget = { kind: "provider"; provider: AIProviderSettings } | { kind: "cli"; entry: AICliEntryKind };
+export type AIChatExecutionTarget =
+  | { kind: "provider"; provider: AIProviderSettings; status?: AIConnectionStatus }
+  | { kind: "cli"; entry: AICliEntryKind; status?: AIConnectionStatus };
 
 export type CliAIEntryReadiness = {
   entry: AICliEntryKind;

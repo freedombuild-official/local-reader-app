@@ -1,4 +1,5 @@
 import { HttpError } from "./errors.js";
+import { buildAIChatRuntimePrompt } from "./aiPromptPolicy.js";
 import type { AIChatAttachment, AIChatContext, AIChatMessage, AIConnectionStatus, AIModelBehavior, AIProviderSettings } from "./types.js";
 
 type ProviderRequest = {
@@ -9,6 +10,8 @@ type ProviderRequest = {
   modelBehavior?: AIModelBehavior;
   signal?: AbortSignal;
 };
+
+type ProviderChatMessage = { role: "system" | "user" | "assistant"; content: string };
 
 const DEFAULT_BASE_URLS: Record<string, string> = {
   openai: "https://api.openai.com/v1",
@@ -205,6 +208,7 @@ async function requestAnthropicText(
   modelBehavior: AIModelBehavior | undefined,
   signal: AbortSignal | undefined,
 ): Promise<string> {
+  const runtime = context ? buildAIChatRuntimePrompt(context, attachments, modelBehavior) : null;
   const response = await fetch(`${baseUrl}/v1/messages`, {
     method: "POST",
     headers: {
@@ -214,7 +218,8 @@ async function requestAnthropicText(
     },
     body: JSON.stringify({
       model: provider.model,
-      messages: buildAnthropicMessages(messages, context, attachments, modelBehavior),
+      ...(runtime ? { system: runtime.systemPrompt } : {}),
+      messages: buildAnthropicMessages(messages, runtime?.contextPrompt || ""),
     }),
     signal,
   });
@@ -232,13 +237,15 @@ async function requestGoogleText(
   modelBehavior: AIModelBehavior | undefined,
   signal: AbortSignal | undefined,
 ): Promise<string> {
+  const runtime = context ? buildAIChatRuntimePrompt(context, attachments, modelBehavior) : null;
   const url = new URL(`${baseUrl}/v1beta/models/${encodeURIComponent(provider.model)}:generateContent`);
   if (provider.credential) url.searchParams.set("key", provider.credential);
   const response = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      contents: buildGoogleMessages(messages, context, attachments, modelBehavior),
+      ...(runtime ? { systemInstruction: { parts: [{ text: runtime.systemPrompt }] } } : {}),
+      contents: buildGoogleMessages(messages, runtime?.contextPrompt || ""),
     }),
     signal,
   });
@@ -247,58 +254,28 @@ async function requestGoogleText(
   return data.candidates?.[0]?.content?.parts?.map((part) => part.text || "").join("\n").trim() || "";
 }
 
-function buildOpenAIMessages(messages: AIChatMessage[], context: AIChatContext | undefined, attachments: AIChatAttachment[], modelBehavior: AIModelBehavior | undefined): AIChatMessage[] {
+function buildOpenAIMessages(messages: AIChatMessage[], context: AIChatContext | undefined, attachments: AIChatAttachment[], modelBehavior: AIModelBehavior | undefined): ProviderChatMessage[] {
+  if (!context) return messages;
+  const runtime = buildAIChatRuntimePrompt(context, attachments, modelBehavior);
   return [
-    { role: "user", content: systemContextPrompt(context, attachments, modelBehavior) },
+    { role: "system", content: runtime.systemPrompt },
+    ...(runtime.contextPrompt ? [{ role: "user" as const, content: runtime.contextPrompt }] : []),
     ...messages,
   ];
 }
 
-function buildAnthropicMessages(messages: AIChatMessage[], context: AIChatContext | undefined, attachments: AIChatAttachment[], modelBehavior: AIModelBehavior | undefined): Array<{ role: "user" | "assistant"; content: string }> {
+function buildAnthropicMessages(messages: AIChatMessage[], contextPrompt: string): Array<{ role: "user" | "assistant"; content: string }> {
   return [
-    { role: "user", content: systemContextPrompt(context, attachments, modelBehavior) },
+    ...(contextPrompt ? [{ role: "user" as const, content: contextPrompt }] : []),
     ...messages,
   ];
 }
 
-function buildGoogleMessages(messages: AIChatMessage[], context: AIChatContext | undefined, attachments: AIChatAttachment[], modelBehavior: AIModelBehavior | undefined): Array<{ role: string; parts: Array<{ text: string }> }> {
+function buildGoogleMessages(messages: AIChatMessage[], contextPrompt: string): Array<{ role: string; parts: Array<{ text: string }> }> {
   return [
-    { role: "user", parts: [{ text: systemContextPrompt(context, attachments, modelBehavior) }] },
+    ...(contextPrompt ? [{ role: "user", parts: [{ text: contextPrompt }] }] : []),
     ...messages.map((message) => ({ role: message.role === "assistant" ? "model" : "user", parts: [{ text: message.content }] })),
   ];
-}
-
-function systemContextPrompt(context: AIChatContext | undefined, attachments: AIChatAttachment[] = [], modelBehavior: AIModelBehavior | undefined = undefined): string {
-  const behavior = modelBehaviorPrompt(modelBehavior);
-  const attachmentText = attachmentsPrompt(attachments);
-  if (!context) return ["You are helping with a local Reader-Wiki file. Do not request shell access or file changes.", behavior, attachmentText].filter(Boolean).join("\n\n");
-  const metadata = [
-    `Repository: ${context.repoId}`,
-    `Path: ${context.path}`,
-    `Kind: ${context.fileKind}`,
-    `Viewer status: ${context.viewerStatus}`,
-    `Lines: ${context.lineCount}`,
-    `Bytes: ${context.byteLength}`,
-  ].join("\n");
-  if (!context.contentIncluded) {
-    return [metadata, "The file content is not included. Use only the metadata above. Do not request shell access or file changes.", behavior, attachmentText].filter(Boolean).join("\n\n");
-  }
-  return [metadata, `File content:\n${context.content}`, behavior, attachmentText, "Answer from this read-only context. Do not request shell access or file changes."].filter(Boolean).join("\n\n");
-}
-
-function modelBehaviorPrompt(modelBehavior: AIModelBehavior | undefined): string {
-  if (!modelBehavior || modelBehavior.kind === "none") return "";
-  if (modelBehavior.kind === "intelligence") return `Requested response depth: ${modelBehavior.level}.`;
-  return `Thinking mode: ${modelBehavior.enabled ? "enabled" : "disabled"}. Do not reveal hidden reasoning; provide only the final answer.`;
-}
-
-function attachmentsPrompt(attachments: AIChatAttachment[]): string {
-  const items = attachments.slice(0, 5).map((attachment, index) => {
-    const metadata = `Attachment ${index + 1}: ${attachment.name} (${attachment.mimeType || "unknown"}, ${attachment.sizeBytes} bytes, ${attachment.contentIncluded ? "content included" : "metadata only"})`;
-    if (!attachment.contentIncluded) return metadata;
-    return `${metadata}\n${attachment.content.slice(0, 12000)}`;
-  });
-  return items.length ? `Session-only attachments:\n${items.join("\n\n")}` : "";
 }
 
 function parseOpenAIStreamLine(line: string): string {

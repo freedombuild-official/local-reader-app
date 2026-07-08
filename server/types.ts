@@ -234,25 +234,50 @@ export type AIChatAttachment = {
   content: string;
 };
 
-export type AIChatContextRequest = {
-  repoId: string;
+export type AIChatContextRole = "primary" | "rule";
+export type AIChatPathKind = "file" | "directory";
+export type AIChatContextSource = "tree-menu" | "manual" | "auto-root-rule" | "legacy";
+
+export type AIChatContextPathRequest = {
   path: string;
+  kind?: AIChatPathKind;
+  source?: AIChatContextSource;
   includeContent?: boolean;
 };
 
-export type AIChatContext = {
+export type AIChatContextRequest = {
   repoId: string;
+  path?: string;
+  includeContent?: boolean;
+  primaryPaths?: AIChatContextPathRequest[];
+  rulePaths?: AIChatContextPathRequest[];
+};
+
+export type AIChatContextItem = {
+  repoId: string;
+  role: AIChatContextRole;
+  source: AIChatContextSource;
   path: string;
-  fileName: string;
-  fileKind: FileKind;
-  viewerStatus: FileInformation["viewerStatus"];
+  name: string;
+  kind: AIChatPathKind;
+  fileKind?: FileKind;
+  viewerStatus: FileInformation["viewerStatus"] | "directory";
   lineCount: number;
   byteLength: number;
   contentIncluded: boolean;
   content: string;
 };
 
-export type AIChatExecutionTarget = { kind: "provider"; provider: AIProviderSettings } | { kind: "cli"; entry: AICliEntryKind };
+export type AIChatContext = {
+  repoId: string;
+  systemPromptVersion: string;
+  primaryItems: AIChatContextItem[];
+  ruleItems: AIChatContextItem[];
+};
+
+export type AIChatExecutionTarget =
+  | { kind: "provider"; provider: AIProviderSettings; status?: AIConnectionStatus }
+  | { kind: "cli"; entry: AICliEntryKind; status?: AIConnectionStatus };
 
 export type CliAIEntryReadiness = {
   entry: AICliEntryKind;

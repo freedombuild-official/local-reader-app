@@ -449,6 +449,10 @@ describe("api", () => {
     const root = await mkdtemp(path.join(tmpdir(), "reader-wiki-ai-api-"));
     await mkdir(path.join(root, "private"));
     await writeFile(path.join(root, "README.md"), "# AI Context\n\nVisible content\n");
+    await writeFile(path.join(root, "AGENTS.md"), "# Repo Rules\n\nUse project rules.\n");
+    await mkdir(path.join(root, "docs", "nested"), { recursive: true });
+    await writeFile(path.join(root, "docs", "guide.md"), "# Guide\n");
+    await writeFile(path.join(root, "docs", "nested", "deep.md"), "# Deep\n");
     await writeFile(path.join(root, "private", "notes.md"), "# Hidden\n");
     const configPath = path.join(root, "repositories.yaml");
     await writeFile(configPath, `repositories:\n  - id: docs\n    label: Docs\n    root: ${root}\n    defaultPath: README.md\n    excludes:\n      - private\n`);
@@ -472,22 +476,52 @@ describe("api", () => {
     try {
       const testResponse = await postJson(`${server.url}/api/ai/test-connection`, provider);
       expect(testResponse.status).toBe(200);
-      await expect(testResponse.json()).resolves.toMatchObject({ state: "ready", code: "success", severity: "success", nextAction: expect.any(String) });
+      const providerStatus = await testResponse.json() as { state?: string; code?: string; severity?: string; nextAction?: string };
+      expect(providerStatus).toMatchObject({ state: "ready", code: "success", severity: "success", nextAction: expect.any(String) });
+
+      const unverifiedResponse = await postJson(`${server.url}/api/ai/chat`, {
+        target: { kind: "provider", provider },
+        messages: [{ role: "user", content: "Read hidden notes." }],
+        context: { repoId: "docs", primaryPaths: [{ path: "private/notes.md", includeContent: true }] },
+      });
+      expect(unverifiedResponse.status).toBe(409);
 
       const chatResponse = await postJson(`${server.url}/api/ai/chat`, {
-        target: { kind: "provider", provider },
+        target: { kind: "provider", provider, status: providerStatus },
         messages: [{ role: "user", content: "Summarize this file." }],
-        context: { repoId: "docs", path: "README.md", includeContent: true },
+        context: { repoId: "docs", primaryPaths: [{ path: "README.md", includeContent: true, source: "manual" }], rulePaths: [{ path: "AGENTS.md", source: "auto-root-rule" }] },
       });
       expect(chatResponse.status).toBe(200);
-      const chat = await chatResponse.json() as { message?: { content?: string }; context?: { contentIncluded?: boolean; path?: string } };
+      const chat = await chatResponse.json() as { message?: { content?: string }; context?: { primaryItems?: Array<{ contentIncluded?: boolean; path?: string }>; ruleItems?: Array<{ path?: string; content?: string }>; systemPromptVersion?: string } };
       expect(chat.message?.content).toContain("active file");
-      expect(chat.context).toMatchObject({ path: "README.md", contentIncluded: true });
+      expect(chat.context?.systemPromptVersion).toBe("1.0.0");
+      expect(chat.context?.primaryItems?.[0]).toMatchObject({ path: "README.md", contentIncluded: true });
+      expect(chat.context?.ruleItems?.[0]).toMatchObject({ path: "AGENTS.md", content: expect.stringContaining("Use project rules") });
+
+      const missingRuleResponse = await postJson(`${server.url}/api/ai/chat`, {
+        target: { kind: "provider", provider, status: providerStatus },
+        messages: [{ role: "user", content: "Use missing rules only." }],
+        context: { repoId: "docs", rulePaths: [{ path: "CLAUDE.md", source: "auto-root-rule" }] },
+      });
+      expect(missingRuleResponse.status).toBe(200);
+      const missingRuleChat = await missingRuleResponse.json() as { context?: { ruleItems?: unknown[]; primaryItems?: unknown[] } };
+      expect(missingRuleChat.context?.ruleItems).toEqual([]);
+      expect(missingRuleChat.context?.primaryItems).toEqual([]);
+
+      const directoryResponse = await postJson(`${server.url}/api/ai/chat`, {
+        target: { kind: "provider", provider, status: providerStatus },
+        messages: [{ role: "user", content: "Summarize docs." }],
+        context: { repoId: "docs", primaryPaths: [{ path: "docs", kind: "directory", source: "manual" }] },
+      });
+      expect(directoryResponse.status).toBe(200);
+      const directoryChat = await directoryResponse.json() as { context?: { primaryItems?: Array<{ kind?: string; content?: string }> } };
+      expect(directoryChat.context?.primaryItems?.[0]).toMatchObject({ kind: "directory", content: expect.stringContaining("docs/guide.md") });
+      expect(directoryChat.context?.primaryItems?.[0]?.content).not.toContain("deep.md");
 
       const streamResponse = await postJson(`${server.url}/api/ai/chat/stream`, {
-        target: { kind: "provider", provider },
+        target: { kind: "provider", provider, status: providerStatus },
         messages: [{ role: "user", content: "Summarize this file with attachment." }],
-        context: { repoId: "docs", path: "README.md", includeContent: true },
+        context: { repoId: "docs", primaryPaths: [{ path: "README.md", includeContent: true, source: "manual" }], rulePaths: [{ path: "AGENTS.md", source: "auto-root-rule" }] },
         attachments: [{ id: "a1", name: "note.md", mimeType: "text/markdown", sizeBytes: 5, contentIncluded: true, content: "Note." }],
         modelBehavior: { kind: "intelligence", level: "medium" },
       });
@@ -498,9 +532,9 @@ describe("api", () => {
       expect(streamEvents[2]).toMatchObject({ type: "done", message: { content: expect.stringContaining("active file") } });
 
       const excludedResponse = await postJson(`${server.url}/api/ai/chat`, {
-        target: { kind: "provider", provider },
+        target: { kind: "provider", provider, status: providerStatus },
         messages: [{ role: "user", content: "Read hidden notes." }],
-        context: { repoId: "docs", path: "private/notes.md", includeContent: true },
+        context: { repoId: "docs", primaryPaths: [{ path: "private/notes.md", includeContent: true }] },
       });
       expect(excludedResponse.status).toBe(403);
     } finally {
@@ -611,9 +645,9 @@ describe("api", () => {
         context: { repoId: "docs", path: "README.md", includeContent: true },
       });
       expect(chatResponse.status).toBe(200);
-      const chat = await chatResponse.json() as { message?: { content?: string }; context?: { contentIncluded?: boolean; path?: string } };
+      const chat = await chatResponse.json() as { message?: { content?: string }; context?: { primaryItems?: Array<{ contentIncluded?: boolean; path?: string }> } };
       expect(chat.message?.content).toContain("read-only context");
-      expect(chat.context).toMatchObject({ path: "README.md", contentIncluded: true });
+      expect(chat.context?.primaryItems?.[0]).toMatchObject({ path: "README.md", contentIncluded: true });
 
       const chatCall = calls.find((call) => call.binary === "codex" && call.args[0] === "exec" && call.input.includes("Visible content"));
       expect(chatCall).toBeTruthy();

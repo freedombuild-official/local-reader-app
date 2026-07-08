@@ -3,8 +3,8 @@ import MarkdownIt from "markdown-it";
 import sanitizeHtml from "sanitize-html";
 import { Check, Copy, Mic, Plus, RotateCcw, Send, Square, X } from "lucide-react";
 import { streamAIChatMessage } from "./api";
-import { activeAIChatTarget, activeAIEntry, aiVerifiedReady, type AISettingsState } from "./settingsState";
-import type { AIChatAttachment, AIChatMessage, AIChatSessionState, AIModelBehavior, FileResponse } from "./types";
+import { activeAIChatTarget, activeAIEntry, activeAIRuleFileName, aiVerifiedReady, type AISettingsState } from "./settingsState";
+import type { AIChatAttachment, AIChatContextChip, AIChatContextPathRequest, AIChatMessage, AIChatSessionState, AIModelBehavior, FileResponse, TreeNode } from "./types";
 import { injectMarkdownCodeToolbarButtons, installCodeBlockRule } from "../shared/markdownCodeBlocks";
 import { installTableScrollRule } from "../shared/markdownTableScroll";
 import { installTaskListRule } from "../shared/markdownTaskLists";
@@ -16,6 +16,7 @@ type AIChatPanelProps = {
   modelBehavior: AIModelBehavior;
   activeRepoId: string;
   activeFile: FileResponse | null;
+  rootTreeNodes: TreeNode[];
   onOpenSettings: () => void;
   onMarkdownClick: (event: ReactMouseEvent<HTMLElement>) => void;
 };
@@ -41,7 +42,7 @@ installTableScrollRule(aiMarkdown);
 installCodeBlockRule(aiMarkdown);
 installTaskListRule(aiMarkdown);
 
-export function AIChatPanel({ aiSettings, session, onSessionChange, modelBehavior, activeRepoId, activeFile, onOpenSettings, onMarkdownClick }: AIChatPanelProps) {
+export function AIChatPanel({ aiSettings, session, onSessionChange, modelBehavior, activeRepoId, rootTreeNodes, onOpenSettings, onMarkdownClick }: AIChatPanelProps) {
   const [copyStateById, setCopyStateById] = useState<Record<string, CopyState>>({});
   const [voiceActive, setVoiceActive] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
@@ -52,7 +53,11 @@ export function AIChatPanel({ aiSettings, session, onSessionChange, modelBehavio
   const activeEntry = activeAIEntry(aiSettings);
   const target = activeAIChatTarget(aiSettings);
   const ready = Boolean(target && activeEntry && aiVerifiedReady(aiSettings, activeEntry.entry));
-  const canSend = Boolean(ready && activeRepoId && activeFile?.path && session.draft.trim() && !session.pending);
+  const defaultRuleChip = useMemo(() => buildDefaultRuleChip(aiSettings, activeRepoId, rootTreeNodes, session.dismissedRulePathKeys || []), [aiSettings, activeRepoId, rootTreeNodes, session.dismissedRulePathKeys]);
+  const visibleContextChips = useMemo(() => visibleAIContextChips(session.contextChips || [], activeRepoId, defaultRuleChip), [session.contextChips, activeRepoId, defaultRuleChip]);
+  const selectedPathChips = useMemo(() => visibleContextChips.filter((chip) => chip.role === "primary"), [visibleContextChips]);
+  const ruleChips = useMemo(() => visibleContextChips.filter((chip) => chip.role === "rule"), [visibleContextChips]);
+  const canSend = Boolean(ready && activeRepoId && session.draft.trim() && !session.pending);
   const voiceAvailable = Boolean(getSpeechRecognitionCtor());
 
   const renderedMessages = useMemo(
@@ -79,12 +84,13 @@ export function AIChatPanel({ aiSettings, session, onSessionChange, modelBehavio
       updateSession((current) => ({ ...current, error: "Open Settings to finish AI Chat setup." }));
       return;
     }
-    if (!activeRepoId || !activeFile?.path) {
-      updateSession((current) => ({ ...current, error: "Open a file before sending." }));
+    if (!activeRepoId) {
+      updateSession((current) => ({ ...current, error: "Select a repository before sending." }));
       return;
     }
 
     const requestAttachments = session.attachments;
+    const requestContextChips = visibleContextChips;
     const userMessage: AIChatMessage = { role: "user", content };
     const assistantMessage: AIChatMessage = { role: "assistant", content: "" };
     const nextMessages = [...session.messages, userMessage, assistantMessage];
@@ -97,6 +103,7 @@ export function AIChatPanel({ aiSettings, session, onSessionChange, modelBehavio
       error: "",
       lastRequest: content,
       attachments: [],
+      contextChips: (current.contextChips || []).filter((chip) => !isOneShotContextChip(chip)),
     }));
 
     const controller = new AbortController();
@@ -106,7 +113,11 @@ export function AIChatPanel({ aiSettings, session, onSessionChange, modelBehavio
         {
           target,
           messages: [...session.messages, userMessage],
-          context: { repoId: activeRepoId, path: activeFile.path, includeContent: true },
+          context: {
+            repoId: activeRepoId,
+            primaryPaths: requestContextChips.filter((chip) => chip.role === "primary").map(chipToContextPathRequest),
+            rulePaths: requestContextChips.filter((chip) => chip.role === "rule").map(chipToContextPathRequest),
+          },
           attachments: requestAttachments,
           modelBehavior,
         },
@@ -151,6 +162,18 @@ export function AIChatPanel({ aiSettings, session, onSessionChange, modelBehavio
 
   function removeAttachment(id: string) {
     updateSession((current) => ({ ...current, attachments: current.attachments.filter((attachment) => attachment.id !== id) }));
+  }
+
+  function removeContextChip(chip: AIChatContextChip) {
+    if (chip.source === "auto-root-rule") {
+      const key = contextChipKey(chip.repoId, chip.path, chip.role);
+      updateSession((current) => ({
+        ...current,
+        dismissedRulePathKeys: Array.from(new Set([...(current.dismissedRulePathKeys || []), key])),
+      }));
+      return;
+    }
+    updateSession((current) => ({ ...current, contextChips: (current.contextChips || []).filter((item) => item.id !== chip.id) }));
   }
 
   function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
@@ -271,6 +294,19 @@ export function AIChatPanel({ aiSettings, session, onSessionChange, modelBehavio
             if (canSend) void sendMessage(session.draft.trim());
           }}
         >
+          {selectedPathChips.length ? (
+            <div className="ai-context-chip-list" aria-label="AI Chat selected paths">
+              {selectedPathChips.map((chip) => (
+                <span key={chip.id} className={`ai-context-chip ${chip.role}`}>
+                  <small>Path</small>
+                  <span title={chip.path}>{chip.path}</span>
+                  <button type="button" className="icon-button" aria-label={`Remove ${chip.path}`} title="Remove context" onClick={() => removeContextChip(chip)}>
+                    <X aria-hidden="true" focusable="false" />
+                  </button>
+                </span>
+              ))}
+            </div>
+          ) : null}
           {session.attachments.length ? (
             <div className="ai-attachment-list" aria-label="AI Chat attachments">
               {session.attachments.map((attachment) => (
@@ -278,6 +314,19 @@ export function AIChatPanel({ aiSettings, session, onSessionChange, modelBehavio
                   <span title={attachment.name}>{attachment.name}</span>
                   <small>{attachment.contentIncluded ? "Text" : "Meta"}</small>
                   <button type="button" className="icon-button" aria-label={`Remove ${attachment.name}`} title="Remove attachment" onClick={() => removeAttachment(attachment.id)}>
+                    <X aria-hidden="true" focusable="false" />
+                  </button>
+                </span>
+              ))}
+            </div>
+          ) : null}
+          {ruleChips.length ? (
+            <div className="ai-rule-chip-list" aria-label="AI Chat rules">
+              {ruleChips.map((chip) => (
+                <span key={chip.id} className={`ai-context-chip ${chip.role}`}>
+                  <small>Rules</small>
+                  <span title={chip.path}>{chip.path}</span>
+                  <button type="button" className="icon-button" aria-label={`Remove ${chip.path}`} title="Remove context" onClick={() => removeContextChip(chip)}>
                     <X aria-hidden="true" focusable="false" />
                   </button>
                 </span>
@@ -314,6 +363,42 @@ export function AIChatPanel({ aiSettings, session, onSessionChange, modelBehavio
       ) : null}
     </section>
   );
+}
+
+function buildDefaultRuleChip(aiSettings: AISettingsState, activeRepoId: string, rootTreeNodes: TreeNode[], dismissedKeys: string[]): AIChatContextChip | null {
+  const rulePath = activeAIRuleFileName(aiSettings);
+  if (!activeRepoId || !rulePath) return null;
+  if (!rootTreeNodes.some((node) => node.type === "file" && node.path === rulePath)) return null;
+  const key = contextChipKey(activeRepoId, rulePath, "rule");
+  if (dismissedKeys.includes(key)) return null;
+  return {
+    id: `auto-rule:${activeRepoId}:${rulePath}`,
+    repoId: activeRepoId,
+    path: rulePath,
+    kind: "file",
+    role: "rule",
+    source: "auto-root-rule",
+    removable: true,
+  };
+}
+
+function visibleAIContextChips(sessionChips: AIChatContextChip[], activeRepoId: string, defaultRuleChip: AIChatContextChip | null): AIChatContextChip[] {
+  const chips = sessionChips.filter((chip) => chip.repoId === activeRepoId);
+  if (!defaultRuleChip) return chips;
+  if (chips.some((chip) => chip.role === "rule" && chip.path === defaultRuleChip.path)) return chips;
+  return [...chips, defaultRuleChip];
+}
+
+function chipToContextPathRequest(chip: AIChatContextChip): AIChatContextPathRequest {
+  return { path: chip.path, kind: chip.kind, source: chip.source, includeContent: true };
+}
+
+function isOneShotContextChip(chip: AIChatContextChip): boolean {
+  return chip.role === "primary" && chip.source === "tree-menu";
+}
+
+function contextChipKey(repoId: string, path: string, role: string): string {
+  return `${repoId}:${role}:${path}`;
 }
 
 function appendAssistantDelta(session: AIChatSessionState, content: string): AIChatSessionState {

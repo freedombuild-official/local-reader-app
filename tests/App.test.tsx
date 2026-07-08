@@ -10,6 +10,7 @@ const stylesCss = readFileSync(path.join(process.cwd(), "src/styles.css"), "utf8
 const treeNodes = [
   { name: "docs", path: "docs", type: "directory", extension: "", gitStatus: "changed" },
   { name: "very-long-directory-name-with-many-segments", path: "very-long-directory-name-with-many-segments", type: "directory", extension: "" },
+  { name: "AGENTS.md", path: "AGENTS.md", type: "file", extension: ".md" },
   { name: "README.md", path: "README.md", type: "file", extension: ".md", gitStatus: "changed" },
   { name: "image.png", path: "image.png", type: "file", extension: ".png" },
   { name: "paper.pdf", path: "paper.pdf", type: "file", extension: ".pdf" },
@@ -133,7 +134,7 @@ beforeEach(() => {
       const content = `${target} says the active file says hello.\n\n- [x] Render task item\n\n${codeBlock}`;
       const payload = {
         message: { role: "assistant", content },
-        context: { repoId: "docs", path: "README.md", fileName: "README.md", fileKind: "markdown", viewerStatus: "displayable", lineCount: 12, byteLength: 120, contentIncluded: true, content: "# Hello" },
+        context: { repoId: "docs", systemPromptVersion: "1.0.0", primaryItems: [{ repoId: "docs", role: "primary", source: "manual", path: "README.md", name: "README.md", kind: "file", fileKind: "markdown", viewerStatus: "displayable", lineCount: 12, byteLength: 120, contentIncluded: true, content: "# Hello" }], ruleItems: [] },
         status: { state: "ready", message: "Response received.", checkedAt: "2026-07-03T00:00:00.000Z" },
       };
       if (url === "/api/ai/chat/stream") {
@@ -318,7 +319,11 @@ describe("App", () => {
     expect(cssRule(".sidebar")).toContain("padding: var(--rw-sidebar-padding-y) var(--rw-sidebar-padding-x);");
     expect(cssRule(".tree-row")).toContain("min-height: var(--rw-tree-row-min-height);");
     expect(cssRule(".viewer-body")).toContain("padding: var(--rw-viewer-padding-top) var(--rw-viewer-padding-x) var(--rw-viewer-padding-bottom);");
+    expect(cssRule(".viewer-copy-actions")).toContain("transform: translateY(-16px);");
     expect(cssRule(".side-panel-body")).toContain("padding: var(--rw-side-panel-padding);");
+    expect(stylesCss).toContain(".ai-context-chip-list,\n.ai-attachment-list,\n.ai-rule-chip-list {");
+    expect(stylesCss).toContain("flex-wrap: nowrap;");
+    expect(stylesCss).toContain("overflow-x: auto;");
     expect(stylesCss).toContain(".app-shell,\n  .app-shell.layout-compact,\n  .app-shell.layout-focused {\n    --rw-sidebar-padding-y: var(--rw-mobile-sidebar-padding-y);");
   });
 
@@ -617,11 +622,18 @@ describe("App", () => {
     expect(screen.getByRole("menuitem", { name: "Copy Absolute Path" })).toBeTruthy();
     expect(screen.getByRole("menuitem", { name: "Copy Relative Path" })).toBeTruthy();
     expect(screen.queryByRole("menuitem", { name: "Open in New Tab" })).toBeNull();
+    expect(screen.queryByText("AI Entry の認証が必要です")).toBeNull();
     fireEvent.click(screen.getByRole("menuitem", { name: "Copy Relative Path" }));
     await waitFor(() => expect(clipboardWrite).toHaveBeenCalledWith("docs"));
 
     fireEvent.contextMenu(screen.getByRole("button", { name: "README.md" }), { clientX: 32, clientY: 36 });
     expect(screen.getByRole("menuitem", { name: "Open in New Tab" })).toBeTruthy();
+    expect(within(screen.getByRole("menu")).getAllByRole("menuitem").map((item) => item.textContent)).toEqual([
+      "Copy Absolute Path",
+      "Copy Relative Path",
+      "Open in New Tab",
+      "Send a path to AI Chat",
+    ]);
     fireEvent.click(screen.getByRole("menuitem", { name: "Copy Absolute Path" }));
     await waitFor(() => expect(clipboardWrite).toHaveBeenCalledWith("/tmp/docs/README.md"));
 
@@ -1026,6 +1038,189 @@ describe("App", () => {
     expect((screen.getByRole("button", { name: "Send AI Chat message" }) as HTMLButtonElement).disabled).toBe(false);
     fireEvent.click(screen.getByRole("button", { name: "Send AI Chat message" }));
     expect(await screen.findByText("aiApi says the active file says hello.")).toBeTruthy();
+  });
+
+  it("sends an explicit tree path to AI Chat without auto-including the active file", async () => {
+    render(<App />);
+    expect(await screen.findByRole("heading", { name: "Hello" })).toBeTruthy();
+    fireEvent.click(openSettingsButton());
+    fireEvent.click(await screen.findByRole("tab", { name: "AI Chat" }));
+    const aiApiEntry = screen.getByLabelText("AI API entry");
+    fireEvent.click(within(aiApiEntry).getByRole("button", { name: "Set active" }));
+    const aiApiAuth = screen.getByLabelText("AI API connection");
+    fireEvent.change(within(aiApiAuth).getByLabelText("API key"), { target: { value: "local-test-key" } });
+    fireEvent.change(within(aiApiAuth).getByLabelText("Provider"), { target: { value: "openaiCompatible" } });
+    fireEvent.change(within(aiApiAuth).getByLabelText("Model"), { target: { value: "model-a" } });
+    fireEvent.change(within(aiApiAuth).getByLabelText("Base URL"), { target: { value: "http://127.0.0.1:7777/v1" } });
+    fireEvent.click(within(aiApiAuth).getByRole("button", { name: "Test connection" }));
+    expect((await screen.findAllByText("Connected.")).length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getByRole("button", { name: "Back to viewer" }));
+    fireEvent.contextMenu(await screen.findByRole("button", { name: "guide.md" }), { clientX: 120, clientY: 120 });
+    fireEvent.click(screen.getByRole("menuitem", { name: "Send a path to AI Chat" }));
+    const selectedPaths = await screen.findByLabelText("AI Chat selected paths");
+    const rules = await screen.findByLabelText("AI Chat rules");
+    expect(within(selectedPaths).getByText("guide.md")).toBeTruthy();
+    expect(within(rules).getByText("AGENTS.md")).toBeTruthy();
+
+    const fileInput = document.querySelector(".ai-chat-composer input[type='file']") as HTMLInputElement;
+    await act(async () => {
+      fireEvent.change(fileInput, {
+        target: {
+          files: [
+            new File(["Attached A"], "note-a.md", { type: "text/markdown" }),
+            new File(["Attached B"], "note-b.md", { type: "text/markdown" }),
+          ],
+        },
+      });
+    });
+    const attachments = await screen.findByLabelText("AI Chat attachments");
+    expect(Boolean(selectedPaths.compareDocumentPosition(attachments) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true);
+    expect(within(attachments).getByText("note-a.md")).toBeTruthy();
+    expect(within(attachments).getByText("note-b.md")).toBeTruthy();
+    fireEvent.click(within(attachments).getByRole("button", { name: "Remove note-b.md" }));
+    expect(within(attachments).queryByText("note-b.md")).toBeNull();
+
+    fireEvent.change(screen.getByLabelText("AI Chat message"), { target: { value: "Summarize selected path." } });
+    fireEvent.click(screen.getByRole("button", { name: "Send AI Chat message" }));
+    await waitFor(() => expect(fetchCallsTo("/api/ai/chat/stream").length).toBeGreaterThan(0));
+    const streamBody = parseJsonBody(fetchCallsTo("/api/ai/chat/stream").at(-1)?.[1]?.body);
+    expect(streamBody).toMatchObject({
+      context: {
+        repoId: "docs",
+        primaryPaths: [expect.objectContaining({ path: "guide.md", kind: "file", source: "tree-menu" })],
+        rulePaths: [expect.objectContaining({ path: "AGENTS.md", source: "auto-root-rule" })],
+      },
+      attachments: [expect.objectContaining({ name: "note-a.md", contentIncluded: true, content: "Attached A" })],
+    });
+    expect(JSON.stringify(streamBody)).not.toContain('"path":"README.md"');
+    expect(JSON.stringify(streamBody)).not.toContain("note-b.md");
+    await waitFor(() => expect(screen.queryByLabelText("AI Chat selected paths")).toBeNull());
+    expect(screen.queryByLabelText("AI Chat attachments")).toBeNull();
+    expect(within(screen.getByLabelText("AI Chat rules")).getByText("AGENTS.md")).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText("AI Chat message"), { target: { value: "Follow-up without selected path." } });
+    fireEvent.click(screen.getByRole("button", { name: "Send AI Chat message" }));
+    await waitFor(() => expect(fetchCallsTo("/api/ai/chat/stream").length).toBeGreaterThan(1));
+    const followUpBody = parseJsonBody(fetchCallsTo("/api/ai/chat/stream").at(-1)?.[1]?.body);
+    expect(followUpBody).toMatchObject({
+      context: {
+        repoId: "docs",
+        primaryPaths: [],
+        rulePaths: [expect.objectContaining({ path: "AGENTS.md", source: "auto-root-rule" })],
+      },
+      attachments: [],
+    });
+    expect(JSON.stringify(followUpBody)).not.toContain("guide.md");
+  });
+
+  it("does not restore one-shot selected paths when retrying after a stream error", async () => {
+    render(<App />);
+    expect(await screen.findByRole("heading", { name: "Hello" })).toBeTruthy();
+    fireEvent.click(openSettingsButton());
+    fireEvent.click(await screen.findByRole("tab", { name: "AI Chat" }));
+    const aiApiEntry = screen.getByLabelText("AI API entry");
+    fireEvent.click(within(aiApiEntry).getByRole("button", { name: "Set active" }));
+    const aiApiAuth = screen.getByLabelText("AI API connection");
+    fireEvent.change(within(aiApiAuth).getByLabelText("API key"), { target: { value: "local-test-key" } });
+    fireEvent.change(within(aiApiAuth).getByLabelText("Provider"), { target: { value: "openaiCompatible" } });
+    fireEvent.change(within(aiApiAuth).getByLabelText("Model"), { target: { value: "model-a" } });
+    fireEvent.change(within(aiApiAuth).getByLabelText("Base URL"), { target: { value: "http://127.0.0.1:7777/v1" } });
+    fireEvent.click(within(aiApiAuth).getByRole("button", { name: "Test connection" }));
+    expect((await screen.findAllByText("Connected.")).length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getByRole("button", { name: "Back to viewer" }));
+    fireEvent.contextMenu(await screen.findByRole("button", { name: "guide.md" }), { clientX: 120, clientY: 120 });
+    fireEvent.click(screen.getByRole("menuitem", { name: "Send a path to AI Chat" }));
+    expect(await screen.findByLabelText("AI Chat selected paths")).toBeTruthy();
+
+    const originalFetch = fetchMock.getMockImplementation();
+    let failNextStream = true;
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input) === "/api/ai/chat/stream" && failNextStream) {
+        failNextStream = false;
+        return streamJsonLines([{ type: "error", error: "planned stream failure" }]);
+      }
+      return originalFetch ? originalFetch(input, init) : json({ error: "missing fetch" }, 500);
+    });
+
+    fireEvent.change(screen.getByLabelText("AI Chat message"), { target: { value: "Summarize selected path." } });
+    fireEvent.click(screen.getByRole("button", { name: "Send AI Chat message" }));
+    await waitFor(() => expect(screen.getByText("planned stream failure")).toBeTruthy());
+    await waitFor(() => expect(screen.queryByLabelText("AI Chat selected paths")).toBeNull());
+    const failedBody = parseJsonBody(fetchCallsTo("/api/ai/chat/stream").at(-1)?.[1]?.body);
+    expect(failedBody).toMatchObject({
+      context: {
+        primaryPaths: [expect.objectContaining({ path: "guide.md", source: "tree-menu" })],
+      },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry AI Chat request" }));
+    await waitFor(() => expect(fetchCallsTo("/api/ai/chat/stream").length).toBeGreaterThan(1));
+    const retryBody = parseJsonBody(fetchCallsTo("/api/ai/chat/stream").at(-1)?.[1]?.body);
+    expect(retryBody).toMatchObject({
+      context: {
+        primaryPaths: [],
+        rulePaths: [expect.objectContaining({ path: "AGENTS.md", source: "auto-root-rule" })],
+      },
+    });
+    expect(JSON.stringify(retryBody)).not.toContain("guide.md");
+  });
+
+  it("does not restore one-shot selected paths after cancelling a stream", async () => {
+    render(<App />);
+    expect(await screen.findByRole("heading", { name: "Hello" })).toBeTruthy();
+    fireEvent.click(openSettingsButton());
+    fireEvent.click(await screen.findByRole("tab", { name: "AI Chat" }));
+    const aiApiEntry = screen.getByLabelText("AI API entry");
+    fireEvent.click(within(aiApiEntry).getByRole("button", { name: "Set active" }));
+    const aiApiAuth = screen.getByLabelText("AI API connection");
+    fireEvent.change(within(aiApiAuth).getByLabelText("API key"), { target: { value: "local-test-key" } });
+    fireEvent.change(within(aiApiAuth).getByLabelText("Provider"), { target: { value: "openaiCompatible" } });
+    fireEvent.change(within(aiApiAuth).getByLabelText("Model"), { target: { value: "model-a" } });
+    fireEvent.change(within(aiApiAuth).getByLabelText("Base URL"), { target: { value: "http://127.0.0.1:7777/v1" } });
+    fireEvent.click(within(aiApiAuth).getByRole("button", { name: "Test connection" }));
+    expect((await screen.findAllByText("Connected.")).length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getByRole("button", { name: "Back to viewer" }));
+    fireEvent.contextMenu(await screen.findByRole("button", { name: "guide.md" }), { clientX: 120, clientY: 120 });
+    fireEvent.click(screen.getByRole("menuitem", { name: "Send a path to AI Chat" }));
+    expect(await screen.findByLabelText("AI Chat selected paths")).toBeTruthy();
+
+    const originalFetch = fetchMock.getMockImplementation();
+    let holdNextStream = true;
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input) === "/api/ai/chat/stream" && holdNextStream) {
+        holdNextStream = false;
+        return abortableStreamResponse(init?.signal);
+      }
+      return originalFetch ? originalFetch(input, init) : json({ error: "missing fetch" }, 500);
+    });
+
+    fireEvent.change(screen.getByLabelText("AI Chat message"), { target: { value: "Summarize selected path." } });
+    fireEvent.click(screen.getByRole("button", { name: "Send AI Chat message" }));
+    await waitFor(() => expect(fetchCallsTo("/api/ai/chat/stream").length).toBeGreaterThan(0));
+    await waitFor(() => expect(screen.queryByLabelText("AI Chat selected paths")).toBeNull());
+    const abortedBody = parseJsonBody(fetchCallsTo("/api/ai/chat/stream").at(-1)?.[1]?.body);
+    expect(abortedBody).toMatchObject({
+      context: {
+        primaryPaths: [expect.objectContaining({ path: "guide.md", source: "tree-menu" })],
+      },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel AI Chat request" }));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Cancel AI Chat request" })).toBeNull());
+    fireEvent.change(screen.getByLabelText("AI Chat message"), { target: { value: "Follow-up after cancel." } });
+    fireEvent.click(screen.getByRole("button", { name: "Send AI Chat message" }));
+    await waitFor(() => expect(fetchCallsTo("/api/ai/chat/stream").length).toBeGreaterThan(1));
+    const followUpBody = parseJsonBody(fetchCallsTo("/api/ai/chat/stream").at(-1)?.[1]?.body);
+    expect(followUpBody).toMatchObject({
+      context: {
+        primaryPaths: [],
+        rulePaths: [expect.objectContaining({ path: "AGENTS.md", source: "auto-root-rule" })],
+      },
+    });
+    expect(JSON.stringify(followUpBody)).not.toContain("guide.md");
   });
 
   it("keeps AI Chat session across side panel modes and supports streaming composer actions", async () => {
@@ -1469,4 +1664,20 @@ function streamJsonLines(events: unknown[]): Response {
     status: 200,
     headers: { "Content-Type": "application/x-ndjson" },
   });
+}
+
+function abortableStreamResponse(signal?: AbortSignal | null): Response {
+  return new Response(
+    new ReadableStream({
+      start(controller) {
+        const abort = () => controller.error(new DOMException("The operation was aborted.", "AbortError"));
+        if (signal?.aborted) {
+          abort();
+          return;
+        }
+        signal?.addEventListener("abort", abort, { once: true });
+      },
+    }),
+    { status: 200, headers: { "Content-Type": "application/x-ndjson" } },
+  );
 }

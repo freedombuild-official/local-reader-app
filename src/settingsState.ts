@@ -144,9 +144,21 @@ export function activeAIProvider(settings: AISettingsState): AIProviderSettings 
 
 export function activeAIChatTarget(settings: AISettingsState): AIChatExecutionTarget | null {
   const entry = activeAIEntry(settings);
-  if (!entry || !aiVerifiedReady(settings, entry.entry)) return null;
-  if (isProviderSettings(entry)) return { kind: "provider", provider: entry };
-  return { kind: "cli", entry: entry.entry };
+  if (!entry) return null;
+  const status = effectiveAIStatus(settings, entry.entry);
+  if (status.state !== "ready") return null;
+  if (isProviderSettings(entry)) return { kind: "provider", provider: entry, status };
+  return { kind: "cli", entry: entry.entry, status };
+}
+
+export function activeAIRuleFileName(settings: AISettingsState): "AGENTS.md" | "CLAUDE.md" | null {
+  const entry = normalizeOptionalAIEntryKind(settings.activeEntry);
+  if (!entry) return null;
+  return aiRuleFileNameForEntry(entry);
+}
+
+export function aiRuleFileNameForEntry(entry: AIEntryKind): "AGENTS.md" | "CLAUDE.md" {
+  return entry === "claudeCli" ? "CLAUDE.md" : "AGENTS.md";
 }
 
 export function activeAIModelBehavior(settings: AISettingsState): AIModelBehavior {

@@ -27,10 +27,10 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { fetchFile, fetchHttpDeliveryStatus, fetchRepos, fetchTree, imageFileUrl, openRepository, pdfFileUrl, startHttpDelivery, stopHttpDelivery } from "./api";
-import type { AIChatSessionState, DiffStatus, FileResponse, HttpDeliveryItemStatus, HttpDeliveryStatus, RepoListItem, RepoSyncStatus, TreeNode, TreeSnapshot } from "./types";
+import type { AIChatContextChip, AIChatSessionState, DiffStatus, FileResponse, HttpDeliveryItemStatus, HttpDeliveryStatus, RepoListItem, RepoSyncStatus, TreeNode, TreeSnapshot } from "./types";
 import { AIChatPanel } from "./AIChatPanel";
 import { SettingsView } from "./SettingsView";
-import { activeAIModelBehavior, defaultAISettings, defaultBasicSettings, loadBasicSettings, normalizeReaderFontScale, persistBasicSettings, type AISettingsState, type BasicSettings, type ReaderFontScale } from "./settingsState";
+import { activeAIChatTarget, activeAIModelBehavior, defaultAISettings, defaultBasicSettings, loadBasicSettings, normalizeReaderFontScale, persistBasicSettings, type AISettingsState, type BasicSettings, type ReaderFontScale } from "./settingsState";
 import { injectMarkdownCodeToolbarButtons, installCodeBlockRule } from "../shared/markdownCodeBlocks";
 import { installTableScrollRule } from "../shared/markdownTableScroll";
 import { installTaskListRule } from "../shared/markdownTaskLists";
@@ -88,6 +88,8 @@ const defaultAIChatSession: AIChatSessionState = {
   error: "",
   lastRequest: "",
   attachments: [],
+  contextChips: [],
+  dismissedRulePathKeys: [],
 };
 const memoMarkdown = new MarkdownIt({ html: false, linkify: true });
 installTableScrollRule(memoMarkdown);
@@ -169,6 +171,7 @@ export function App() {
   const repositoryReloading = Boolean(activeRepoId && repositoryReloadingRepoId === activeRepoId);
   const readerTypographyStyle = useMemo(() => buildReaderTypographyStyle(basicSettings.readerFontScale), [basicSettings.readerFontScale]);
   const aiModelBehavior = useMemo(() => activeAIModelBehavior(aiSettings), [aiSettings]);
+  const aiPathSendReady = Boolean(activeAIChatTarget(aiSettings));
 
   const updateBasicSettings = useCallback((settings: BasicSettings) => {
     setBasicSettings(settings);
@@ -604,6 +607,28 @@ export function App() {
     setPathMenu(null);
   }
 
+  function sendPathFromMenuToAIChat() {
+    if (!activeRepoId || !pathMenu || !activeAIChatTarget(aiSettings)) return;
+    const chip: AIChatContextChip = {
+      id: `tree-menu:${activeRepoId}:${pathMenu.node.type}:${pathMenu.relativePath}`,
+      repoId: activeRepoId,
+      path: pathMenu.relativePath,
+      kind: pathMenu.node.type,
+      role: "primary",
+      source: "tree-menu",
+      removable: true,
+    };
+    setAIChatSession((current) => ({
+      ...current,
+      contextChips: [
+        ...(current.contextChips || []).filter((item) => !(item.repoId === chip.repoId && item.role === chip.role && item.path === chip.path)),
+        chip,
+      ],
+    }));
+    setRightPanelMode("aiChat");
+    setPathMenu(null);
+  }
+
   function jumpToTreePath(path: string) {
     const candidates = Array.from(treeSectionRef.current?.querySelectorAll<HTMLElement>(`.tree-row[data-tree-path="${cssEscape(path)}"]`) || []);
     const target = candidates.find((element) => !element.classList.contains("tree-sticky-row"));
@@ -720,6 +745,16 @@ export function App() {
                     Open in New Tab
                   </button>
                 ) : null}
+                <button
+                  type="button"
+                  role="menuitem"
+                  aria-disabled={aiPathSendReady ? undefined : "true"}
+                  className={aiPathSendReady ? "" : "disabled"}
+                  title={aiPathSendReady ? "Send a path to AI Chat" : "AI Entry の認証が必要です"}
+                  onClick={sendPathFromMenuToAIChat}
+                >
+                  Send a path to AI Chat
+                </button>
               </div>
             ) : null}
           </div>
@@ -794,6 +829,7 @@ export function App() {
         onAIChatSessionChange={updateAIChatSession}
         aiModelBehavior={aiModelBehavior}
         activeRepoId={activeRepoId}
+        rootTreeNodes={treeCache[""] || []}
         onOpenSettings={() => openSettings("aiChat")}
       />
     </main>
@@ -1346,7 +1382,7 @@ function HttpDeliveryPanel({ status, stoppingItemIds, error, onStop }: {
   );
 }
 
-function RightPanel({ mode, onModeChange, file, outline, onHeadingSelect, memoText, memoMode, onMemoTextChange, onMemoModeChange, aiSettings, aiChatSession, onAIChatSessionChange, aiModelBehavior, activeRepoId, onOpenSettings }: {
+function RightPanel({ mode, onModeChange, file, outline, onHeadingSelect, memoText, memoMode, onMemoTextChange, onMemoModeChange, aiSettings, aiChatSession, onAIChatSessionChange, aiModelBehavior, activeRepoId, rootTreeNodes, onOpenSettings }: {
   mode: RightPanelMode;
   onModeChange: (mode: RightPanelMode) => void;
   file: FileResponse | null;
@@ -1361,6 +1397,7 @@ function RightPanel({ mode, onModeChange, file, outline, onHeadingSelect, memoTe
   onAIChatSessionChange: (updater: (session: AIChatSessionState) => AIChatSessionState) => void;
   aiModelBehavior: ReturnType<typeof activeAIModelBehavior>;
   activeRepoId: string;
+  rootTreeNodes: TreeNode[];
   onOpenSettings: () => void;
 }) {
   return (
@@ -1391,6 +1428,7 @@ function RightPanel({ mode, onModeChange, file, outline, onHeadingSelect, memoTe
             modelBehavior={aiModelBehavior}
             activeRepoId={activeRepoId}
             activeFile={file}
+            rootTreeNodes={rootTreeNodes}
             onOpenSettings={onOpenSettings}
             onMarkdownClick={handleMarkdownClick}
           />

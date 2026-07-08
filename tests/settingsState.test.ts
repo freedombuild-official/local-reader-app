@@ -133,7 +133,7 @@ describe("settings state", () => {
     expect(migrated.activeEntry).toBe("codexCli");
     expect(Object.keys(migrated.entries)).toEqual(["aiApi", "localAi", "codexCli", "claudeCli"]);
     expect(JSON.stringify(migrated)).not.toContain(legacyBridgeKey);
-    expect(activeAIChatTarget(migrated)).toEqual({ kind: "cli", entry: "codexCli" });
+    expect(activeAIChatTarget(migrated)).toMatchObject({ kind: "cli", entry: "codexCli", status: { state: "ready", message: "old status" } });
   });
 
   it("selects provider and CLI chat targets only when the active entry is ready", () => {
@@ -156,22 +156,25 @@ describe("settings state", () => {
       activeEntry: "localAi",
       entries: { ...defaultAISettings.entries, localAi: localAiReady },
       statuses: { ...defaultAISettings.statuses, localAi: { state: "ready", code: "success", severity: "success", message: "Connected.", nextAction: "Ready.", checkedAt: "2026-07-05T00:00:00.000Z" } },
-    })).toEqual({
+    })).toMatchObject({
       kind: "provider",
       provider: localAiReady,
+      status: { state: "ready", code: "success" },
     });
     expect(activeAIChatTarget({
       ...defaultAISettings,
       activeEntry: "aiApi",
       entries: { ...defaultAISettings.entries, aiApi: aiApiReady },
       statuses: { ...defaultAISettings.statuses, aiApi: { state: "ready", code: "success", severity: "success", message: "Connected.", nextAction: "Ready.", checkedAt: "2026-07-05T00:00:00.000Z" } },
-    })).toEqual({
+    })).toMatchObject({
       kind: "provider",
       provider: aiApiReady,
+      status: { state: "ready", code: "success" },
     });
-    expect(activeAIChatTarget({ ...defaultAISettings, activeEntry: "codexCli", entries: { ...defaultAISettings.entries, codexCli: codexReady } })).toEqual({
+    expect(activeAIChatTarget({ ...defaultAISettings, activeEntry: "codexCli", entries: { ...defaultAISettings.entries, codexCli: codexReady } })).toMatchObject({
       kind: "cli",
       entry: "codexCli",
+      status: { state: "ready" },
     });
   });
 

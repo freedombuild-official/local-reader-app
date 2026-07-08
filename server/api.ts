@@ -4,12 +4,12 @@ import { HttpError, isHttpError } from "./errors.js";
 import { buildAIChatContext } from "./aiContext.js";
 import { requestCliAIChatCompletion, type AICommandRunner } from "./aiCliAdapters.js";
 import { probeCliEntryReadiness } from "./aiEntries.js";
-import { requestAIChatCompletion, requestAIChatCompletionStream, testAIConnection } from "./aiProviders.js";
+import { providerReadiness, requestAIChatCompletion, requestAIChatCompletionStream, testAIConnection } from "./aiProviders.js";
 import type { HttpDeliveryService } from "./httpDelivery.js";
 import { createRepositoryRegistry, type RepositoryRegistry } from "./repositoryRegistry.js";
 import { loadRepositoryConfigState, previewRepositoryConfig, saveRepositoryConfigDraft, validateRepositoryConfigDraft } from "./repositoryConfig.js";
 import { readGitStatusEntries, readRepoFile, readTree, readTreeSnapshot, resolveRepoImage, resolveRepoPdf, syncRepository } from "./repoFiles.js";
-import type { AIChatRequest, AIProviderSettings, RepositoryConfigDraft } from "./types.js";
+import type { AIChatExecutionTarget, AIChatRequest, AIProviderSettings, RepositoryConfigDraft } from "./types.js";
 
 type ApiRouterOptions = {
   configPath?: string;
@@ -142,9 +142,9 @@ export function createApiRouter(registryOrConfigPath: RepositoryRegistry | strin
     try {
       const body = request.body as AIChatRequest;
       setNoStore(response);
+      const target = resolveAIChatTarget(body);
+      assertAIChatTargetReady(target);
       const context = await buildAIChatContext(registry, body.context);
-      const target = body.target || (body.provider ? { kind: "provider" as const, provider: body.provider } : null);
-      if (!target) throw new HttpError(400, "Select an AI Chat target.");
       const result = target.kind === "provider"
         ? await requestAIChatCompletion({ provider: target.provider, messages: body.messages, context, attachments: body.attachments, modelBehavior: body.modelBehavior })
         : await requestCheckedCliAIChatCompletion({ entry: target.entry, messages: body.messages, context, attachments: body.attachments, modelBehavior: body.modelBehavior, runner: options.aiCommandRunner });
@@ -157,9 +157,9 @@ export function createApiRouter(registryOrConfigPath: RepositoryRegistry | strin
   router.post("/ai/chat/stream", async (request, response, next) => {
     const body = request.body as AIChatRequest;
     try {
+      const target = resolveAIChatTarget(body);
+      assertAIChatTargetReady(target);
       const context = await buildAIChatContext(registry, body.context);
-      const target = body.target || (body.provider ? { kind: "provider" as const, provider: body.provider } : null);
-      if (!target) throw new HttpError(400, "Select an AI Chat target.");
       setNoStore(response);
       response.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
       response.setHeader("X-Content-Type-Options", "nosniff");
@@ -247,6 +247,21 @@ export function createApiRouter(registryOrConfigPath: RepositoryRegistry | strin
   });
 
   return router;
+}
+
+function resolveAIChatTarget(body: AIChatRequest): AIChatExecutionTarget {
+  const target = body.target || (body.provider ? { kind: "provider" as const, provider: body.provider } : null);
+  if (!target) throw new HttpError(400, "Select an AI Chat target.");
+  return target;
+}
+
+function assertAIChatTargetReady(target: AIChatExecutionTarget): void {
+  if (target.kind === "cli") return;
+  const readiness = providerReadiness(target.provider);
+  if (readiness.state !== "ready") throw new HttpError(400, readiness.message);
+  if (target.status?.state !== "ready" || target.status.code !== "success") {
+    throw new HttpError(409, "AI Entry readiness is not confirmed.");
+  }
 }
 
 function setNoStore(response: Response): void {

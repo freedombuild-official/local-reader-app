@@ -1,14 +1,14 @@
 ---
 date_created: 2026-06-29
-date_modified: 2026-07-01
+date_modified: 2026-07-08
 description: 'ローカルリポジトリ内のファイルを wiki として閲覧する local HTTP read-only viewer。'
-version: 1.0.0
+version: 1.1.0
 ---
 # Reader-Wiki
 
 言語: [English](README.md) | [日本語](README.ja.md)
 
-Reader-Wiki は、ローカルリポジトリ内のファイルを閲覧するための local HTTP app です。localhost 上で Express サーバーを起動し、ブラウザ上の React UI で表示します。リポジトリ内容に対して read-only であり、ファイル編集、利用者の代わりの任意 shell command 実行、プラグインのインストール、AI サービスへの接続は行いません。既定では Git remote に接続しません。リポジトリごとに remote fetch を明示的に有効化した場合だけ fetch-only Git sync を実行し、pull、checkout、merge、reset、working tree の変更は行いません。
+Reader-Wiki は、ローカルリポジトリ内のファイルを閲覧するための local HTTP app です。localhost 上で Express サーバーを起動し、ブラウザ上の React UI で表示します。リポジトリ内容に対して read-only であり、ファイル編集、利用者の代わりの任意 shell command 実行、プラグインのインストールは行いません。任意の AI Chat entry はユーザーが設定した場合だけ使われ、Reader-Wiki は明示された read-only context と repository rule file だけを送ります。既定では Git remote に接続しません。リポジトリごとに remote fetch を明示的に有効化した場合だけ fetch-only Git sync を実行し、pull、checkout、merge、reset、working tree の変更は行いません。
 
 ## クイックスタート
 
@@ -69,17 +69,19 @@ Reader-Wiki は、登録済みリポジトリ root 内にある Markdown、HTML�
 
 Markdown と HTML ファイルは `Rendered` と `Source` を切り替えられます。`Source` は読みやすいように長い行を折り返します。コード、YAML、テキストファイルは、行番号と横スクロール付きの `Raw` code viewer で表示します。Rendered Markdown はカード枠で囲まず、本文として表示します。codeblock は高コントラストで横スクロールできる style にしています。
 
-サイドパネルには `Outline` と `Memo` があります。`Outline` は `Table of Contents` として Markdown heading を表示し、項目をクリックすると中央 viewer の該当 heading へスクロールします。`Memo` はブラウザ UI 内だけの scratchpad であり、リポジトリ内のファイルを保存・編集しません。Memo は `Raw` 編集、`Render` markdown preview、copy、download、delete の icon button に対応します。
+サイドパネルには `Outline`、`Memo`、`AI Chat` があります。`Outline` は `Table of Contents` として Markdown heading を表示し、項目をクリックすると中央 viewer の該当 heading へスクロールします。`Memo` はブラウザ UI 内だけの scratchpad であり、リポジトリ内のファイルを保存・編集しません。Memo は `Raw` 編集、`Render` markdown preview、copy、download、delete の icon button に対応します。
+
+`AI Chat` は任意機能で、read-only 境界を維持します。system prompt は `prompts/ai-chat-system.md` の version 付き Markdown を正本にします。リポジトリ root に `AGENTS.md` または `CLAUDE.md` がある場合、active AI Entry に応じた removable rule context として表示できます。ファイルやディレクトリは、file tree context menu の `Send a path to AI Chat` などで明示された場合だけ送られます。ディレクトリ context は直下 listing のみです。
 
 ## 安全境界
 
-サーバーは、要求されたすべてのパスを path guard で解決します。リポジトリ相対パスだけを受け付け、絶対パス、`..` による traversal、登録済み root の外へ出る symlink、除外対象のパスを拒否します。既定の除外リストでは、常に `.git` をブロックします。
+サーバーは、要求されたすべてのパスを path guard で解決します。リポジトリ相対パスだけを受け付け、絶対パス、`..` による traversal、登録済み root の外へ出る symlink、除外対象のパスを拒否します。既定の除外リストでは、常に `.git` をブロックします。AI Chat も同じ path guard を使い、AI provider や CLI entry へローカル絶対パスを送りません。
 
 Reader-Wiki は、リポジトリを開いた時点の current local working tree を読みます。remote Git fetch は既定で無効です。`fetchRemote: true` を設定した場合だけ Git sync は fetch-only になります。fetch に認証が必要な場合や失敗した場合でも、Reader-Wiki は現在の local state を表示し続け、UI には warning だけを表示します。
 
 ## 対象外
 
-この edition は、ブラウザベースの local viewer に限定しています。native desktop shell、bundled runtime state、AI chat surface、terminal UI、signing flow、update service、packaged release artifact は、最初の public scope から意図的に外しています。
+この edition は、ブラウザベースの local viewer に限定しています。native desktop shell、bundled runtime state、terminal UI、signing flow、update service、packaged release artifact は public scope から意図的に外しています。
 
 ## 検証
 

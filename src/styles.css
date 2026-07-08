@@ -374,12 +374,16 @@ main:is(.app-shell, .settings-shell) {
   padding: 8px 9px;
   text-align: left;
 }
-.path-context-menu button:hover,
-.path-context-menu button:focus-visible {
+.path-context-menu button:hover:not([aria-disabled="true"]),
+.path-context-menu button:focus-visible:not([aria-disabled="true"]) {
   background: #e7f1f4;
   outline: 0;
 }
-
+.path-context-menu button[aria-disabled="true"],
+.path-context-menu button.disabled {
+  color: #9aa7ad;
+  cursor: default;
+}
 .workspace { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; background: #ffffff; }
 .viewer-header {
   display: flex;
@@ -494,6 +498,7 @@ main:is(.app-shell, .settings-shell) {
   height: 0;
   pointer-events: none;
   gap: 7px;
+  transform: translateY(-16px);
 }
 .viewer-copy-button {
   display: inline-grid;
@@ -2023,19 +2028,57 @@ main:is(.app-shell, .settings-shell) {
   background: #e7f3f4;
   color: #0f555d;
 }
-.ai-attachment-list {
+.ai-context-chip-list,
+.ai-attachment-list,
+.ai-rule-chip-list {
   grid-column: 1 / -1;
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 6px;
   min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-bottom: 2px;
+  scrollbar-width: thin;
+}
+.ai-context-chip {
+  flex: 0 0 auto;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) 24px;
+  gap: 6px;
+  align-items: center;
+  max-width: min(320px, calc(100% - 4px));
+  border: 1px solid #d4dee2;
+  border-radius: 7px;
+  background: #ffffff;
+  padding: 4px 4px 4px 8px;
+}
+.ai-context-chip.rule {
+  border-color: #c8d8e8;
+  background: #f7fbff;
+}
+.ai-context-chip small {
+  color: #61717a;
+  font-size: 11px;
+  font-weight: 800;
+}
+.ai-context-chip > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ai-context-chip .icon-button {
+  width: 24px;
+  height: 24px;
 }
 .ai-attachment-chip {
+  flex: 0 0 auto;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto 24px;
   gap: 6px;
   align-items: center;
-  max-width: 100%;
+  max-width: min(320px, calc(100% - 4px));
   border: 1px solid #d8e1e4;
   border-radius: 7px;
   background: #ffffff;
@@ -2221,6 +2264,8 @@ main:is(.app-shell, .settings-shell) {
 .settings-shell[data-color-mode="dark"] .model-behavior-panel .setting-row.inline-row,
 .app-shell[data-color-mode="dark"] .ai-chat-empty,
 .app-shell[data-color-mode="dark"] .ai-chat-error,
+.app-shell[data-color-mode="dark"] .ai-context-chip,
+.app-shell[data-color-mode="dark"] .ai-rule-chip-list .ai-context-chip,
 .app-shell[data-color-mode="dark"] .ai-attachment-chip,
 .app-shell[data-color-mode="dark"] .ai-message {
   border-color: var(--rw-dark-border);
@@ -2413,6 +2458,7 @@ main:is(.app-shell, .settings-shell) {
 .app-shell[data-color-mode="dark"] .ai-chat-empty small,
 .app-shell[data-color-mode="dark"] .ai-message-role-chip,
 .app-shell[data-color-mode="dark"] .ai-message-streaming,
+.app-shell[data-color-mode="dark"] .ai-context-chip small,
 .app-shell[data-color-mode="dark"] .ai-attachment-chip small,
 .settings-shell[data-color-mode="dark"] .settings-heading p,
 .settings-shell[data-color-mode="dark"] .settings-header p,

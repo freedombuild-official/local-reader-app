@@ -3,6 +3,7 @@ import { mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { HttpError } from "./errors.js";
+import { buildAIChatRuntimePrompt, buildConversationTranscript } from "./aiPromptPolicy.js";
 import type { AIChatAttachment, AIChatContext, AIChatMessage, AIConnectionStatus, AICliEntryKind, AIModelBehavior } from "./types.js";
 
 type CliChatRequest = {
@@ -95,39 +96,14 @@ export function safeCliEnv(_entry: AICliEntryKind): NodeJS.ProcessEnv {
 }
 
 function buildCliPrompt(context: AIChatContext, messages: AIChatMessage[], attachments: AIChatAttachment[], modelBehavior: AIModelBehavior | undefined): string {
-  const transcript = messages.map((message) => `${message.role === "assistant" ? "Assistant" : "User"}: ${message.content}`).join("\n\n");
-  const behavior = modelBehaviorPrompt(modelBehavior);
-  const attachmentText = attachmentsPrompt(attachments);
-  const metadata = [
-    "You are answering inside Reader-Wiki AI Chat.",
-    "Use only the read-only context below.",
-    "Do not run shell commands, edit files, request external browser actions, or ask for credentials.",
-    "Do not infer local absolute paths.",
-    `Repository ID: ${context.repoId}`,
-    `Repository-relative path: ${context.path}`,
-    `File name: ${context.fileName}`,
-    `File kind: ${context.fileKind}`,
-    `Viewer status: ${context.viewerStatus}`,
-    `Line count: ${context.lineCount}`,
-    `Byte length: ${context.byteLength}`,
-  ].join("\n");
-  const content = context.contentIncluded ? context.content : "File content was not included.";
-  return [metadata, `File content:\n${content}`, behavior, attachmentText, `Conversation:\n${transcript}`, "Answer concisely from the file context."].filter(Boolean).join("\n\n");
-}
-
-function modelBehaviorPrompt(modelBehavior: AIModelBehavior | undefined): string {
-  if (!modelBehavior || modelBehavior.kind === "none") return "";
-  if (modelBehavior.kind === "intelligence") return `Requested response depth: ${modelBehavior.level}.`;
-  return `Thinking mode: ${modelBehavior.enabled ? "enabled" : "disabled"}. Do not reveal hidden reasoning; provide only the final answer.`;
-}
-
-function attachmentsPrompt(attachments: AIChatAttachment[]): string {
-  const items = attachments.slice(0, 5).map((attachment, index) => {
-    const metadata = `Attachment ${index + 1}: ${attachment.name} (${attachment.mimeType || "unknown"}, ${attachment.sizeBytes} bytes, ${attachment.contentIncluded ? "content included" : "metadata only"})`;
-    if (!attachment.contentIncluded) return metadata;
-    return `${metadata}\n${attachment.content.slice(0, 12000)}`;
-  });
-  return items.length ? `Session-only attachments:\n${items.join("\n\n")}` : "";
+  const runtime = buildAIChatRuntimePrompt(context, attachments, modelBehavior);
+  const transcript = buildConversationTranscript(messages);
+  return [
+    runtime.systemPrompt,
+    runtime.contextPrompt,
+    transcript ? `Conversation:\n${transcript}` : "Conversation: [no prior messages]",
+    "Answer from the provided Reader-Wiki context only.",
+  ].filter(Boolean).join("\n\n");
 }
 
 async function runCxChat(runner: AICommandRunner, cwd: string, prompt: string): Promise<string> {

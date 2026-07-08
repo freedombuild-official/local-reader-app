@@ -1,14 +1,14 @@
 ---
 date_created: 2026-06-29
-date_modified: 2026-07-01
+date_modified: 2026-07-08
 description: 'Local HTTP read-only viewer for browsing repository files as a wiki.'
-version: 1.0.0
+version: 1.1.0
 ---
 # Reader-Wiki
 
 Languages: [English](README.md) | [日本語](README.ja.md)
 
-Reader-Wiki is a local HTTP app for browsing files in local repositories. It runs an Express server on localhost and renders a React UI in your browser. It is read-only for repository contents: it does not edit files, run arbitrary shell commands on your behalf, install plugins, or connect to AI services. It does not contact Git remotes by default. If remote fetch is explicitly enabled for a repository, Reader-Wiki only performs fetch-only Git sync and never performs pull, checkout, merge, reset, or working-tree changes.
+Reader-Wiki is a local HTTP app for browsing files in local repositories. It runs an Express server on localhost and renders a React UI in your browser. It is read-only for repository contents: it does not edit files, run arbitrary shell commands on your behalf, or install plugins. Optional AI Chat entries can be configured by the user; Reader-Wiki sends only explicit read-only context and repository rule files to those entries. It does not contact Git remotes by default. If remote fetch is explicitly enabled for a repository, Reader-Wiki only performs fetch-only Git sync and never performs pull, checkout, merge, reset, or working-tree changes.
 
 ## Quick Start
 
@@ -69,17 +69,19 @@ The browser UI has a repository tree, a central viewer, and a side panel. Openin
 
 Markdown and HTML files can switch between `Rendered` and `Source`; `Source` wraps long lines for reading. Code, YAML, and text files use a `Raw` code viewer with line numbers and horizontal scrolling. Rendered Markdown is shown as document content without a card frame, and code blocks use a high-contrast scrollable style.
 
-The side panel contains `Outline` and `Memo`. `Outline` shows a `Table of Contents`; clicking a Markdown heading scrolls the central viewer to that heading. `Memo` is a browser-only scratchpad in the browser UI; it does not save or edit repository files. Memo supports `Raw` editing, `Render` markdown preview, and icon buttons for copy, download, and delete.
+The side panel contains `Outline`, `Memo`, and `AI Chat`. `Outline` shows a `Table of Contents`; clicking a Markdown heading scrolls the central viewer to that heading. `Memo` is a browser-only scratchpad in the browser UI; it does not save or edit repository files. Memo supports `Raw` editing, `Render` markdown preview, and icon buttons for copy, download, and delete.
+
+`AI Chat` is optional and remains read-only. It uses a versioned system prompt from `prompts/ai-chat-system.md`. If a repository root has `AGENTS.md` or `CLAUDE.md`, Reader-Wiki can show it as removable rule context for the active AI Entry. Files and directories are sent only when selected explicitly, for example with `Send a path to AI Chat` from the file tree context menu. Directory context contains only the direct child listing.
 
 ## Safety Boundary
 
-The server resolves every requested path through a path guard. It only accepts repository-relative paths and rejects absolute paths, `..` traversal, symlinks that escape the registered root, and excluded paths. The default exclude list always blocks `.git`.
+The server resolves every requested path through a path guard. It only accepts repository-relative paths and rejects absolute paths, `..` traversal, symlinks that escape the registered root, and excluded paths. The default exclude list always blocks `.git`. AI Chat uses the same path guard and does not forward local absolute paths to AI providers or CLI entries.
 
 Reader-Wiki reads the current local working tree when a repository is opened. Remote Git fetch is disabled by default. If `fetchRemote: true` is set, Git sync is fetch-only. If that fetch requires credentials or fails, Reader-Wiki keeps showing the current local state and reports a warning in the UI.
 
 ## Out Of Scope
 
-This edition is limited to a browser-based local viewer. Native desktop shells, bundled runtime state, AI chat surfaces, terminal UI, signing flows, update services, and packaged release artifacts are intentionally outside the first public scope.
+This edition is limited to a browser-based local viewer. Native desktop shells, bundled runtime state, terminal UI, signing flows, update services, and packaged release artifacts are intentionally outside the public scope.
 
 ## Verification
 
