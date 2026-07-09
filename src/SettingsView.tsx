@@ -58,6 +58,12 @@ type SettingsViewProps = {
 
 const concealedInputType = "pass" + "word";
 
+function normalizeExpandedRepoIndex(index: number | null, entries: RepositoryConfigEntryDraft[]): number | null {
+  if (!entries.length) return null;
+  if (index === null) return 0;
+  return Math.min(Math.max(index, 0), entries.length - 1);
+}
+
 export function SettingsView({
   basicSettings,
   aiSettings,
@@ -73,7 +79,7 @@ export function SettingsView({
   const [aiDraft, setAiDraft] = useState<AISettingsState>(() => normalizeAISettingsState(aiSettings));
   const [repoState, setRepoState] = useState<RepositoryConfigState | null>(null);
   const [repoDraft, setRepoDraft] = useState<RepositoryConfigEntryDraft[]>([]);
-  const [selectedRepoIndex, setSelectedRepoIndex] = useState(0);
+  const [expandedRepoIndex, setExpandedRepoIndex] = useState<number | null>(null);
   const [repoValidation, setRepoValidation] = useState<RepositoryConfigValidation | null>(null);
   const [yamlPreview, setYamlPreview] = useState("");
   const [previewOpen, setPreviewOpen] = useState(false);
@@ -104,6 +110,7 @@ export function SettingsView({
         if (canceled) return;
         setRepoState(nextState);
         setRepoDraft(nextState.entries);
+        setExpandedRepoIndex((current) => normalizeExpandedRepoIndex(current, nextState.entries));
         setRepoValidation(nextState.validation || null);
         setYamlPreview(nextState.yaml || "");
         setRepoSaveState("saved");
@@ -120,7 +127,6 @@ export function SettingsView({
     };
   }, []);
 
-  const selectedRepo = repoDraft[selectedRepoIndex] || null;
   const providerStatus = aiDraft.activeEntry ? effectiveAIStatus(aiDraft, aiDraft.activeEntry) : derivedAIStatus(null);
   const settingsTitle = category === "basic" ? "Basic Settings" : category === "repositories" ? "Repositories Settings" : "AI Chat Settings";
   const basicDirty = !sameJSON(basicDraft, basicSettings);
@@ -177,6 +183,7 @@ export function SettingsView({
       const nextState = await saveRepositoryConfig({ entries: repoDraft });
       setRepoState(nextState);
       setRepoDraft(nextState.entries);
+      setExpandedRepoIndex((current) => normalizeExpandedRepoIndex(current, nextState.entries));
       setRepoValidation(nextState.validation || null);
       setYamlPreview(nextState.yaml || "");
       setRepoSaveState("saved");
@@ -188,8 +195,9 @@ export function SettingsView({
     }
   }
 
-  function updateSelectedRepo(update: Partial<RepositoryConfigEntryDraft>) {
-    setRepoDraft((current) => current.map((entry, index) => (index === selectedRepoIndex ? { ...entry, ...update } : entry)));
+  function updateExpandedRepo(update: Partial<RepositoryConfigEntryDraft>) {
+    if (expandedRepoIndex === null) return;
+    setRepoDraft((current) => current.map((entry, index) => (index === expandedRepoIndex ? { ...entry, ...update } : entry)));
     setRepoSaveState("dirty");
     setRepoMessage("Unsaved repository config changes.");
   }
@@ -197,17 +205,22 @@ export function SettingsView({
   function addRepository() {
     const nextEntry: RepositoryConfigEntryDraft = { id: "new-repo", label: "New repository", root: "", defaultPath: "README.md", excludes: [".git", "node_modules", "dist"], fetchRemote: false };
     setRepoDraft((current) => [...current, nextEntry]);
-    setSelectedRepoIndex(repoDraft.length);
+    setExpandedRepoIndex(repoDraft.length);
     setRepoSaveState("dirty");
     setRepoMessage("New repository draft added.");
   }
 
-  function removeRepository(indexToRemove = selectedRepoIndex) {
-    setRepoDraft((current) => current.filter((_, index) => index !== indexToRemove));
-    setSelectedRepoIndex((current) => {
-      if (indexToRemove < current) return Math.max(0, current - 1);
-      if (indexToRemove === current) return 0;
-      return current;
+  function removeRepository(indexToRemove?: number) {
+    const removeIndex = indexToRemove ?? expandedRepoIndex;
+    if (removeIndex === null) return;
+    const nextLength = Math.max(repoDraft.length - 1, 0);
+    setRepoDraft((current) => current.filter((_, index) => index !== removeIndex));
+    setExpandedRepoIndex((currentIndex) => {
+      if (!nextLength) return null;
+      if (currentIndex === null) return Math.min(removeIndex, nextLength - 1);
+      if (removeIndex < currentIndex) return Math.max(0, currentIndex - 1);
+      if (removeIndex === currentIndex) return Math.min(removeIndex, nextLength - 1);
+      return Math.min(currentIndex, nextLength - 1);
     });
     setRepoSaveState("dirty");
     setRepoMessage("Repository entry removed from the draft list. The directory was not touched.");
@@ -324,16 +337,15 @@ export function SettingsView({
           <RepositoriesSettingsPanel
             repoState={repoState}
             repoDraft={repoDraft}
-            selectedRepo={selectedRepo}
-            selectedRepoIndex={selectedRepoIndex}
+            expandedRepoIndex={expandedRepoIndex}
             validation={repoValidation}
             yamlPreview={yamlPreview}
             previewOpen={previewOpen}
             saveState={repoSaveState}
             message={repoMessage}
             onPreviewOpenChange={setPreviewOpen}
-            onSelectedRepoChange={setSelectedRepoIndex}
-            onUpdateSelectedRepo={updateSelectedRepo}
+            onExpandedRepoChange={setExpandedRepoIndex}
+            onUpdateExpandedRepo={updateExpandedRepo}
             onAddRepository={addRepository}
             onRemoveRepository={removeRepository}
             onValidate={() => void validateDraft()}
@@ -403,16 +415,15 @@ function BasicSettingsPanel({ settings, onChange }: { settings: BasicSettings; o
 function RepositoriesSettingsPanel({
   repoState,
   repoDraft,
-  selectedRepo,
-  selectedRepoIndex,
+  expandedRepoIndex,
   validation,
   yamlPreview,
   previewOpen,
   saveState,
   message,
   onPreviewOpenChange,
-  onSelectedRepoChange,
-  onUpdateSelectedRepo,
+  onExpandedRepoChange,
+  onUpdateExpandedRepo,
   onAddRepository,
   onRemoveRepository,
   onValidate,
@@ -420,23 +431,22 @@ function RepositoriesSettingsPanel({
 }: {
   repoState: RepositoryConfigState | null;
   repoDraft: RepositoryConfigEntryDraft[];
-  selectedRepo: RepositoryConfigEntryDraft | null;
-  selectedRepoIndex: number;
+  expandedRepoIndex: number | null;
   validation: RepositoryConfigValidation | null;
   yamlPreview: string;
   previewOpen: boolean;
   saveState: SaveState;
   message: string;
   onPreviewOpenChange: (open: boolean) => void;
-  onSelectedRepoChange: (index: number) => void;
-  onUpdateSelectedRepo: (update: Partial<RepositoryConfigEntryDraft>) => void;
+  onExpandedRepoChange: (index: number) => void;
+  onUpdateExpandedRepo: (update: Partial<RepositoryConfigEntryDraft>) => void;
   onAddRepository: () => void;
   onRemoveRepository: (index?: number) => void;
   onValidate: () => void;
   onPreview: () => void;
 }) {
   const checks = validation?.checks || [];
-  const selectedEntryChecks = selectedRepo ? checks.filter((item) => item.id.startsWith(`entry:${selectedRepoIndex}:`)) : [];
+  const expandedEntryChecks = expandedRepoIndex === null ? [] : checks.filter((item) => item.id.startsWith(`entry:${expandedRepoIndex}:`));
   const configChecks = checks.filter((item) => !item.id.startsWith("entry:"));
   const validationIssues = checks.filter((item) => item.status !== "ready");
   const validationSummary = validation ? validation.valid ? "Ready" : `${validationIssues.length} issue${validationIssues.length === 1 ? "" : "s"}` : "Not validated";
@@ -447,36 +457,71 @@ function RepositoriesSettingsPanel({
       <SettingsCard title="Repositories list" eyebrow="Registered Repositories" status={`${repoDraft.length} entries`}>
         <p className={`settings-message ${statusMessageClass}`}>{statusMessage}</p>
         <div className="repo-list" aria-label="Registered repositories">
-          {repoDraft.map((repo, index) => (
-            <div key={`${repo.id}-${index}`} className={`repo-list-row${index === selectedRepoIndex ? " active" : ""}`}>
-              <button type="button" className="repo-list-main" onClick={() => onSelectedRepoChange(index)}>
-                <span className="repo-list-title">
-                  <strong>{repo.label || "Untitled repository"}</strong>
-                  <small>{repo.id || "missing-id"}</small>
-                </span>
-                <span className="repo-list-root">
-                  <strong>Root</strong>
-                  <small>{repo.root || "Missing root path"}</small>
-                </span>
-                <span className={`status-pill ${entryStatusClass(checks, index)}`}>{entryStatusLabel(checks, index)}</span>
-              </button>
-              <details className="settings-details repo-row-details" aria-label={`${repo.label || repo.id || "Repository"} details`}>
-                <summary>Details</summary>
-                <div className="settings-summary-grid compact">
-                  <SummaryItem label="Default path" value={repo.defaultPath || "No default path"} />
-                  <SummaryItem label="Fetch remote" value={repo.fetchRemote ? "Fetch-only enabled" : "Fetch off"} />
-                </div>
-              </details>
-              <div className="repo-row-actions">
-                <button type="button" className="secondary-button" onClick={() => onSelectedRepoChange(index)}>
-                  Edit
+          {repoDraft.map((repo, index) => {
+            const expanded = index === expandedRepoIndex;
+            const editorId = `repository-entry-${index}`;
+            const editorLabel = `${repo.label || repo.id || "Repository"} repository entry`;
+            return (
+              <div key={index} className={`repo-list-row${expanded ? " active expanded" : ""}`}>
+                <button
+                  type="button"
+                  className="repo-list-main"
+                  aria-expanded={expanded}
+                  aria-controls={expanded ? editorId : undefined}
+                  onClick={() => onExpandedRepoChange(index)}
+                >
+                  <span className="repo-list-title">
+                    <strong>{repo.label || "Untitled repository"}</strong>
+                    <small>{repo.id || "missing-id"}</small>
+                  </span>
+                  <span className="repo-list-root">
+                    <strong>Root</strong>
+                    <small>{repo.root || "Missing root path"}</small>
+                  </span>
+                  <span className={`status-pill ${entryStatusClass(checks, index)}`}>{entryStatusLabel(checks, index)}</span>
                 </button>
-                <button type="button" className="danger-button" onClick={() => onRemoveRepository(index)}>
-                  Remove from list
-                </button>
+                {expanded ? (
+                  <div id={editorId} className="repo-inline-editor" aria-label={editorLabel}>
+                    <div className="repo-inline-editor-heading">
+                      <div>
+                        <span>Add / Edit Repository</span>
+                        <h4>Repository entry</h4>
+                      </div>
+                      <span className="settings-badge">Editing {repo.id || "entry"}</span>
+                    </div>
+                    <div className="repo-form-grid">
+                      <Field label="Repository ID" value={repo.id} onChange={(id) => onUpdateExpandedRepo({ id })} />
+                      <Field label="Label" value={repo.label} onChange={(label) => onUpdateExpandedRepo({ label })} />
+                      <Field label="Root absolute path" value={repo.root} onChange={(root) => onUpdateExpandedRepo({ root })} wide />
+                      <details className="settings-details wide" aria-label="Advanced repository options">
+                        <summary>Advanced repository options</summary>
+                        <div className="repo-form-grid">
+                          <Field label="Default path" value={repo.defaultPath} onChange={(defaultPath) => onUpdateExpandedRepo({ defaultPath })} />
+                          <label className="settings-field wide">
+                            <span>Excludes</span>
+                            <textarea value={repo.excludes.join("\n")} rows={4} onChange={(event) => onUpdateExpandedRepo({ excludes: event.target.value.split("\n").map((item) => item.trim()).filter(Boolean) })} />
+                          </label>
+                          <div className="chip-list wide" aria-label="Exclude chips">
+                            {repo.excludes.length ? repo.excludes.map((exclude) => <span key={exclude}>{exclude}</span>) : <span>No excludes configured</span>}
+                          </div>
+                          <label className="settings-toggle wide">
+                            <input type="checkbox" checked={repo.fetchRemote} onChange={(event) => onUpdateExpandedRepo({ fetchRemote: event.target.checked })} />
+                            <span>Fetch-only Git sync</span>
+                          </label>
+                          {repo.fetchRemote ? <p className="settings-message warning wide">Fetch-only means no pull, checkout, merge, reset, or working tree changes.</p> : null}
+                        </div>
+                      </details>
+                    </div>
+                    <div className="repo-inline-actions">
+                      <button type="button" className="danger-button" onClick={() => onRemoveRepository(index)}>
+                        Remove from list
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
         <div className="settings-action-row">
           <button type="button" className="secondary-button" onClick={onAddRepository}>
@@ -484,36 +529,6 @@ function RepositoriesSettingsPanel({
           </button>
         </div>
         <p className="settings-message">Remove from list only edits the config draft. Reader-Wiki does not delete repository directories.</p>
-      </SettingsCard>
-
-      <SettingsCard title="Repository entry" eyebrow="Add / Edit Repository" status={selectedRepo ? `Editing ${selectedRepo.id || "entry"}` : "No entry"}>
-        {selectedRepo ? (
-          <div className="repo-form-grid">
-            <Field label="Repository ID" value={selectedRepo.id} onChange={(id) => onUpdateSelectedRepo({ id })} />
-            <Field label="Label" value={selectedRepo.label} onChange={(label) => onUpdateSelectedRepo({ label })} />
-            <Field label="Root absolute path" value={selectedRepo.root} onChange={(root) => onUpdateSelectedRepo({ root })} wide />
-            <details className="settings-details wide" aria-label="Advanced repository options">
-              <summary>Advanced repository options</summary>
-              <div className="repo-form-grid">
-                <Field label="Default path" value={selectedRepo.defaultPath} onChange={(defaultPath) => onUpdateSelectedRepo({ defaultPath })} />
-                <label className="settings-field wide">
-                  <span>Excludes</span>
-                  <textarea value={selectedRepo.excludes.join("\n")} rows={4} onChange={(event) => onUpdateSelectedRepo({ excludes: event.target.value.split("\n").map((item) => item.trim()).filter(Boolean) })} />
-                </label>
-                <div className="chip-list wide" aria-label="Exclude chips">
-                  {selectedRepo.excludes.length ? selectedRepo.excludes.map((exclude) => <span key={exclude}>{exclude}</span>) : <span>No excludes configured</span>}
-                </div>
-                <label className="settings-toggle wide">
-                  <input type="checkbox" checked={selectedRepo.fetchRemote} onChange={(event) => onUpdateSelectedRepo({ fetchRemote: event.target.checked })} />
-                  <span>Fetch-only Git sync</span>
-                </label>
-                {selectedRepo.fetchRemote ? <p className="settings-message warning wide">Fetch-only means no pull, checkout, merge, reset, or working tree changes.</p> : null}
-              </div>
-            </details>
-          </div>
-        ) : (
-          <p className="settings-message">Add a repository entry to start editing.</p>
-        )}
       </SettingsCard>
 
       <details className="settings-details" aria-label="Config details">
@@ -542,7 +557,7 @@ function RepositoriesSettingsPanel({
         </div>
         <div className="subsection-title">Repository entry checks</div>
         <div className="validation-list">
-          {selectedEntryChecks.length ? selectedEntryChecks.map((item) => <ValidationRow key={item.id} item={item} />) : <p className="settings-message">Run validation to see entry checks.</p>}
+          {expandedEntryChecks.length ? expandedEntryChecks.map((item) => <ValidationRow key={item.id} item={item} />) : <p className="settings-message">Run validation to see entry checks.</p>}
         </div>
         <div className="subsection-title">Config checks</div>
         <div className="validation-list">

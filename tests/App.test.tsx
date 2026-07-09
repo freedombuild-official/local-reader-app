@@ -931,17 +931,25 @@ describe("App", () => {
     expect(screen.queryByRole("heading", { name: "Repository config" })).toBeNull();
     expect(screen.queryByRole("heading", { name: "Repository entry checks" })).toBeNull();
     expect(screen.queryByRole("heading", { name: "Config checks" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Edit" })).toBeNull();
 
-    const rowDetails = screen.getByLabelText("Docs details") as HTMLDetailsElement;
-    expect(rowDetails.open).toBe(false);
-    fireEvent.click(within(rowDetails).getByText("Details"));
-    expect(rowDetails.open).toBe(true);
-    expect(screen.getByText("README.md")).toBeTruthy();
+    const docsRow = screen.getByRole("button", { name: /Docs docs Root \/tmp\/docs Ready/ });
+    expect(docsRow.getAttribute("aria-expanded")).toBe("true");
+    const docsEditor = screen.getByLabelText("Docs repository entry");
+    expect(within(docsEditor).getByRole("heading", { name: "Repository entry" })).toBeTruthy();
 
-    const advancedOptions = screen.getByLabelText("Advanced repository options") as HTMLDetailsElement;
+    const repositoryIdInput = within(docsEditor).getByLabelText("Repository ID") as HTMLInputElement;
+    repositoryIdInput.focus();
+    fireEvent.change(repositoryIdInput, { target: { value: "docs-updated" } });
+    expect(document.activeElement).toBe(repositoryIdInput);
+    expect(repositoryIdInput.value).toBe("docs-updated");
+    fireEvent.change(repositoryIdInput, { target: { value: "docs" } });
+
+    const advancedOptions = within(docsEditor).getByLabelText("Advanced repository options") as HTMLDetailsElement;
     expect(advancedOptions.open).toBe(false);
     fireEvent.click(within(advancedOptions).getByText("Advanced repository options"));
     expect(advancedOptions.open).toBe(true);
+    expect((within(advancedOptions).getByLabelText("Default path") as HTMLInputElement).value).toBe("README.md");
     expect(screen.getByText(".git")).toBeTruthy();
     expect(screen.getByText("node_modules")).toBeTruthy();
 
@@ -968,6 +976,14 @@ describe("App", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save config" }));
     expect((await screen.findAllByText("Repository config saved.")).length).toBeGreaterThan(0);
     expect(fetchMock).toHaveBeenCalledWith("/api/repository-config/save", expect.objectContaining({ method: "POST" }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Add repository" }));
+    expect(docsRow.getAttribute("aria-expanded")).toBe("false");
+    const newEditor = screen.getByLabelText("New repository repository entry");
+    expect((within(newEditor).getByLabelText("Repository ID") as HTMLInputElement).value).toBe("new-repo");
+    expect((within(newEditor).getByLabelText("Root absolute path") as HTMLInputElement).value).toBe("");
+    fireEvent.click(within(newEditor).getByRole("button", { name: "Remove from list" }));
+    expect(screen.queryByLabelText("New repository repository entry")).toBeNull();
   });
 
   it("adds AI Chat as a read-only right panel and can answer after provider settings are configured", async () => {

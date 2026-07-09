@@ -1329,7 +1329,8 @@ main:is(.app-shell, .settings-shell) {
   padding: 10px;
   text-align: left;
 }
-.repo-list-row.active {
+.repo-list-row.active,
+.repo-list-row.expanded {
   border-color: #8bbac3;
   background: #eef7f8;
 }
@@ -1364,14 +1365,39 @@ main:is(.app-shell, .settings-shell) {
 .repo-list-root {
   min-width: 0;
 }
-.repo-row-actions {
+.repo-inline-editor {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  border-top: 1px solid #cfe0e4;
+  padding-top: 12px;
+}
+.repo-inline-editor-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: start;
+  justify-content: space-between;
+  gap: 10px;
+}
+.repo-inline-editor-heading h4 {
+  color: #172026;
+  font-size: 15px;
+  line-height: 1.25;
+  margin: 2px 0 0;
+  overflow-wrap: anywhere;
+}
+.repo-inline-editor-heading > div > span {
+  color: #61717a;
+  font-size: 11px;
+  font-weight: 850;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+.repo-inline-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
   justify-content: flex-end;
-}
-.repo-row-details {
-  margin-top: -2px;
 }
 .chip-list {
   display: flex;
@@ -2340,6 +2366,10 @@ main:is(.app-shell, .settings-shell) {
   color: var(--rw-dark-text);
 }
 
+.settings-shell[data-color-mode="dark"] .repo-inline-editor {
+  border-color: var(--rw-dark-border);
+}
+
 .app-shell[data-color-mode="dark"] .repo-picker,
 .app-shell[data-color-mode="dark"] .repo-action-button,
 .app-shell[data-color-mode="dark"] .segmented,
@@ -2379,6 +2409,7 @@ main:is(.app-shell, .settings-shell) {
 .settings-shell[data-color-mode="dark"] .settings-category-nav button.active,
 .settings-shell[data-color-mode="dark"] .settings-category-nav button:hover,
 .settings-shell[data-color-mode="dark"] .repo-list-row.active,
+.settings-shell[data-color-mode="dark"] .repo-list-row.expanded,
 .settings-shell[data-color-mode="dark"] .entry-card.active,
 .settings-shell[data-color-mode="dark"] .policy-item.ready,
 .settings-shell[data-color-mode="dark"] .entry-icon,
@@ -2546,6 +2577,7 @@ main:is(.app-shell, .settings-shell) {
 .settings-shell[data-color-mode="dark"] .settings-toggle.detailed small,
 .settings-shell[data-color-mode="dark"] .settings-message,
 .settings-shell[data-color-mode="dark"] .repo-list-main small,
+.settings-shell[data-color-mode="dark"] .repo-inline-editor-heading > div > span,
 .settings-shell[data-color-mode="dark"] .active-entry-summary small,
 .settings-shell[data-color-mode="dark"] .entry-card p,
 .settings-shell[data-color-mode="dark"] .auth-card-note,
@@ -2627,7 +2659,8 @@ main:is(.app-shell, .settings-shell) {
 .app-shell[data-color-mode="dark"] .memo-textarea,
 .app-shell[data-color-mode="dark"] .file-info-list dd,
 .settings-shell[data-color-mode="dark"] .yaml-preview,
-.settings-shell[data-color-mode="dark"] .repo-list-main strong {
+.settings-shell[data-color-mode="dark"] .repo-list-main strong,
+.settings-shell[data-color-mode="dark"] .repo-inline-editor-heading h4 {
   color: var(--rw-dark-text);
 }
 
