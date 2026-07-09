@@ -2,7 +2,7 @@
 date_created: 2026-06-29
 date_modified: 2026-07-09
 description: 'ローカルリポジトリ内のファイル閲覧と guarded AI Chat write に対応する local HTTP viewer。'
-version: 1.2.0
+version: 1.2.1
 ---
 # Reader-Wiki
 
@@ -71,11 +71,11 @@ Markdown と HTML ファイルは `Rendered` と `Source` を切り替えられ�
 
 サイドパネルには `Outline`、`Memo`、`AI Chat` があります。`Outline` は `Table of Contents` として Markdown heading を表示し、項目をクリックすると中央 viewer の該当 heading へスクロールします。`Memo` はブラウザ UI 内だけの scratchpad であり、リポジトリ内のファイルを保存・編集しません。Memo は `Raw` 編集、`Render` markdown preview、copy、download、delete の icon button に対応します。
 
-`AI Chat` は任意機能で、`prompts/ai-chat-system.md` の version 付き system prompt を正本にします。リポジトリ root に `AGENTS.md` または `CLAUDE.md` がある場合、active AI Entry に応じた removable rule context として表示できます。ファイルやディレクトリは、file tree context menu の `Send a path to AI Chat` などで明示された場合に送られます。write-capable entry は active repository root を対象に実行され、変更した repository-relative path を報告します。
+`AI Chat` は任意機能で、`prompts/ai-chat-system.md` の version 付き system prompt を正本にします。リポジトリ root に `AGENTS.md` または `CLAUDE.md` がある場合、active AI Entry に応じた removable rule context として表示できます。ファイルやディレクトリは、file tree context menu の `Send a path to AI Chat` などで明示された場合に送られます。write-capable entry は active repository root を対象に実行され、変更した repository-relative path を報告します。選択中の primary file については、AI Chat が軽量な before/after snapshot を保持するため、Git 管理されていないフォルダや Git ignored file でも重複編集を warning として検知できます。今回 run で exact duplicate block が発生し、後続の重複 block 削除で一意に戻せる場合、Reader-Wiki は修復して run summary に表示します。
 
 ## 安全境界
 
-サーバーは、要求されたすべてのパスを path guard で解決します。リポジトリ相対パスだけを受け付け、絶対パス、`..` による traversal、登録済み root の外へ出る symlink、除外対象のパスを拒否します。既定の除外リストでは、常に `.git` をブロックします。AI Chat は prompt や UI response にローカル絶対パスを出しません。repo-scoped write mode は、登録済み Git working tree の active repository root 内だけで有効です。
+サーバーは、要求されたすべてのパスを path guard で解決します。リポジトリ相対パスだけを受け付け、絶対パス、`..` による traversal、登録済み root の外へ出る symlink、除外対象のパスを拒否します。既定の除外リストでは、常に `.git` をブロックします。AI Chat は prompt や UI response にローカル絶対パスを出しません。repo-scoped write mode は、登録済み repository root 内だけで有効で、その active root に限定されます。Git status は、利用可能な場合に限り changed-path summary の補助として使います。
 
 AI Chat entry の実行境界は次の通りです。
 

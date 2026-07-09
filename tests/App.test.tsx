@@ -128,8 +128,9 @@ beforeEach(() => {
       return json(aiEntryReadiness(String(body.entry || "codexCli"), body.provider));
     }
     if (url === "/api/ai/chat" || url === "/api/ai/chat/stream") {
-      const body = parseJsonBody(init?.body) as { target?: { kind?: string; entry?: string; provider?: { entry?: string } }; provider?: { entry?: string } };
+      const body = parseJsonBody(init?.body) as { target?: { kind?: string; entry?: string; provider?: { entry?: string } }; provider?: { entry?: string }; messages?: Array<{ content?: string }> };
       const target = body.target?.entry || body.target?.provider?.entry || body.provider?.entry || body.target?.kind || "provider";
+      const hasDuplicateCheck = (body.messages || []).some((message) => (message.content || "").toLowerCase().includes("duplicate"));
       const codeBlock = "```ts\nconst ok = true;\n```";
       const content = `${target} says the active file says hello.\n\n- [x] Render task item\n\n${codeBlock}`;
       const run = {
@@ -137,7 +138,8 @@ beforeEach(() => {
         entry: target,
         substrate: target === "claudeCli" ? "claudeCli" : "codexCli",
         changedPaths: [{ path: "README.md", status: "changed" }],
-        warnings: [],
+        repairs: [],
+        warnings: hasDuplicateCheck ? ["Duplicate edit detected in README.md: repeated block \"## Write Result 2\"."] : [],
       };
       const payload = {
         message: { role: "assistant", content },
@@ -1160,10 +1162,12 @@ describe("App", () => {
     expect(await screen.findByText("Check again")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Back to viewer" }));
     fireEvent.click(await screen.findByRole("tab", { name: "AI Chat" }));
-    fireEvent.change(screen.getByLabelText("AI Chat message"), { target: { value: "What does this file say?" } });
+    fireEvent.change(screen.getByLabelText("AI Chat message"), { target: { value: "Check duplicate edit." } });
     expect((screen.getByRole("button", { name: "Send AI Chat message" }) as HTMLButtonElement).disabled).toBe(false);
     fireEvent.click(screen.getByRole("button", { name: "Send AI Chat message" }));
     expect(await screen.findByText("aiApi says the active file says hello.")).toBeTruthy();
+    expect(await screen.findByText("Warnings:")).toBeTruthy();
+    await waitFor(() => expect(document.body.textContent || "").toContain("Duplicate edit detected in README.md"));
   });
 
   it("sends an explicit tree path to AI Chat without auto-including the active file", async () => {

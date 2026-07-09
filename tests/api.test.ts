@@ -516,7 +516,7 @@ describe("api", () => {
         run?: { accessMode?: string; changedPaths?: Array<{ path?: string; status?: string }>; substrate?: string; entry?: string };
       };
       expect(chat.message?.content).toContain("active file");
-      expect(chat.context?.systemPromptVersion).toBe("2.0.0");
+      expect(chat.context?.systemPromptVersion).toBe("2.2.0");
       expect(chat.context?.primaryItems?.[0]).toMatchObject({ path: "README.md", contentIncluded: true });
       expect(chat.context?.ruleItems?.[0]).toMatchObject({ path: "AGENTS.md", content: expect.stringContaining("Use project rules") });
       expect(chat.run).toMatchObject({
@@ -527,7 +527,10 @@ describe("api", () => {
       });
       const chatCall = calls.find((call) => call.input.includes("Visible content"));
       expect(chatCall?.cwd).toBe(await realpath(root));
-      expect(chatCall?.args).toEqual(expect.arrayContaining(["--profile", "reader-wiki-ai-api", "--sandbox", "workspace-write", "--json", "--ephemeral"]));
+      expect(chatCall?.input).toContain("Reader-Wiki runtime work order");
+      expect(chatCall?.input).toContain("sha256=");
+      expect(chatCall?.input).toContain("After writing, re-read each changed file");
+      expect(chatCall?.args).toEqual(expect.arrayContaining(["--profile", "reader-wiki-ai-api", "--sandbox", "workspace-write", "--json", "--ephemeral", "--skip-git-repo-check"]));
       expect(chatCall?.env.CODEX_HOME).toContain(path.join("reader-wiki-codex-home", "aiApi"));
       expect(chatCall?.env.READER_WIKI_AI_API_KEY).toBe("test-key");
       const profileText = await readFile(path.join(String(chatCall?.env.CODEX_HOME), "reader-wiki-ai-api.config.toml"), "utf8");
@@ -625,9 +628,240 @@ describe("api", () => {
       });
       const chatCall = calls.find((call) => call.input.includes("Visible content"));
       expect(chatCall?.cwd).toBe(await realpath(root));
-      expect(chatCall?.args).toEqual(expect.arrayContaining(["--oss", "--local-provider", "ollama", "--model", "llama3.1", "--sandbox", "workspace-write"]));
+      expect(chatCall?.input).toContain("After writing, re-read each changed file");
+      expect(chatCall?.args).toEqual(expect.arrayContaining(["--oss", "--local-provider", "ollama", "--model", "llama3.1", "--sandbox", "workspace-write", "--skip-git-repo-check"]));
       expect(chatCall?.env.CODEX_HOME).toContain(path.join("reader-wiki-codex-home", "localAi"));
       expect(chatCall?.env).not.toHaveProperty("READER_WIKI_AI_API_KEY");
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("tracks selected file edits without requiring a Git working tree", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "reader-wiki-non-git-ai-"));
+    await writeFile(path.join(root, "README.md"), "# Non Git\n\nVisible content\n");
+    const configPath = path.join(root, "repositories.yaml");
+    await writeFile(configPath, `repositories:\n  - id: docs\n    label: Docs\n    root: ${root}\n    defaultPath: README.md\n`);
+    const calls: Array<{ binary: string; args: string[]; cwd: string; input: string }> = [];
+    const runner: AICommandRunner = async (binary, args, options) => {
+      calls.push({ binary, args, cwd: options.cwd, input: options.input || "" });
+      if (binary !== "codex") throw new Error("Unexpected command");
+      if (args.includes("--version")) return { stdout: "codex-cli 0.143.0\n", stderr: "" };
+      if (args.includes("login")) return { stdout: "Logged in using ChatGPT\n", stderr: "" };
+      if (args.includes("--help")) return { stdout: "--sandbox workspace-write --ephemeral --skip-git-repo-check --json\n", stderr: "" };
+      if (options.input?.includes("Reader-Wiki CLI readiness")) {
+        return { stdout: '{"type":"item.completed","item":{"type":"agent_message","text":"ready"}}\n', stderr: "" };
+      }
+      if (options.input) {
+        await writeFile(path.join(options.cwd, "README.md"), "# Non Git\n\nVisible content\n\nUnique AI result.\n");
+        return { stdout: '{"type":"item.completed","item":{"type":"agent_message","text":"Updated selected file."}}\n', stderr: "" };
+      }
+      throw new Error("Unexpected command");
+    };
+    const app = express();
+    app.use("/api", createApiRouter(configPath, undefined, { aiCommandRunner: runner }));
+    const server = await listen(app);
+    try {
+      const readinessResponse = await postJson(`${server.url}/api/ai/entry-readiness`, { entry: "codexCli", repoId: "docs" });
+      expect(readinessResponse.status).toBe(200);
+      const readiness = await readinessResponse.json() as { ready?: boolean; status?: { state?: string; code?: string } };
+      expect(readiness).toMatchObject({ ready: true, status: { state: "ready", code: "success" } });
+
+      const chatResponse = await postJson(`${server.url}/api/ai/chat`, {
+        target: { kind: "codexCli", entry: "codexCli", status: readiness.status },
+        messages: [{ role: "user", content: "Add one unique result." }],
+        context: { repoId: "docs", path: "README.md", includeContent: true },
+      });
+      expect(chatResponse.status).toBe(200);
+      const chat = await chatResponse.json() as { run?: { changedPaths?: Array<{ path?: string; status?: string }>; warnings?: string[] } };
+      expect(chat.run?.changedPaths).toEqual([expect.objectContaining({ path: "README.md", status: "changed" })]);
+      expect(chat.run?.warnings).toEqual([]);
+      const chatCall = calls.find((call) => call.input.includes("Visible content") && !call.input.includes("Reader-Wiki CLI readiness"));
+      expect(chatCall?.args).toEqual(expect.arrayContaining(["--sandbox", "workspace-write", "--skip-git-repo-check"]));
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("repairs duplicate selected-file edits even when the file is Git ignored", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "reader-wiki-ignored-duplicate-ai-"));
+    const selectedPath = "reader-wiki-ai-write-test.md";
+    await writeFile(path.join(root, ".gitignore"), `${selectedPath}\n`);
+    await writeFile(path.join(root, "README.md"), "# Ignored duplicate test\n");
+    await initGitRepo(root);
+    await writeFile(path.join(root, selectedPath), "# Write Test\n\n");
+    const configPath = path.join(root, "repositories.yaml");
+    await writeFile(configPath, `repositories:\n  - id: docs\n    label: Docs\n    root: ${root}\n    defaultPath: ${selectedPath}\n`);
+    const runner: AICommandRunner = async (binary, args, options) => {
+      if (binary !== "codex") throw new Error("Unexpected command");
+      if (args.includes("--version")) return { stdout: "codex-cli 0.143.0\n", stderr: "" };
+      if (args.includes("--help")) return { stdout: "--sandbox workspace-write --ephemeral --json --oss --local-provider --model\n", stderr: "" };
+      if (options.input) {
+        await writeFile(path.join(options.cwd, selectedPath), [
+          "# Write Test",
+          "",
+          "## Write Result 3",
+          "",
+          "- status: completed",
+          "- note: Reader-Wiki AI Chat write test appended this section.",
+          "- signature: Codex CLI",
+          "",
+          "## Write Result 3",
+          "",
+          "- status: completed",
+          "- note: Reader-Wiki AI Chat write test appended this section.",
+          "- signature: Codex CLI",
+          "",
+          "## Write Result 3",
+          "",
+          "- status: completed",
+          "- note: Reader-Wiki AI Chat write test appended this section.",
+          "- signature: Codex CLI",
+          "",
+        ].join("\n"));
+        return { stdout: '{"type":"item.completed","item":{"type":"agent_message","text":"Wrote duplicate result."}}\n', stderr: "" };
+      }
+      throw new Error("Unexpected command");
+    };
+    const provider = {
+      entry: "localAi" as const,
+      runtime: "ollama" as const,
+      model: "gpt-oss-20b",
+      baseUrl: "http://127.0.0.1:11434/v1",
+      apiFormat: "openaiCompatible" as const,
+      credential: "",
+    };
+    const app = express();
+    app.use("/api", createApiRouter(configPath, undefined, { aiCommandRunner: runner }));
+    const server = await listen(app);
+    try {
+      const readinessResponse = await postJson(`${server.url}/api/ai/entry-readiness`, { entry: "localAi", provider, repoId: "docs" });
+      expect(readinessResponse.status).toBe(200);
+      const readiness = await readinessResponse.json() as { ready?: boolean; status?: { state?: string; code?: string } };
+      expect(readiness).toMatchObject({ ready: true });
+
+      const chatResponse = await postJson(`${server.url}/api/ai/chat`, {
+        target: { kind: "codexBackedLocal", provider, status: readiness.status },
+        messages: [{ role: "user", content: "Append Write Result 3 once." }],
+        context: { repoId: "docs", path: selectedPath, includeContent: true },
+      });
+      expect(chatResponse.status).toBe(200);
+      const chat = await chatResponse.json() as { run?: { changedPaths?: Array<{ path?: string; status?: string }>; repairs?: string[]; warnings?: string[] } };
+      expect(chat.run?.changedPaths).toEqual([expect.objectContaining({ path: selectedPath, status: "changed" })]);
+      expect(chat.run?.repairs?.some((repair) => repair.includes("Repaired duplicate edit") && repair.includes("Write Result 3"))).toBe(true);
+      expect(chat.run?.warnings).toEqual([]);
+      const repairedContent = await readFile(path.join(root, selectedPath), "utf8");
+      expect((repairedContent.match(/## Write Result 3/g) || [])).toHaveLength(1);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("does not repair duplicate blocks that already existed before the current run", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "reader-wiki-existing-duplicate-ai-"));
+    const selectedPath = "existing-duplicate.md";
+    await writeFile(path.join(root, selectedPath), [
+      "# Existing Duplicate",
+      "",
+      "## Keep Me",
+      "",
+      "Same existing block.",
+      "",
+      "## Keep Me",
+      "",
+      "Same existing block.",
+      "",
+    ].join("\n"));
+    const configPath = path.join(root, "repositories.yaml");
+    await writeFile(configPath, `repositories:\n  - id: docs\n    label: Docs\n    root: ${root}\n    defaultPath: ${selectedPath}\n`);
+    const runner: AICommandRunner = async (binary, args, options) => {
+      if (binary !== "codex") throw new Error("Unexpected command");
+      if (args.includes("--version")) return { stdout: "codex-cli 0.143.0\n", stderr: "" };
+      if (args.includes("login")) return { stdout: "Logged in using ChatGPT\n", stderr: "" };
+      if (args.includes("--help")) return { stdout: "--sandbox workspace-write --ephemeral --skip-git-repo-check --json\n", stderr: "" };
+      if (options.input?.includes("Reader-Wiki CLI readiness")) return { stdout: '{"type":"item.completed","item":{"type":"agent_message","text":"ready"}}\n', stderr: "" };
+      if (options.input) {
+        await writeFile(path.join(options.cwd, selectedPath), [
+          "# Existing Duplicate",
+          "",
+          "## Keep Me",
+          "",
+          "Same existing block.",
+          "",
+          "## Keep Me",
+          "",
+          "Same existing block.",
+          "",
+          "## Keep Me",
+          "",
+          "Same existing block.",
+          "",
+        ].join("\n"));
+        return { stdout: '{"type":"item.completed","item":{"type":"agent_message","text":"Added another duplicate."}}\n', stderr: "" };
+      }
+      throw new Error("Unexpected command");
+    };
+    const app = express();
+    app.use("/api", createApiRouter(configPath, undefined, { aiCommandRunner: runner }));
+    const server = await listen(app);
+    try {
+      const readinessResponse = await postJson(`${server.url}/api/ai/entry-readiness`, { entry: "codexCli", repoId: "docs" });
+      const readiness = await readinessResponse.json() as { status?: { state?: string; code?: string } };
+      const chatResponse = await postJson(`${server.url}/api/ai/chat`, {
+        target: { kind: "codexCli", entry: "codexCli", status: readiness.status },
+        messages: [{ role: "user", content: "Append one more duplicate." }],
+        context: { repoId: "docs", path: selectedPath, includeContent: true },
+      });
+      expect(chatResponse.status).toBe(200);
+      const chat = await chatResponse.json() as { run?: { repairs?: string[]; warnings?: string[] } };
+      expect(chat.run?.repairs).toEqual([]);
+      expect(chat.run?.warnings?.some((warning) => warning.includes("already existed before this run"))).toBe(true);
+      const content = await readFile(path.join(root, selectedPath), "utf8");
+      expect((content.match(/## Keep Me/g) || [])).toHaveLength(3);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("removes leaked Local AI tool-call markup before returning the final answer", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "reader-wiki-tool-markup-ai-"));
+    await writeFile(path.join(root, "README.md"), "# Tool Markup\n\nVisible content\n");
+    const configPath = path.join(root, "repositories.yaml");
+    await writeFile(configPath, `repositories:\n  - id: docs\n    label: Docs\n    root: ${root}\n    defaultPath: README.md\n`);
+    const runner: AICommandRunner = async (binary, args, options) => {
+      if (binary !== "codex") throw new Error("Unexpected command");
+      if (args.includes("--version")) return { stdout: "codex-cli 0.143.0\n", stderr: "" };
+      if (args.includes("--help")) return { stdout: "--sandbox workspace-write --ephemeral --json --oss --local-provider --model\n", stderr: "" };
+      if (options.input) {
+        await writeFile(path.join(options.cwd, "README.md"), "# Tool Markup\n\nVisible content\n\nAI result.\n");
+        return { stdout: '{"type":"item.completed","item":{"type":"agent_message","text":"Need confirm file content.<|channel|>functions.exec_command<|message|>{\\"cmd\\":\\"sed -n 1,200p README.md\\"}"}}\n', stderr: "" };
+      }
+      throw new Error("Unexpected command");
+    };
+    const provider = {
+      entry: "localAi" as const,
+      runtime: "ollama" as const,
+      model: "gpt-oss-20b",
+      baseUrl: "http://127.0.0.1:11434/v1",
+      apiFormat: "openaiCompatible" as const,
+      credential: "",
+    };
+    const app = express();
+    app.use("/api", createApiRouter(configPath, undefined, { aiCommandRunner: runner }));
+    const server = await listen(app);
+    try {
+      const readinessResponse = await postJson(`${server.url}/api/ai/entry-readiness`, { entry: "localAi", provider, repoId: "docs" });
+      const readiness = await readinessResponse.json() as { status?: { state?: string; code?: string } };
+      const chatResponse = await postJson(`${server.url}/api/ai/chat`, {
+        target: { kind: "codexBackedLocal", provider, status: readiness.status },
+        messages: [{ role: "user", content: "Append a result." }],
+        context: { repoId: "docs", path: "README.md", includeContent: true },
+      });
+      expect(chatResponse.status).toBe(200);
+      const chat = await chatResponse.json() as { message?: { content?: string }; run?: { warnings?: string[] } };
+      expect(chat.message?.content).toBe("Need confirm file content.");
+      expect(chat.message?.content).not.toContain("functions.exec_command");
+      expect(chat.run?.warnings?.some((warning) => warning.includes("tool-call markup"))).toBe(true);
     } finally {
       await server.close();
     }
@@ -732,7 +966,8 @@ describe("api", () => {
 
       const claudeReadiness = await postJson(`${server.url}/api/ai/entry-readiness`, { entry: "claudeCli", repoId: "docs" });
       expect(claudeReadiness.status).toBe(200);
-      await expect(claudeReadiness.json()).resolves.toMatchObject({ ready: true, settings: { entry: "claudeCli", authState: "configured", readOnlyWrapperState: "ready", executionMode: "repoWrite" } });
+      const claudeReadinessBody = await claudeReadiness.json() as { ready?: boolean; status?: { state?: string; code?: string }; settings?: { entry?: string; authState?: string; readOnlyWrapperState?: string; executionMode?: string } };
+      expect(claudeReadinessBody).toMatchObject({ ready: true, settings: { entry: "claudeCli", authState: "configured", readOnlyWrapperState: "ready", executionMode: "repoWrite" } });
 
       const chatResponse = await postJson(`${server.url}/api/ai/chat`, {
         target: { kind: "codexCli", entry: "codexCli", status: codexReadinessBody.status },
@@ -752,8 +987,8 @@ describe("api", () => {
       expect(chatCall?.input).toContain("Repository-relative path: README.md");
       expect(chatCall?.input).toContain("Visible content");
       expect(chatCall?.input).not.toContain(root);
-      expect(chatCall?.args).toEqual(expect.arrayContaining(["--sandbox", "workspace-write", "--json", "--ephemeral", "-C", realRoot]));
-      expect(chatCall?.args).not.toContain("--skip-git-repo-check");
+      expect(chatCall?.args).toEqual(expect.arrayContaining(["--sandbox", "workspace-write", "--json", "--ephemeral", "--skip-git-repo-check", "-C", realRoot]));
+      expect(chatCall?.input).toContain("After writing, re-read each changed file");
 
       const excludedResponse = await postJson(`${server.url}/api/ai/chat`, {
         target: { kind: "codexCli", entry: "codexCli", status: codexReadinessBody.status },
@@ -761,6 +996,16 @@ describe("api", () => {
         context: { repoId: "docs", path: "private/notes.md", includeContent: true },
       });
       expect(excludedResponse.status).toBe(403);
+
+      const claudeChatResponse = await postJson(`${server.url}/api/ai/chat`, {
+        target: { kind: "claudeCli", entry: "claudeCli", status: claudeReadinessBody.status },
+        messages: [{ role: "user", content: "Summarize this file through Claude." }],
+        context: { repoId: "docs", path: "README.md", includeContent: true },
+      });
+      expect(claudeChatResponse.status).toBe(200);
+      await expect(claudeChatResponse.json()).resolves.toMatchObject({ message: { content: expect.stringContaining("Claude CLI answer") }, run: { entry: "claudeCli", substrate: "claudeCli" } });
+      const claudeChatCall = calls.find((call) => call.binary === "claude" && call.input.includes("Visible content"));
+      expect(claudeChatCall?.input).toContain("After writing, re-read each changed file");
     } finally {
       await server.close();
     }

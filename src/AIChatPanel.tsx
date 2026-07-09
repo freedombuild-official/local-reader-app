@@ -415,12 +415,13 @@ function replaceLastAssistant(session: AIChatSessionState, content: string): AIC
   };
 }
 
-function appendRunSummary(content: string, run: { changedPaths: Array<{ path: string; status: string }>; warnings: string[] }): string {
+function appendRunSummary(content: string, run: { changedPaths: Array<{ path: string; status: string }>; repairs?: string[]; warnings: string[] }): string {
   const changed = run.changedPaths.length
     ? ["Changed paths:", ...run.changedPaths.map((item) => `- ${item.status}: ${item.path}`)].join("\n")
     : "No repository changes.";
+  const repairs = run.repairs?.length ? ["Repairs:", ...run.repairs.map((repair) => `- ${repair}`)].join("\n") : "";
   const warnings = run.warnings.length ? ["Warnings:", ...run.warnings.map((warning) => `- ${warning}`)].join("\n") : "";
-  return [content, changed, warnings].filter(Boolean).join("\n\n");
+  return [content, changed, repairs, warnings].filter(Boolean).join("\n\n");
 }
 
 function renderAIMessage(content: string): string {

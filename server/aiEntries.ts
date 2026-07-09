@@ -44,7 +44,7 @@ async function probeCxReadiness(runner: AICommandRunner, repo?: RepositoryConfig
     "-c",
     "approval_policy=\"never\"",
     "--ephemeral",
-    ...(workspace.repoScoped ? [] : ["--skip-git-repo-check"]),
+    "--skip-git-repo-check",
     "--json",
     "-C",
     workspace.cwd,
@@ -156,7 +156,7 @@ async function readinessWorkspace(repo: RepositoryConfig | undefined): Promise<{
   }
   try {
     const workspace = await resolveAIWorkspace(repo);
-    return { cwd: workspace.root, ready: true, message: "Active repository is a Git working tree.", repoScoped: true };
+    return { cwd: workspace.root, ready: true, message: "Active repository root is available.", repoScoped: true };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return { cwd: await ensureSafeCwd(), ready: false, message: sanitizeCliText(message), repoScoped: false };
@@ -287,7 +287,7 @@ function readinessStatus(ready: boolean, checks: Check[], message: string): AICo
   const nextAction = failed?.id === "auth"
     ? "Sign in with the CLI outside Reader-Wiki, then check readiness again."
     : failed?.id === "workspace"
-      ? "Select a registered Git working tree before sending AI Chat."
+      ? "Select a registered repository root before sending AI Chat."
       : "Check AI Entry settings and run readiness again.";
   return {
     state: "failed",

@@ -295,6 +295,7 @@ export type AIChatRunSummary = {
   entry: AIEntryKind;
   substrate: "codexCli" | "claudeCli";
   changedPaths: AIChangedPath[];
+  repairs: string[];
   warnings: string[];
 };
 
