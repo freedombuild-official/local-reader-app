@@ -420,12 +420,35 @@ main:is(.app-shell, .settings-shell) {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+  min-width: 0;
   min-height: 55px;
   border-bottom: 1px solid #d8e1e4;
   background: #ffffff;
   padding: 10px 12px;
 }
-.viewer-header h2 { margin: 0; font-size: 14px; line-height: 1.25; letter-spacing: 0; overflow-wrap: anywhere; }
+.viewer-path-line { flex: 1 1 auto; min-width: 0; }
+.viewer-path-text {
+  margin: 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+  line-height: 1.25;
+  letter-spacing: 0;
+}
+.viewer-toolbar-actions {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 7px;
+  max-width: 100%;
+}
+.viewer-toolbar-actions .segmented,
+.viewer-toolbar-actions .mode-label {
+  flex: 0 0 auto;
+}
 .segmented { display: inline-flex; border: 1px solid #c8d4d8; border-radius: 7px; overflow: hidden; background: #fff; }
 .segmented button { border: 0; border-left: 1px solid #c8d4d8; background: #fff; color: #405058; cursor: pointer; padding: 8px 11px; font-size: 12px; }
 .segmented button:first-child { border-left: 0; }
@@ -518,18 +541,7 @@ main:is(.app-shell, .settings-shell) {
 }
 .file-tab-notice { margin: 0; padding: 5px 12px 8px; color: #80600f; font-size: 12px; }
 
-.viewer-body { position: relative; flex: 1; min-height: 0; overflow: auto; padding: var(--rw-viewer-padding-top) var(--rw-viewer-padding-x) var(--rw-viewer-padding-bottom); scrollbar-width: thin; }
-.viewer-copy-actions {
-  position: sticky;
-  top: 0;
-  z-index: 4;
-  display: flex;
-  justify-content: flex-end;
-  height: 0;
-  pointer-events: none;
-  gap: 7px;
-  transform: translateY(-22px);
-}
+.viewer-body { position: relative; flex: 1; min-height: 0; overflow-x: hidden; overflow-y: auto; padding: var(--rw-viewer-padding-top) var(--rw-viewer-padding-x) var(--rw-viewer-padding-bottom); scrollbar-width: thin; }
 .viewer-copy-button {
   display: inline-grid;
   place-items: center;
@@ -541,7 +553,6 @@ main:is(.app-shell, .settings-shell) {
   color: #405058;
   cursor: pointer;
   padding: 0;
-  pointer-events: auto;
   box-shadow: 0 2px 8px rgba(17, 32, 39, 0.08);
 }
 .viewer-copy-button svg {
@@ -573,7 +584,7 @@ main:is(.app-shell, .settings-shell) {
 .empty-state { border: 1px dashed #b9c8ce; border-radius: 8px; padding: 28px; color: #60727b; background: #fff; }
 
 .markdown-body, .code-viewer, .html-frame, .image-viewer, .pdf-frame {
-  max-width: 1120px;
+  max-width: min(1120px, 100%);
 }
 .markdown-body {
   line-height: 1.68;
@@ -588,6 +599,12 @@ main:is(.app-shell, .settings-shell) {
 .markdown-body h2 { font-size: var(--reader-h2-font-size, 23px); margin-top: 28px; }
 .markdown-body h3 { font-size: var(--reader-h3-font-size, 18px); margin-top: 22px; }
 .markdown-body a { color: #11606c; }
+.markdown-body img {
+  display: block;
+  box-sizing: border-box;
+  max-width: 100%;
+  height: auto;
+}
 .markdown-body code { background: #eef3f5; border: 1px solid #d5e0e4; border-radius: 4px; padding: 2px 5px; color: #22323a; font-size: 0.95em; }
 .markdown-body pre {
   overflow-x: auto;
@@ -764,7 +781,7 @@ main:is(.app-shell, .settings-shell) {
 .binary-state-marker.unsupported { background: #667780; }
 .metadata-state { background: #fbfcfd; }
 .html-frame, .pdf-frame { width: 100%; height: calc(100vh - 180px); border: 1px solid #d8e1e4; border-radius: 8px; background: #fff; }
-.image-viewer { display: block; max-width: 100%; max-height: calc(100vh - 180px); object-fit: contain; background: #fff; border: 1px solid #d8e1e4; border-radius: 8px; padding: 12px; }
+.image-viewer { display: block; box-sizing: border-box; width: auto; max-width: 100%; height: auto; max-height: calc(100vh - 180px); object-fit: contain; background: #fff; border: 1px solid #d8e1e4; border-radius: 8px; padding: 12px; }
 
 .right-panel {
   display: flex;
@@ -2235,6 +2252,7 @@ main:is(.app-shell, .settings-shell) {
     min-height: 520px;
   }
   .viewer-header { align-items: stretch; flex-direction: column; }
+  .viewer-toolbar-actions { flex-wrap: wrap; justify-content: flex-start; }
   .file-tab { flex-basis: 74%; }
   .html-frame, .pdf-frame { height: 62vh; }
   .settings-shell {

@@ -60,7 +60,8 @@ type FileTab = {
 
 type TabsByRepo = Record<string, FileTab[]>;
 type ActiveTabByRepo = Record<string, string>;
-type OpenFileOptions = { keep?: boolean };
+type OpenFileMode = "preview" | "new-preview" | "fixed";
+type OpenFileOptions = { mode?: OpenFileMode };
 type TabContextMenu = { tabId: string; x: number; y: number } | null;
 type PathContextMenu = { node: TreeNode; relativePath: string; absolutePath: string; x: number; y: number } | null;
 type FileTreeRow = {
@@ -251,13 +252,14 @@ export function App() {
         return;
       }
 
-      const replaceablePreview = currentTabs.find((tab) => tab.isPreview && !tab.isPinned);
+      const openMode = options.mode || "preview";
+      const replaceablePreview = openMode === "preview" ? currentTabs.find((tab) => tab.isPreview && !tab.isPinned) : null;
       if (!replaceablePreview && currentTabs.length >= MAX_FILE_TABS) {
         setTabNotice("Maximum of five file tabs reached. Close or unpin a tab before opening another file.");
         return;
       }
 
-      const placeholder = createPlaceholderTab(repoId, path, { keep: options.keep });
+      const placeholder = createPlaceholderTab(repoId, path, openMode);
       const nextTabs = replaceablePreview ? currentTabs.map((tab) => (tab.id === replaceablePreview.id ? placeholder : tab)) : [...currentTabs, placeholder];
       setTabsByRepo((current) => ({ ...current, [repoId]: nextTabs }));
       setActiveTabByRepo((current) => ({ ...current, [repoId]: tabId }));
@@ -625,7 +627,7 @@ export function App() {
 
   function openPathMenuFileInNewTab() {
     if (!activeRepoId || !pathMenu || pathMenu.node.type !== "file") return;
-    void openFile(activeRepoId, pathMenu.relativePath, { keep: true });
+    void openFile(activeRepoId, pathMenu.relativePath, { mode: "new-preview" });
     setPathMenu(null);
   }
 
@@ -808,10 +810,29 @@ export function App() {
 
       <section className="workspace" aria-label="Reader workspace">
         <header className="viewer-header">
-          <div>
-            <h2>{selectedPath || "Select a file"}</h2>
+          <div className="viewer-path-line">
+            <h2 className="viewer-path-text" title={selectedPath || "Select a file"}>{selectedPath || "Select a file"}</h2>
           </div>
-          <ViewModeControl file={activeFile} mode={activeTab?.viewMode || "rendered"} onChange={changeViewMode} />
+          <div className="viewer-toolbar-actions" aria-label="File actions">
+            {canCopyActiveFile ? (
+              <button type="button" className={`viewer-copy-button ${fileCopyState}`} aria-label={fileCopyLabel} title={fileCopyLabel} onClick={() => void copyActiveFileContent()}>
+                {fileCopyState === "copied" ? <CheckIcon /> : <CopyIcon />}
+              </button>
+            ) : null}
+            {canDeliverActiveFile ? (
+              <button
+                type="button"
+                className={`viewer-copy-button http-delivery-open-button${currentHttpDeliveryItem ? " active" : ""}`}
+                aria-label={httpDeliveryButtonLabel}
+                title={currentHttpDeliveryItem?.url || httpDeliveryButtonLabel}
+                disabled={httpDeliveryButtonDisabled}
+                onClick={() => startDeliveryWithNewTab(selectedPath)}
+              >
+                <ExternalLink aria-hidden="true" focusable="false" strokeWidth={1.9} />
+              </button>
+            ) : null}
+            <ViewModeControl file={activeFile} mode={activeTab?.viewMode || "rendered"} onChange={changeViewMode} />
+          </div>
         </header>
         <FileTabBar
           tabs={orderedTabs}
@@ -829,27 +850,6 @@ export function App() {
         />
         {error ? <p className="state-text error">{error}</p> : null}
         <div className="viewer-body" ref={viewerBodyRef} style={readerTypographyStyle}>
-          {canDeliverActiveFile || canCopyActiveFile ? (
-            <div className="viewer-copy-actions">
-              {canDeliverActiveFile ? (
-                <button
-                  type="button"
-                  className={`viewer-copy-button http-delivery-open-button${currentHttpDeliveryItem ? " active" : ""}`}
-                  aria-label={httpDeliveryButtonLabel}
-                  title={currentHttpDeliveryItem?.url || httpDeliveryButtonLabel}
-                  disabled={httpDeliveryButtonDisabled}
-                  onClick={() => startDeliveryWithNewTab(selectedPath)}
-                >
-                  <ExternalLink aria-hidden="true" focusable="false" strokeWidth={1.9} />
-                </button>
-              ) : null}
-              {canCopyActiveFile ? (
-                <button type="button" className={`viewer-copy-button ${fileCopyState}`} aria-label={fileCopyLabel} title={fileCopyLabel} onClick={() => void copyActiveFileContent()}>
-                  {fileCopyState === "copied" ? <CheckIcon /> : <CopyIcon />}
-                </button>
-              ) : null}
-            </div>
-          ) : null}
           <FileViewer tab={activeTab} outline={outline} readerFontScale={basicSettings.readerFontScale} colorMode={basicSettings.colorMode} />
         </div>
       </section>
@@ -1663,7 +1663,7 @@ function MemoPanel({ memoText, memoMode, onMemoTextChange, onMemoModeChange }: {
   );
 }
 
-function createPlaceholderTab(repoId: string, path: string, options: OpenFileOptions): FileTab {
+function createPlaceholderTab(repoId: string, path: string, mode: OpenFileMode = "preview"): FileTab {
   return {
     id: createTabId(repoId, path),
     path,
@@ -1672,7 +1672,7 @@ function createPlaceholderTab(repoId: string, path: string, options: OpenFileOpt
     loading: true,
     error: "",
     viewMode: "rendered",
-    isPreview: !options.keep,
+    isPreview: mode !== "fixed",
     isPinned: false,
     openedAt: Date.now(),
   };

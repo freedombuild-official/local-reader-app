@@ -201,6 +201,15 @@ describe("App", () => {
     expect(await screen.findByRole("button", { name: "README.md" })).toBeTruthy();
     expect(await screen.findByRole("heading", { name: "Hello" })).toBeTruthy();
     expect(document.querySelector(".viewer-header h2")?.textContent).toBe("README.md");
+    expect(document.querySelector(".viewer-path-text")?.textContent).toBe("README.md");
+    const toolbarActions = document.querySelector(".viewer-toolbar-actions") as HTMLElement;
+    expect(toolbarActions).toBeTruthy();
+    expect(Array.from(toolbarActions.children).map((child) => child.getAttribute("aria-label") || child.textContent)).toEqual([
+      "Copy file content",
+      "Start HTTP Delivery",
+      "View mode",
+    ]);
+    expect(document.querySelector(".viewer-copy-actions")).toBeNull();
     expect(document.querySelector(".viewer-kicker")).toBeNull();
     expect(document.querySelector(".selected-path")).toBeNull();
     expect(screen.getByRole("tab", { name: "Outline" }).getAttribute("aria-selected")).toBe("true");
@@ -319,7 +328,13 @@ describe("App", () => {
     expect(cssRule(".sidebar")).toContain("padding: var(--rw-sidebar-padding-y) var(--rw-sidebar-padding-x);");
     expect(cssRule(".tree-row")).toContain("min-height: var(--rw-tree-row-min-height);");
     expect(cssRule(".viewer-body")).toContain("padding: var(--rw-viewer-padding-top) var(--rw-viewer-padding-x) var(--rw-viewer-padding-bottom);");
-    expect(cssRule(".viewer-copy-actions")).toContain("transform: translateY(-22px);");
+    expect(cssRule(".viewer-body")).toContain("overflow-x: hidden;");
+    expect(cssRule(".viewer-body")).toContain("overflow-y: auto;");
+    expect(cssRule(".viewer-path-line")).toContain("min-width: 0;");
+    expect(cssRule(".viewer-path-text")).toContain("text-overflow: ellipsis;");
+    expect(cssRule(".viewer-path-text")).toContain("white-space: nowrap;");
+    expect(cssRule(".viewer-toolbar-actions")).toContain("flex: 0 0 auto;");
+    expect(cssRule(".viewer-toolbar-actions")).toContain("display: inline-flex;");
     expect(cssRule(".side-panel-body")).toContain("padding: var(--rw-side-panel-padding);");
     expect(stylesCss).toContain(".ai-context-chip-list,\n.ai-attachment-list,\n.ai-rule-chip-list {");
     expect(stylesCss).toContain("flex-wrap: nowrap;");
@@ -362,9 +377,10 @@ describe("App", () => {
     expect(repoPickerRow.querySelector('[aria-label="Reload repository"]')).toBeTruthy();
     expect(repoPickerRow.querySelector('[aria-label="HTTP Delivery"]')).toBeTruthy();
     expect(repoPickerRow.querySelector('[aria-label="Collapse all folders"]')).toBeTruthy();
-    expect(document.querySelector(".viewer-copy-actions")?.querySelector('[aria-label="Reload repository"]')).toBeNull();
-    expect(document.querySelector(".viewer-copy-actions")?.querySelector('[aria-label="HTTP Delivery"]')).toBeNull();
-    expect(document.querySelector(".viewer-copy-actions")?.querySelector('[aria-label="Collapse all folders"]')).toBeNull();
+    expect(document.querySelector(".viewer-copy-actions")).toBeNull();
+    expect(document.querySelector(".viewer-toolbar-actions")?.querySelector('[aria-label="Reload repository"]')).toBeNull();
+    expect(document.querySelector(".viewer-toolbar-actions")?.querySelector('[aria-label="HTTP Delivery"]')).toBeNull();
+    expect(document.querySelector(".viewer-toolbar-actions")?.querySelector('[aria-label="Collapse all folders"]')).toBeNull();
 
     fireEvent.doubleClick(screen.getByRole("tab", { name: "README.md" }));
     fireEvent.click(screen.getByRole("button", { name: "guide.md" }));
@@ -659,6 +675,25 @@ describe("App", () => {
     expect(scrollIntoView).toHaveBeenCalled();
   });
 
+  it("opens file tree Open in New Tab as an additional preview tab", async () => {
+    render(<App />);
+    expect(await screen.findByRole("heading", { name: "Hello" })).toBeTruthy();
+    expect(fileTabTitles()).toEqual(["README.md"]);
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: "guide.md" }), { clientX: 32, clientY: 36 });
+    fireEvent.click(screen.getByRole("menuitem", { name: "Open in New Tab" }));
+    expect(await screen.findByRole("heading", { name: "Guide" })).toBeTruthy();
+    expect(fileTabTitles()).toEqual(["README.md", "guide.md"]);
+    expect(fileTab("guide.md").className).toContain("preview");
+    expect(fileTab("guide.md").textContent).toContain("Preview");
+    expect(fileTab("guide.md").className).not.toContain("fixed");
+
+    fireEvent.click(screen.getByRole("button", { name: "api.ts" }));
+    expect(await screen.findByLabelText("Raw")).toBeTruthy();
+    expect(fileTabTitles()).toEqual(["guide.md", "api.ts"]);
+    expect(fileTab("api.ts").className).toContain("preview");
+  });
+
   it("starts, reuses, and stops HTTP Delivery from the viewer and tab menu", async () => {
     render(<App />);
     expect(await screen.findByRole("heading", { name: "Hello" })).toBeTruthy();
@@ -729,6 +764,13 @@ describe("App", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "image.png" }));
     await waitFor(() => expect(document.querySelector(".image-viewer")?.getAttribute("src")).toContain("/api/image"));
+    expect(cssRule(".image-viewer")).toContain("box-sizing: border-box;");
+    expect(cssRule(".image-viewer")).toContain("max-width: 100%;");
+    expect(cssRule(".image-viewer")).toContain("height: auto;");
+    expect(cssRule(".markdown-body img")).toContain("max-width: 100%;");
+    expect(cssRule(".markdown-body img")).toContain("height: auto;");
+    expect(cssRule(".markdown-table-scroll")).toContain("overflow-x: auto;");
+    expect(cssRule(".code-viewer")).toContain("overflow: auto;");
     expect(screen.queryByRole("heading", { name: "Binary file" })).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "paper.pdf" }));
@@ -1622,6 +1664,7 @@ function renderedMarkdownHtml(title: string): string {
     `<h1>${title}</h1>`,
     "<h2>Intro</h2>",
     '<div class="markdown-table-scroll" data-reader-wiki-table-scroll="true"><table><thead><tr><th>Name</th><th>Value</th></tr></thead><tbody><tr><td>Test</td><td>1</td></tr></tbody></table></div>',
+    '<p><img src="/wide.png" alt="Wide asset"></p>',
     '<div class="markdown-code-block" data-reader-wiki-code-block="true">',
     '<div class="markdown-code-block-toolbar">',
     '<button type="button" class="markdown-code-action-button markdown-code-copy-button" data-copy-state="idle" aria-label="Copy code block" title="Copy code block"></button>',
