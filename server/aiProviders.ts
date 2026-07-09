@@ -48,7 +48,7 @@ export async function testAIConnection(provider: AIProviderSettings, signal?: Ab
         messages: [{ role: "user", content: "Reply with Reader-Wiki ready." }],
         signal: timeoutSignal,
       });
-      return status("ready", "success", "success", "Connected.", "This entry is ready for read-only AI Chat.");
+      return status("ready", "success", "success", "Connected.", "This provider endpoint is reachable. Run AI Entry readiness to confirm Codex-backed write mode.");
     });
   } catch (error) {
     return safeProviderErrorStatus(error);
@@ -98,7 +98,7 @@ export function providerReadiness(provider: AIProviderSettings): AIConnectionSta
   } catch {
     return status("failed", "invalid_endpoint", "error", "Endpoint URL is invalid.", "Check the endpoint URL format.");
   }
-  return status("ready", "needs_test", "info", "Connection can be tested.", "Run Test connection before using this entry.");
+  return status("ready", "needs_test", "info", "Connection can be tested.", "Run AI Entry readiness before using this entry.");
 }
 
 async function requestProviderText({ provider, messages = [], context, attachments = [], modelBehavior, signal }: ProviderRequest): Promise<string> {

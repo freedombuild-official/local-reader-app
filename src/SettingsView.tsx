@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ArrowLeft, CheckCircle2, Settings as SettingsIcon, XCircle } from "lucide-react";
-import { fetchAIEntryReadiness, fetchRepositoryConfig, previewRepositoryConfig, saveRepositoryConfig, testAIProviderConnection, validateRepositoryConfig } from "./api";
+import { fetchAIEntryReadiness, fetchRepositoryConfig, previewRepositoryConfig, saveRepositoryConfig, validateRepositoryConfig } from "./api";
 import {
   activeAIEntry,
   aiModelBehavior,
@@ -48,6 +48,7 @@ type SaveState = "idle" | "dirty" | "saved" | "failed" | "pending";
 type SettingsViewProps = {
   basicSettings: BasicSettings;
   aiSettings: AISettingsState;
+  activeRepoId: string;
   initialCategory?: SettingsCategory;
   basicSaveError: string;
   onBack: () => void;
@@ -67,6 +68,7 @@ function normalizeExpandedRepoIndex(index: number | null, entries: RepositoryCon
 export function SettingsView({
   basicSettings,
   aiSettings,
+  activeRepoId,
   initialCategory = "basic",
   basicSaveError,
   onBack,
@@ -232,17 +234,12 @@ export function SettingsView({
     const providerFingerprint = isProviderEntryKind(entryAtStart) ? providerSettingsFingerprint(aiEntryProvider(settingsAtStart, entryAtStart)) : "";
     setTestingEntry(entry);
     try {
-      if (isProviderEntryKind(entryAtStart)) {
-        const provider = aiEntryProvider(settingsAtStart, entryAtStart);
-        const status = await testAIProviderConnection(provider);
-        commitAISettingsUpdate((current) => {
-          if (providerSettingsFingerprint(aiEntryProvider(current, entryAtStart)) !== providerFingerprint) return current;
-          return updateAIEntryStatus(current, entryAtStart, status);
-        });
-      } else {
-        const readiness = await fetchAIEntryReadiness(entryAtStart);
-        commitAISettingsUpdate((current) => updateCliEntryReadiness(current, readiness));
-      }
+      const provider = isProviderEntryKind(entryAtStart) ? aiEntryProvider(settingsAtStart, entryAtStart) : undefined;
+      const readiness = await fetchAIEntryReadiness(entryAtStart, provider, activeRepoId);
+      commitAISettingsUpdate((current) => {
+        if (isProviderEntryKind(entryAtStart) && providerSettingsFingerprint(aiEntryProvider(current, entryAtStart)) !== providerFingerprint) return current;
+        return updateCliEntryReadiness(current, readiness);
+      });
     } catch (error) {
       const failed: AIConnectionStatus = {
         state: "failed",
@@ -607,9 +604,7 @@ function AIChatSettingsPanel({
   function setActiveEntry(entry: AIEntryKind) {
     const nextSettings = { ...settings, activeEntry: entry };
     onChange(nextSettings);
-    if (isCliEntryKind(entry)) {
-      onTestEntry(entry, nextSettings);
-    }
+    onTestEntry(entry, nextSettings);
   }
 
   function clearActiveEntry() {
@@ -658,7 +653,7 @@ function AIChatSettingsPanel({
               entry="codexCli"
               title={entryLabel("codexCli")}
               subtitle="Existing CLI readiness"
-              note="Checks installed CLI sign-in and the read-only wrapper. No login, browser launch, or repository writes are started here."
+              note="Checks installed CLI sign-in and the repo-scoped write wrapper. No login, browser launch, or Git remote operation is started here."
               configured={configured}
               lastCheckedAt={settings.lastCheckedAtByEntry.codexCli}
               status={effectiveAIStatus(settings, "codexCli")}
@@ -680,7 +675,7 @@ function AIChatSettingsPanel({
               entry="claudeCli"
               title={entryLabel("claudeCli")}
               subtitle="Existing CLI readiness"
-              note="Checks installed CLI sign-in and the tool-restricted print wrapper. No login, browser auth, or credential handling is started here."
+              note="Checks installed CLI sign-in and the tool-restricted repo write wrapper. No login, browser auth, or credential handling is started here."
               configured={configured}
               lastCheckedAt={settings.lastCheckedAtByEntry.claudeCli}
               status={effectiveAIStatus(settings, "claudeCli")}
@@ -701,8 +696,8 @@ function AIChatSettingsPanel({
             <AuthenticationEntryCard
               entry="aiApi"
               title="AI API"
-              subtitle="Provider / model / credential"
-              note="Cloud and compatible providers require a model, endpoint where applicable, and a credential kept in this browser run only."
+              subtitle="Codex-backed provider / model / credential"
+              note="Provider settings are checked together with the Codex CLI substrate. Credentials stay in this browser run and are passed only to the child process environment."
               configured={configured}
               lastCheckedAt={settings.lastCheckedAtByEntry.aiApi}
               status={effectiveAIStatus(settings, "aiApi")}
@@ -722,8 +717,8 @@ function AIChatSettingsPanel({
             <AuthenticationEntryCard
               entry="localAi"
               title="Local AI"
-              subtitle="Local runtime / endpoint / model"
-              note="Use a localhost OpenAI-compatible endpoint. Reader-Wiki does not start runtimes, load models, or run local AI CLIs."
+              subtitle="Codex-backed local runtime / model"
+              note="Use Ollama or LM Studio through Codex CLI. Reader-Wiki does not start runtimes, load models, or launch auth flows."
               configured={configured}
               lastCheckedAt={settings.lastCheckedAtByEntry.localAi}
               status={effectiveAIStatus(settings, "localAi")}
@@ -739,7 +734,7 @@ function AIChatSettingsPanel({
               />
             </AuthenticationEntryCard>
           ) : null}
-          {isProviderEntryKind(activeEntry) ? <p className="settings-message">Provider credentials stay in the current browser run and are never written to repository config or browser storage.</p> : null}
+          {isProviderEntryKind(activeEntry) ? <p className="settings-message">Provider credentials stay in the current browser run and are never written to repository config, browser storage, or the default Codex auth store.</p> : null}
         </SettingsCard>
       ) : null}
       {activeEntry && behaviorCapability ? (
@@ -753,19 +748,19 @@ function AIChatSettingsPanel({
           />
         </SettingsCard>
       ) : null}
-      <SettingsCard title="Access policy" eyebrow="AI Chat" status="Read-only context">
+      <SettingsCard title="Access policy" eyebrow="AI Chat" status="Repo-scoped writes">
         <div className="policy-grid">
           <div className="policy-item ready">
-            <strong>Read active context</strong>
-            <small>AI Chat receives only the active file and provided metadata as guarded read-only context.</small>
+            <strong>Read selected context</strong>
+            <small>AI Chat receives selected files, directories, attachments, and repository rule context with repository-relative paths.</small>
           </div>
           <div className="policy-item">
-            <strong>No repository writes</strong>
-            <small>AI Chat cannot edit files, apply patches, mutate repositories, delete content, or search the whole repo on its own.</small>
+            <strong>Repo-scoped writes</strong>
+            <small>Write-capable entries may edit only inside the active repository root and report changed repository-relative paths.</small>
           </div>
           <div className="policy-item">
-            <strong>No runtime orchestration</strong>
-            <small>Reader-Wiki does not start AI servers, load models, download models, run shell commands, or launch auth flows.</small>
+            <strong>Guarded execution</strong>
+            <small>No Git commit, push, pull, fetch, checkout, merge, reset, auth flow, model download, plugin run, or app terminal UI is started.</small>
           </div>
         </div>
         <div className="subsection-title">Repository Access</div>
@@ -954,13 +949,13 @@ function AIAPIForm({
       ) : null}
       <div className="setting-row inline-row wide">
         <div>
-          <span>Connection status</span>
+          <span>Readiness</span>
           <strong>{statusLabel(status)}</strong>
           <small>{connectionHint(provider, status)}</small>
         </div>
         <button type="button" className={status.state === "ready" ? "success-button" : "secondary-button"} onClick={onTest} disabled={testing || !aiReady(provider)}>
           {status.state === "ready" ? <CheckCircle2 aria-hidden="true" focusable="false" /> : null}
-          {testing ? "Testing..." : status.state === "ready" ? "Test again" : "Test connection"}
+          {testing ? "Checking..." : status.state === "ready" ? "Check again" : "Check readiness"}
         </button>
       </div>
     </div>
@@ -1021,13 +1016,13 @@ function LocalAIForm({
       )}
       <div className="setting-row inline-row wide">
         <div>
-          <span>Connection status</span>
+          <span>Readiness</span>
           <strong>{statusLabel(status)}</strong>
           <small>{connectionHint(provider, status)}</small>
         </div>
         <button type="button" className={status.state === "ready" ? "success-button" : "secondary-button"} onClick={onTest} disabled={testing || !aiReady(provider)}>
           {status.state === "ready" ? <CheckCircle2 aria-hidden="true" focusable="false" /> : null}
-          {testing ? "Testing..." : status.state === "ready" ? "Test again" : "Test connection"}
+          {testing ? "Checking..." : status.state === "ready" ? "Check again" : "Check readiness"}
         </button>
       </div>
     </div>
@@ -1059,8 +1054,8 @@ function CliReadinessDetails({ entry }: { entry: CliAIEntrySettings }) {
       <ReadinessRow label="Binary" status={entry.binaryName ? "ready" : "warning"} value={entry.binaryName || "Unknown"} />
       <ReadinessRow label="Version" status={entry.version ? "ready" : "warning"} value={entry.version || "Not checked"} />
       <ReadinessRow label="Existing sign-in" status={entry.authState === "configured" ? "ready" : "warning"} value={cliAuthLabel(entry)} />
-      <ReadinessRow label="Read-only wrapper" status={entry.readOnlyWrapperState === "ready" ? "ready" : "warning"} value={cliWrapperLabel(entry)} />
-      <ReadinessRow label="Execution mode" status={entry.executionMode === "readOnly" ? "ready" : "warning"} value={entry.executionMode === "readOnly" ? "Read only" : "Not confirmed"} />
+      <ReadinessRow label="Repo-scoped write wrapper" status={entry.readOnlyWrapperState === "ready" ? "ready" : "warning"} value={cliWrapperLabel(entry)} />
+      <ReadinessRow label="Execution mode" status={entry.executionMode === "repoWrite" ? "ready" : "warning"} value={entry.executionMode === "repoWrite" ? "Repo write" : "Not confirmed"} />
     </>
   );
 }
@@ -1177,10 +1172,10 @@ function entryIcon(entry: AIEntryKind): string {
 }
 
 function entryDescription(entry: AIEntryKind): string {
-  if (entry === "codexCli") return "Installed CLI with read-only non-interactive execution.";
-  if (entry === "claudeCli") return "Installed CLI with tool-restricted print execution.";
-  if (entry === "aiApi") return "Remote API provider configured below.";
-  return "Local OpenAI-compatible runtime endpoint.";
+  if (entry === "codexCli") return "Installed CLI with repo-scoped non-interactive write execution.";
+  if (entry === "claudeCli") return "Installed CLI with tool-restricted repo write execution.";
+  if (entry === "aiApi") return "Remote API provider executed through Codex CLI.";
+  return "Local Ollama or LM Studio runtime executed through Codex CLI.";
 }
 
 function Field({ label, value, onChange, wide = false }: { label: string; value: string; onChange: (value: string) => void; wide?: boolean }) {
@@ -1228,7 +1223,7 @@ function ValidationRow({ item }: { item: RepositoryConfigValidation["checks"][nu
 }
 
 function RepositoryAccessList({ repositories }: { repositories: RepositoryConfigEntryDraft[] }) {
-  if (!repositories.length) return <p className="settings-message">No registered repositories are available for read-only context.</p>;
+  if (!repositories.length) return <p className="settings-message">No registered repositories are available for AI Chat access.</p>;
   return (
     <div className="repo-access-list" aria-label="Repository Access list">
       {repositories.map((repo) => (
@@ -1254,11 +1249,11 @@ function connectionHint(provider: AIProviderSettings, status: AIConnectionStatus
     if (!provider.credential?.trim()) return "Enter an API key.";
     if (!provider.model.trim()) return "Choose a model.";
     if ((provider.provider === "openaiCompatible" || provider.provider === "custom") && !provider.baseUrl.trim()) return "Add a Base URL in Endpoint settings.";
-    return "Ready to test this provider.";
+    return "Ready to check this provider through Codex CLI.";
   }
-  if (!provider.baseUrl.trim()) return "Enter a local endpoint.";
+  if (provider.runtime !== "ollama" && provider.runtime !== "lmStudio") return "Choose Ollama or LM Studio for Codex-backed Local AI.";
   if (!provider.model.trim()) return "Choose a local model.";
-  return "Ready to test this local runtime.";
+  return "Ready to check this local runtime through Codex CLI.";
 }
 
 function cliAuthLabel(entry: CliAIEntrySettings): string {
@@ -1268,7 +1263,7 @@ function cliAuthLabel(entry: CliAIEntrySettings): string {
 }
 
 function cliWrapperLabel(entry: CliAIEntrySettings): string {
-  if (entry.readOnlyWrapperState === "ready") return "Read-only ready";
+  if (entry.readOnlyWrapperState === "ready") return "Repo write ready";
   if (entry.readOnlyWrapperState === "notReady") return "Not ready";
   return "Unknown";
 }

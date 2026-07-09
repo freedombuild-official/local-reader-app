@@ -133,7 +133,8 @@ describe("settings state", () => {
     expect(migrated.activeEntry).toBe("codexCli");
     expect(Object.keys(migrated.entries)).toEqual(["aiApi", "localAi", "codexCli", "claudeCli"]);
     expect(JSON.stringify(migrated)).not.toContain(legacyBridgeKey);
-    expect(activeAIChatTarget(migrated)).toMatchObject({ kind: "cli", entry: "codexCli", status: { state: "ready", message: "old status" } });
+    expect(activeAIChatTarget(migrated)).toBeNull();
+    expect(effectiveAIStatus(migrated, "codexCli")).toMatchObject({ state: "ready", message: "old status" });
   });
 
   it("selects provider and CLI chat targets only when the active entry is ready", () => {
@@ -143,6 +144,10 @@ describe("settings state", () => {
       ...(defaultAISettings.entries.codexCli as CliAIEntrySettings),
       authState: "configured",
       readOnlyWrapperState: "ready",
+      executionMode: "repoWrite",
+    };
+    const codexReadOnly: CliAIEntrySettings = {
+      ...codexReady,
       executionMode: "readOnly",
     };
 
@@ -157,7 +162,7 @@ describe("settings state", () => {
       entries: { ...defaultAISettings.entries, localAi: localAiReady },
       statuses: { ...defaultAISettings.statuses, localAi: { state: "ready", code: "success", severity: "success", message: "Connected.", nextAction: "Ready.", checkedAt: "2026-07-05T00:00:00.000Z" } },
     })).toMatchObject({
-      kind: "provider",
+      kind: "codexBackedLocal",
       provider: localAiReady,
       status: { state: "ready", code: "success" },
     });
@@ -167,15 +172,16 @@ describe("settings state", () => {
       entries: { ...defaultAISettings.entries, aiApi: aiApiReady },
       statuses: { ...defaultAISettings.statuses, aiApi: { state: "ready", code: "success", severity: "success", message: "Connected.", nextAction: "Ready.", checkedAt: "2026-07-05T00:00:00.000Z" } },
     })).toMatchObject({
-      kind: "provider",
+      kind: "codexBackedProvider",
       provider: aiApiReady,
       status: { state: "ready", code: "success" },
     });
     expect(activeAIChatTarget({ ...defaultAISettings, activeEntry: "codexCli", entries: { ...defaultAISettings.entries, codexCli: codexReady } })).toMatchObject({
-      kind: "cli",
+      kind: "codexCli",
       entry: "codexCli",
       status: { state: "ready" },
     });
+    expect(activeAIChatTarget({ ...defaultAISettings, activeEntry: "codexCli", entries: { ...defaultAISettings.entries, codexCli: codexReadOnly } })).toBeNull();
   });
 
   it("normalizes AI model behavior by active entry and model capability", () => {

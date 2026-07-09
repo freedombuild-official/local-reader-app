@@ -68,7 +68,7 @@ export const defaultAISettings: AISettingsState = {
       authState: "unknown",
       readOnlyWrapperState: "unknown",
       executionMode: "unknown",
-      readinessMessage: "Run readiness check before using this entry.",
+      readinessMessage: "Run repo-scoped write readiness check before using this entry.",
     },
     claudeCli: {
       entry: "claudeCli",
@@ -77,7 +77,7 @@ export const defaultAISettings: AISettingsState = {
       authState: "unknown",
       readOnlyWrapperState: "unknown",
       executionMode: "unknown",
-      readinessMessage: "Run readiness check before using this entry.",
+      readinessMessage: "Run repo-scoped write readiness check before using this entry.",
     },
   },
   statuses: {
@@ -146,9 +146,9 @@ export function activeAIChatTarget(settings: AISettingsState): AIChatExecutionTa
   const entry = activeAIEntry(settings);
   if (!entry) return null;
   const status = effectiveAIStatus(settings, entry.entry);
-  if (status.state !== "ready") return null;
-  if (isProviderSettings(entry)) return { kind: "provider", provider: entry, status };
-  return { kind: "cli", entry: entry.entry, status };
+  if (status.state !== "ready" || !aiReady(entry)) return null;
+  if (isProviderSettings(entry)) return entry.entry === "localAi" ? { kind: "codexBackedLocal", provider: entry, status } : { kind: "codexBackedProvider", provider: entry, status };
+  return entry.entry === "claudeCli" ? { kind: "claudeCli", entry: "claudeCli", status } : { kind: "codexCli", entry: "codexCli", status };
 }
 
 export function activeAIRuleFileName(settings: AISettingsState): "AGENTS.md" | "CLAUDE.md" | null {
@@ -226,7 +226,7 @@ export function aiConfigured(entry: AIEntrySettings | null): boolean {
 export function aiReady(entry: AIEntrySettings | null): boolean {
   if (!entry) return false;
   if (isCliSettings(entry)) {
-    return entry.authState === "configured" && entry.readOnlyWrapperState === "ready" && entry.executionMode === "readOnly";
+    return entry.authState === "configured" && entry.readOnlyWrapperState === "ready" && entry.executionMode === "repoWrite";
   }
   if (!aiConfigured(entry)) return false;
   if (entry.provider === "openaiCompatible" || entry.provider === "custom") return Boolean(entry.baseUrl.trim());
@@ -248,10 +248,10 @@ export function derivedAIStatus(entry: AIEntrySettings | null): AIConnectionStat
   }
   if (isCliSettings(entry)) {
     if (aiReady(entry)) {
-      return aiStatus("ready", "success", "success", entry.readinessMessage || "CLI read-only wrapper is ready.", "Use this entry for read-only AI Chat or check again.", entry.lastCheckedAt || "");
+      return aiStatus("ready", "success", "success", entry.readinessMessage || "CLI repo-scoped write wrapper is ready.", "Use this entry for repo-scoped AI Chat or check again.", entry.lastCheckedAt || "");
     }
     if (entry.authState === "configured") {
-      return aiStatus("configured", "wrapper_not_ready", "warning", entry.readinessMessage || "CLI auth is configured, but the read-only wrapper is not confirmed.", "Run readiness check for this CLI entry.", entry.lastCheckedAt || "");
+      return aiStatus("configured", "wrapper_not_ready", "warning", entry.readinessMessage || "CLI auth is configured, but the repo-scoped write wrapper is not confirmed.", "Run readiness check for this CLI entry.", entry.lastCheckedAt || "");
     }
     if (entry.authState === "notConfigured") {
       return aiStatus("notConfigured", "cli_auth_missing", "warning", entry.readinessMessage || "CLI auth is not configured.", "Sign in with the CLI outside Reader-Wiki, then check readiness again.", entry.lastCheckedAt || "");
@@ -259,7 +259,7 @@ export function derivedAIStatus(entry: AIEntrySettings | null): AIConnectionStat
     return aiStatus("notConfigured", "needs_test", "info", entry.readinessMessage || "CLI readiness has not been checked.", "Run readiness check for this CLI entry.", entry.lastCheckedAt || "");
   }
   if (aiConfigured(entry)) {
-    return aiStatus("configured", "needs_test", "warning", "Connection has not been tested.", "Test this entry before using it for AI Chat.");
+    return aiStatus("configured", "needs_test", "warning", "Codex-backed write readiness has not been tested.", "Test this entry before using it for AI Chat.");
   }
   return aiStatus("notConfigured", "not_configured", "info", "Connection settings are incomplete.", providerNextAction(entry));
 }
@@ -308,7 +308,7 @@ export function updateAIEntryStatus(settings: AISettingsState, entry: AIEntryKin
 }
 
 export function updateCliEntryReadiness(settings: AISettingsState, readiness: CliAIEntryReadiness): AISettingsState {
-  const entry = normalizeAIEntryKind(readiness.entry) as AICliEntryKind;
+  const entry = normalizeAIEntryKind(readiness.entry);
   const status = readiness.status;
   return {
     ...settings,
@@ -394,7 +394,7 @@ function normalizeCliSettings(entry: AICliEntryKind, value: AIEntrySettings | un
     version: typeof source?.version === "string" ? source.version : defaults.version,
     authState: source?.authState === "configured" || source?.authState === "notConfigured" ? source.authState : defaults.authState,
     readOnlyWrapperState: source?.readOnlyWrapperState === "ready" || source?.readOnlyWrapperState === "notReady" ? source.readOnlyWrapperState : defaults.readOnlyWrapperState,
-    executionMode: source?.executionMode === "readOnly" ? "readOnly" : defaults.executionMode,
+    executionMode: source?.executionMode === "readOnly" || source?.executionMode === "repoWrite" ? source.executionMode : defaults.executionMode,
     lastCheckedAt: typeof source?.lastCheckedAt === "string" ? source.lastCheckedAt : defaults.lastCheckedAt,
     readinessMessage: typeof source?.readinessMessage === "string" ? source.readinessMessage : defaults.readinessMessage,
   };
@@ -417,7 +417,7 @@ function modelBehaviorCapabilityForEntry(entry: AIEntrySettings): AIModelBehavio
       return {
         kind: "intelligence",
         label: "Codex intelligence",
-        description: "Choose the response depth used when the read-only Codex CLI adapter receives the chat prompt.",
+        description: "Choose the response depth used when the Codex CLI write adapter receives the chat prompt.",
         levels: ["low", "medium", "high", "xhigh"],
       };
     }

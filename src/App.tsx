@@ -665,6 +665,7 @@ export function App() {
       <SettingsView
         basicSettings={basicSettings}
         aiSettings={aiSettings}
+        activeRepoId={activeRepoId}
         initialCategory={settingsCategory}
         basicSaveError={basicSaveError}
         onBack={() => setAppView("viewer")}

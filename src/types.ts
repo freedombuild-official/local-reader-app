@@ -143,6 +143,7 @@ export type AIFormat = "openaiCompatible" | "anthropic" | "google" | "custom";
 export type LocalAIRuntime = "ollama" | "lmStudio" | "openaiLocal" | "custom";
 export type AICliAuthState = "unknown" | "configured" | "notConfigured";
 export type AICliWrapperState = "unknown" | "ready" | "notReady";
+export type AIExecutionMode = "unknown" | "readOnly" | "repoWrite";
 
 export type AIProviderSettings = {
   entry: AIProviderEntryKind;
@@ -160,7 +161,7 @@ export type CliAIEntrySettings = {
   version: string;
   authState: AICliAuthState;
   readOnlyWrapperState: AICliWrapperState;
-  executionMode: "unknown" | "readOnly";
+  executionMode: AIExecutionMode;
   lastCheckedAt?: string;
   readinessMessage?: string;
 };
@@ -178,6 +179,9 @@ export type AIReadinessCode =
   | "timeout_or_abort"
   | "cli_auth_missing"
   | "wrapper_not_ready"
+  | "substrate_missing"
+  | "workspace_not_ready"
+  | "unsupported_provider"
   | "success";
 
 export type AIReadinessSeverity = "info" | "success" | "warning" | "error";
@@ -276,12 +280,27 @@ export type AIChatSessionState = {
 };
 
 export type AIChatExecutionTarget =
-  | { kind: "provider"; provider: AIProviderSettings; status?: AIConnectionStatus }
-  | { kind: "cli"; entry: AICliEntryKind; status?: AIConnectionStatus };
+  | { kind: "codexCli"; entry: "codexCli"; status?: AIConnectionStatus }
+  | { kind: "claudeCli"; entry: "claudeCli"; status?: AIConnectionStatus }
+  | { kind: "codexBackedProvider"; provider: AIProviderSettings; status?: AIConnectionStatus }
+  | { kind: "codexBackedLocal"; provider: AIProviderSettings; status?: AIConnectionStatus };
 
-export type CliAIEntryReadiness = {
-  entry: AICliEntryKind;
-  settings: CliAIEntrySettings;
+export type AIChangedPath = {
+  path: string;
+  status: GitStatus;
+};
+
+export type AIChatRunSummary = {
+  accessMode: "repoWrite";
+  entry: AIEntryKind;
+  substrate: "codexCli" | "claudeCli";
+  changedPaths: AIChangedPath[];
+  warnings: string[];
+};
+
+export type AIEntryReadiness = {
+  entry: AIEntryKind;
+  settings: AIEntrySettings;
   status: AIConnectionStatus;
   ready: boolean;
   checks: Array<{
@@ -291,6 +310,8 @@ export type CliAIEntryReadiness = {
     message: string;
   }>;
 };
+
+export type CliAIEntryReadiness = AIEntryReadiness;
 
 export type AIChatRequest = {
   target: AIChatExecutionTarget;
@@ -304,10 +325,11 @@ export type AIChatResponse = {
   message: AIChatMessage;
   context: AIChatContext;
   status: AIConnectionStatus;
+  run: AIChatRunSummary;
 };
 
 export type AIChatStreamEvent =
   | { type: "meta"; context: AIChatContext; status?: AIConnectionStatus }
   | { type: "delta"; content: string }
-  | { type: "done"; message: AIChatMessage; context: AIChatContext; status: AIConnectionStatus }
+  | { type: "done"; message: AIChatMessage; context: AIChatContext; status: AIConnectionStatus; run: AIChatRunSummary }
   | { type: "error"; error: string };

@@ -2,14 +2,14 @@ import path from "node:path";
 import { json as expressJson, type NextFunction, type Request, type Response, Router } from "express";
 import { HttpError, isHttpError } from "./errors.js";
 import { buildAIChatContext } from "./aiContext.js";
-import { requestCliAIChatCompletion, type AICommandRunner } from "./aiCliAdapters.js";
-import { probeCliEntryReadiness } from "./aiEntries.js";
-import { providerReadiness, requestAIChatCompletion, requestAIChatCompletionStream, testAIConnection } from "./aiProviders.js";
+import { requestRepoWriteAIChatCompletion, type AICommandRunner } from "./aiCliAdapters.js";
+import { probeAIEntryReadiness } from "./aiEntries.js";
+import { providerReadiness, testAIConnection } from "./aiProviders.js";
 import type { HttpDeliveryService } from "./httpDelivery.js";
 import { createRepositoryRegistry, type RepositoryRegistry } from "./repositoryRegistry.js";
 import { loadRepositoryConfigState, previewRepositoryConfig, saveRepositoryConfigDraft, validateRepositoryConfigDraft } from "./repositoryConfig.js";
 import { readGitStatusEntries, readRepoFile, readTree, readTreeSnapshot, resolveRepoImage, resolveRepoPdf, syncRepository } from "./repoFiles.js";
-import type { AIChatExecutionTarget, AIChatRequest, AIProviderSettings, RepositoryConfigDraft } from "./types.js";
+import type { AIChatExecutionTarget, AIChatRequest, AIEntryKind, AIProviderSettings, RepositoryConfigDraft } from "./types.js";
 
 type ApiRouterOptions = {
   configPath?: string;
@@ -130,9 +130,14 @@ export function createApiRouter(registryOrConfigPath: RepositoryRegistry | strin
   router.post("/ai/entry-readiness", async (request, response, next) => {
     try {
       setNoStore(response);
-      const entry = String(request.body?.entry || "");
-      if (entry !== "codexCli" && entry !== "claudeCli") throw new HttpError(400, "Unknown CLI entry.");
-      response.json(await probeCliEntryReadiness(entry, options.aiCommandRunner));
+      const entry = normalizeAIEntryKind(request.body?.entry);
+      const repoId = String(request.body?.repoId || "");
+      const repo = repoId ? await registry.findRepository(repoId) : undefined;
+      response.json(await probeAIEntryReadiness(entry, {
+        provider: request.body?.provider as AIProviderSettings | undefined,
+        repo,
+        runner: options.aiCommandRunner,
+      }));
     } catch (error) {
       next(error);
     }
@@ -145,10 +150,9 @@ export function createApiRouter(registryOrConfigPath: RepositoryRegistry | strin
       const target = resolveAIChatTarget(body);
       assertAIChatTargetReady(target);
       const context = await buildAIChatContext(registry, body.context);
-      const result = target.kind === "provider"
-        ? await requestAIChatCompletion({ provider: target.provider, messages: body.messages, context, attachments: body.attachments, modelBehavior: body.modelBehavior })
-        : await requestCheckedCliAIChatCompletion({ entry: target.entry, messages: body.messages, context, attachments: body.attachments, modelBehavior: body.modelBehavior, runner: options.aiCommandRunner });
-      response.json({ message: { role: "assistant", content: result.content }, context, status: result.status });
+      const repo = await registry.findRepository(context.repoId);
+      const result = await requestCheckedRepoWriteAIChatCompletion({ target, messages: body.messages, context, repo, attachments: body.attachments, modelBehavior: body.modelBehavior, runner: options.aiCommandRunner });
+      response.json({ message: { role: "assistant", content: result.content }, context, status: result.status, run: result.run });
     } catch (error) {
       next(error);
     }
@@ -164,14 +168,10 @@ export function createApiRouter(registryOrConfigPath: RepositoryRegistry | strin
       response.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
       response.setHeader("X-Content-Type-Options", "nosniff");
       response.write(`${JSON.stringify({ type: "meta", context })}\n`);
-      const result = target.kind === "provider"
-        ? await requestAIChatCompletionStream(
-            { provider: target.provider, messages: body.messages, context, attachments: body.attachments, modelBehavior: body.modelBehavior },
-            (content) => response.write(`${JSON.stringify({ type: "delta", content })}\n`),
-          )
-        : await requestCheckedCliAIChatCompletion({ entry: target.entry, messages: body.messages, context, attachments: body.attachments, modelBehavior: body.modelBehavior, runner: options.aiCommandRunner });
-      if (target.kind === "cli") response.write(`${JSON.stringify({ type: "delta", content: result.content })}\n`);
-      response.write(`${JSON.stringify({ type: "done", message: { role: "assistant", content: result.content }, context, status: result.status })}\n`);
+      const repo = await registry.findRepository(context.repoId);
+      const result = await requestCheckedRepoWriteAIChatCompletion({ target, messages: body.messages, context, repo, attachments: body.attachments, modelBehavior: body.modelBehavior, runner: options.aiCommandRunner });
+      response.write(`${JSON.stringify({ type: "delta", content: result.content })}\n`);
+      response.write(`${JSON.stringify({ type: "done", message: { role: "assistant", content: result.content }, context, status: result.status, run: result.run })}\n`);
       response.end();
     } catch (error) {
       if (!response.headersSent) {
@@ -250,15 +250,25 @@ export function createApiRouter(registryOrConfigPath: RepositoryRegistry | strin
 }
 
 function resolveAIChatTarget(body: AIChatRequest): AIChatExecutionTarget {
-  const target = body.target || (body.provider ? { kind: "provider" as const, provider: body.provider } : null);
+  const rawTarget = body.target as unknown as { kind?: string; entry?: string; provider?: AIProviderSettings; status?: unknown } | undefined;
+  const target = rawTarget || (body.provider ? { kind: "provider", provider: body.provider } : null);
   if (!target) throw new HttpError(400, "Select an AI Chat target.");
-  return target;
+  if (target.kind === "codexCli") return { kind: "codexCli", entry: "codexCli", status: target.status as AIChatExecutionTarget["status"] };
+  if (target.kind === "claudeCli") return { kind: "claudeCli", entry: "claudeCli", status: target.status as AIChatExecutionTarget["status"] };
+  if (target.kind === "codexBackedProvider" && target.provider) return { kind: "codexBackedProvider", provider: target.provider, status: target.status as AIChatExecutionTarget["status"] };
+  if (target.kind === "codexBackedLocal" && target.provider) return { kind: "codexBackedLocal", provider: target.provider, status: target.status as AIChatExecutionTarget["status"] };
+  if (target.kind === "cli" && target.entry === "codexCli") return { kind: "codexCli", entry: "codexCli", status: target.status as AIChatExecutionTarget["status"] };
+  if (target.kind === "cli" && target.entry === "claudeCli") return { kind: "claudeCli", entry: "claudeCli", status: target.status as AIChatExecutionTarget["status"] };
+  if (target.kind === "provider" && target.provider?.entry === "localAi") return { kind: "codexBackedLocal", provider: target.provider, status: target.status as AIChatExecutionTarget["status"] };
+  if (target.kind === "provider" && target.provider) return { kind: "codexBackedProvider", provider: target.provider, status: target.status as AIChatExecutionTarget["status"] };
+  throw new HttpError(400, "Unknown AI Chat target.");
 }
 
 function assertAIChatTargetReady(target: AIChatExecutionTarget): void {
-  if (target.kind === "cli") return;
-  const readiness = providerReadiness(target.provider);
-  if (readiness.state !== "ready") throw new HttpError(400, readiness.message);
+  if (target.kind === "codexBackedProvider" || target.kind === "codexBackedLocal") {
+    const readiness = providerReadiness(target.provider);
+    if (readiness.state !== "ready") throw new HttpError(400, readiness.message);
+  }
   if (target.status?.state !== "ready" || target.status.code !== "success") {
     throw new HttpError(409, "AI Entry readiness is not confirmed.");
   }
@@ -274,8 +284,22 @@ function requestBaseUrl(request: Request): string {
   return `${protocol}://${request.get("host") || "localhost"}`;
 }
 
-async function requestCheckedCliAIChatCompletion(request: Parameters<typeof requestCliAIChatCompletion>[0]) {
-  const readiness = await probeCliEntryReadiness(request.entry, request.runner);
+async function requestCheckedRepoWriteAIChatCompletion(request: Parameters<typeof requestRepoWriteAIChatCompletion>[0]) {
+  const readiness = await probeAIEntryReadiness(targetEntry(request.target), {
+    provider: "provider" in request.target ? request.target.provider : undefined,
+    repo: request.repo,
+    runner: request.runner,
+  });
   if (!readiness.ready) throw new HttpError(409, readiness.status.message || "CLI readiness is not confirmed.");
-  return requestCliAIChatCompletion(request);
+  return requestRepoWriteAIChatCompletion(request);
+}
+
+function targetEntry(target: AIChatExecutionTarget): AIEntryKind {
+  if (target.kind === "codexCli" || target.kind === "claudeCli") return target.entry;
+  return target.provider.entry;
+}
+
+function normalizeAIEntryKind(entry: unknown): AIEntryKind {
+  if (entry === "aiApi" || entry === "localAi" || entry === "codexCli" || entry === "claudeCli") return entry;
+  throw new HttpError(400, "Unknown AI entry.");
 }

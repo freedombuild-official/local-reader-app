@@ -121,21 +121,29 @@ beforeEach(() => {
       return json(repositoryConfigState());
     }
     if (url === "/api/ai/test-connection") {
-      return json({ state: "ready", code: "success", severity: "success", message: "Connected.", nextAction: "This entry is ready for read-only AI Chat.", checkedAt: "2026-07-03T00:00:00.000Z" });
+      return json({ state: "ready", code: "success", severity: "success", message: "Connected.", nextAction: "Run AI Entry readiness to confirm Codex-backed write mode.", checkedAt: "2026-07-03T00:00:00.000Z" });
     }
     if (url === "/api/ai/entry-readiness") {
-      const body = parseJsonBody(init?.body) as { entry?: string };
-      return json(cliReadiness(String(body.entry || "codexCli")));
+      const body = parseJsonBody(init?.body) as { entry?: string; provider?: Record<string, unknown> };
+      return json(aiEntryReadiness(String(body.entry || "codexCli"), body.provider));
     }
     if (url === "/api/ai/chat" || url === "/api/ai/chat/stream") {
       const body = parseJsonBody(init?.body) as { target?: { kind?: string; entry?: string; provider?: { entry?: string } }; provider?: { entry?: string } };
-      const target = body.target?.kind === "cli" ? body.target.entry : body.target?.provider?.entry || body.provider?.entry || "provider";
+      const target = body.target?.entry || body.target?.provider?.entry || body.provider?.entry || body.target?.kind || "provider";
       const codeBlock = "```ts\nconst ok = true;\n```";
       const content = `${target} says the active file says hello.\n\n- [x] Render task item\n\n${codeBlock}`;
+      const run = {
+        accessMode: "repoWrite",
+        entry: target,
+        substrate: target === "claudeCli" ? "claudeCli" : "codexCli",
+        changedPaths: [{ path: "README.md", status: "changed" }],
+        warnings: [],
+      };
       const payload = {
         message: { role: "assistant", content },
         context: { repoId: "docs", systemPromptVersion: "1.0.0", primaryItems: [{ repoId: "docs", role: "primary", source: "manual", path: "README.md", name: "README.md", kind: "file", fileKind: "markdown", viewerStatus: "displayable", lineCount: 12, byteLength: 120, contentIncluded: true, content: "# Hello" }], ruleItems: [] },
         status: { state: "ready", message: "Response received.", checkedAt: "2026-07-03T00:00:00.000Z" },
+        run,
       };
       if (url === "/api/ai/chat/stream") {
         return streamJsonLines([
@@ -1028,7 +1036,7 @@ describe("App", () => {
     expect(screen.queryByLabelText("New repository repository entry")).toBeNull();
   });
 
-  it("adds AI Chat as a read-only right panel and can answer after provider settings are configured", async () => {
+  it("adds AI Chat as a repo-scoped write panel and can answer after provider readiness is confirmed", async () => {
     render(<App />);
     expect(await screen.findByRole("heading", { name: "Hello" })).toBeTruthy();
     fireEvent.click(screen.getByRole("tab", { name: "AI Chat" }));
@@ -1082,7 +1090,7 @@ describe("App", () => {
     expect((document.querySelector(".active-entry-summary") as HTMLElement).textContent).toContain("This entry is selected for AI Chat.");
     expect(within(nextAiApiEntry).queryByText("Enter the API credential for this provider.")).toBeNull();
     expect(fetchCallsTo("/api/ai/test-connection")).toHaveLength(0);
-    expect(fetchCallsTo("/api/ai/entry-readiness")).toHaveLength(0);
+    expect(fetchCallsTo("/api/ai/entry-readiness")).toHaveLength(1);
     const connectionHeading = screen.getByRole("heading", { name: "Connection / Credentials" });
     expect(aiEntryHeading.compareDocumentPosition(connectionHeading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(connectionHeading.compareDocumentPosition(accessHeading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -1095,14 +1103,14 @@ describe("App", () => {
     const aiApiDetails = screen.getByLabelText("AI API readiness details") as HTMLDetailsElement;
     expect(aiApiDetails.open).toBe(false);
     expect(within(aiApiDetails).getByLabelText("Readiness checklist").textContent).toContain("Next action");
-    expect((within(nextAiApiAuth).getByRole("button", { name: "Test connection" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((await waitForScopedButton(nextAiApiAuth, "Check readiness") as HTMLButtonElement).disabled).toBe(true);
 
     fireEvent.change(within(nextAiApiAuth).getByLabelText("API key"), { target: { value: "local-test-key" } });
     expect(document.body.textContent || "").not.toContain("local-test-key");
     expect(within(nextAiApiAuth).getByText("********")).toBeTruthy();
     expect((within(nextAiApiAuth).getByRole("button", { name: "Clear key" }) as HTMLButtonElement).disabled).toBe(false);
     fireEvent.click(within(nextAiApiAuth).getByRole("button", { name: "Clear key" }));
-    expect((within(nextAiApiAuth).getByRole("button", { name: "Test connection" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((await waitForScopedButton(nextAiApiAuth, "Check readiness") as HTMLButtonElement).disabled).toBe(true);
 
     fireEvent.change(within(nextAiApiAuth).getByLabelText("API key"), { target: { value: "local-test-key" } });
     fireEvent.change(within(nextAiApiAuth).getByLabelText("Provider"), { target: { value: "openaiCompatible" } });
@@ -1120,11 +1128,12 @@ describe("App", () => {
     fireEvent.click(openSettingsButton());
     fireEvent.click(await screen.findByRole("tab", { name: "AI Chat" }));
     const testedAiApiAuth = screen.getByLabelText("AI API connection");
-    fireEvent.click(within(testedAiApiAuth).getByRole("button", { name: "Test connection" }));
-    expect((await screen.findAllByText("Connected.")).length).toBeGreaterThan(0);
-    expect(within(testedAiApiAuth).getByRole("button", { name: "Test again" })).toBeTruthy();
+    fireEvent.click(await waitForScopedButton(testedAiApiAuth, "Check readiness"));
+    expect((await screen.findAllByText("Connected")).length).toBeGreaterThan(0);
+    expect(within(testedAiApiAuth).getByRole("button", { name: "Check again" })).toBeTruthy();
     expect((screen.getByLabelText("AI API readiness details") as HTMLDetailsElement).open).toBe(false);
-    expect(fetchCallsTo("/api/ai/test-connection")).toHaveLength(1);
+    expect(fetchCallsTo("/api/ai/test-connection")).toHaveLength(0);
+    expect(fetchCallsTo("/api/ai/entry-readiness").length).toBeGreaterThanOrEqual(2);
 
     expect(document.querySelectorAll(".toggle-card input")).toHaveLength(0);
     expect(screen.queryByText("Delete warning preview")).toBeNull();
@@ -1147,8 +1156,8 @@ describe("App", () => {
     fireEvent.click(openSettingsButton());
     fireEvent.click(await screen.findByRole("tab", { name: "AI Chat" }));
     const retestedAiApiAuth = screen.getByLabelText("AI API connection");
-    fireEvent.click(within(retestedAiApiAuth).getByRole("button", { name: "Test connection" }));
-    expect(await screen.findByText("Test again")).toBeTruthy();
+    fireEvent.click(await waitForScopedButton(retestedAiApiAuth, "Check readiness"));
+    expect(await screen.findByText("Check again")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Back to viewer" }));
     fireEvent.click(await screen.findByRole("tab", { name: "AI Chat" }));
     fireEvent.change(screen.getByLabelText("AI Chat message"), { target: { value: "What does this file say?" } });
@@ -1169,8 +1178,8 @@ describe("App", () => {
     fireEvent.change(within(aiApiAuth).getByLabelText("Provider"), { target: { value: "openaiCompatible" } });
     fireEvent.change(within(aiApiAuth).getByLabelText("Model"), { target: { value: "model-a" } });
     fireEvent.change(within(aiApiAuth).getByLabelText("Base URL"), { target: { value: "http://127.0.0.1:7777/v1" } });
-    fireEvent.click(within(aiApiAuth).getByRole("button", { name: "Test connection" }));
-    expect((await screen.findAllByText("Connected.")).length).toBeGreaterThan(0);
+    fireEvent.click(await waitForScopedButton(aiApiAuth, "Check readiness"));
+    expect((await screen.findAllByText("Connected")).length).toBeGreaterThan(0);
 
     fireEvent.click(screen.getByRole("button", { name: "Back to viewer" }));
     fireEvent.contextMenu(await screen.findByRole("button", { name: "guide.md" }), { clientX: 120, clientY: 120 });
@@ -1243,8 +1252,8 @@ describe("App", () => {
     fireEvent.change(within(aiApiAuth).getByLabelText("Provider"), { target: { value: "openaiCompatible" } });
     fireEvent.change(within(aiApiAuth).getByLabelText("Model"), { target: { value: "model-a" } });
     fireEvent.change(within(aiApiAuth).getByLabelText("Base URL"), { target: { value: "http://127.0.0.1:7777/v1" } });
-    fireEvent.click(within(aiApiAuth).getByRole("button", { name: "Test connection" }));
-    expect((await screen.findAllByText("Connected.")).length).toBeGreaterThan(0);
+    fireEvent.click(await waitForScopedButton(aiApiAuth, "Check readiness"));
+    expect((await screen.findAllByText("Connected")).length).toBeGreaterThan(0);
 
     fireEvent.click(screen.getByRole("button", { name: "Back to viewer" }));
     fireEvent.contextMenu(await screen.findByRole("button", { name: "guide.md" }), { clientX: 120, clientY: 120 });
@@ -1296,8 +1305,8 @@ describe("App", () => {
     fireEvent.change(within(aiApiAuth).getByLabelText("Provider"), { target: { value: "openaiCompatible" } });
     fireEvent.change(within(aiApiAuth).getByLabelText("Model"), { target: { value: "model-a" } });
     fireEvent.change(within(aiApiAuth).getByLabelText("Base URL"), { target: { value: "http://127.0.0.1:7777/v1" } });
-    fireEvent.click(within(aiApiAuth).getByRole("button", { name: "Test connection" }));
-    expect((await screen.findAllByText("Connected.")).length).toBeGreaterThan(0);
+    fireEvent.click(await waitForScopedButton(aiApiAuth, "Check readiness"));
+    expect((await screen.findAllByText("Connected")).length).toBeGreaterThan(0);
 
     fireEvent.click(screen.getByRole("button", { name: "Back to viewer" }));
     fireEvent.contextMenu(await screen.findByRole("button", { name: "guide.md" }), { clientX: 120, clientY: 120 });
@@ -1437,7 +1446,7 @@ describe("App", () => {
     await waitFor(() => expect(aiCodeCopyButton.dataset.copyState).toBe("copied"));
     expect(clipboardWrite).toHaveBeenCalledWith(expect.stringContaining("const ok = true;"));
     fireEvent.click(within(aiMessage).getByRole("button", { name: "Copy AI message" }));
-    expect(clipboardWrite).toHaveBeenCalledWith("codexCli says the active file says hello.\n\n- [x] Render task item\n\n```ts\nconst ok = true;\n```");
+    expect(clipboardWrite).toHaveBeenCalledWith("codexCli says the active file says hello.\n\n- [x] Render task item\n\n```ts\nconst ok = true;\n```\n\nChanged paths:\n- changed: README.md");
     await act(async () => {
       await new Promise((resolve) => window.setTimeout(resolve, 1900));
     });
@@ -1463,7 +1472,7 @@ describe("App", () => {
     fetchMock.mockImplementationOnce(() => new Promise<Response>((resolve) => {
       resolveConnection = resolve;
     }));
-    fireEvent.click(within(aiApiAuth).getByRole("button", { name: "Test connection" }));
+    fireEvent.click(await waitForScopedButton(aiApiAuth, "Check readiness"));
     await waitFor(() => expect(resolveConnection).not.toBeNull());
     fireEvent.change(within(aiApiAuth).getByLabelText("Model"), { target: { value: "model-b" } });
 
@@ -1473,7 +1482,7 @@ describe("App", () => {
     expect(screen.queryByLabelText("AI API connection")).toBeNull();
 
     await act(async () => {
-      resolveConnection?.(json({ state: "ready", code: "success", severity: "success", message: "Connected.", nextAction: "This entry is ready for read-only AI Chat.", checkedAt: "2026-07-03T00:00:00.000Z" }));
+      resolveConnection?.(json(aiEntryReadiness("aiApi", { entry: "aiApi", provider: "openaiCompatible", credential: "local-test-key", model: "model-a", baseUrl: "http://127.0.0.1:7777/v1", apiFormat: "openaiCompatible" })));
     });
 
     expect(screen.getByLabelText("Claude Code CLI readiness")).toBeTruthy();
@@ -1504,7 +1513,7 @@ describe("App", () => {
     expect(within(codexDetailsBefore).getByLabelText("Readiness checklist").textContent).toContain("Binary");
     expect(within(codexDetailsBefore).getByLabelText("Readiness checklist").textContent).toContain("Version");
     expect(within(codexDetailsBefore).getByLabelText("Readiness checklist").textContent).toContain("Existing sign-in");
-    expect(within(codexDetailsBefore).getByLabelText("Readiness checklist").textContent).toContain("Read-only wrapper");
+    expect(within(codexDetailsBefore).getByLabelText("Readiness checklist").textContent).toContain("Repo-scoped write wrapper");
     expect(within(codexDetailsBefore).getByLabelText("Readiness checklist").textContent).toContain("Execution mode");
     expect(within(codexDetailsBefore).getByLabelText("Readiness checklist").textContent).toContain("Last check");
     await waitFor(() => expect(within(codexAuth).getByRole("button", { name: "Check again" })).toBeTruthy());
@@ -1560,6 +1569,16 @@ function createMockOpenedTab(): MockOpenedTab {
 function openSettingsButton(): HTMLElement {
   const buttons = screen.getAllByRole("button", { name: "Open Settings" });
   return buttons[buttons.length - 1] as HTMLElement;
+}
+
+async function waitForScopedButton(container: HTMLElement, name: string): Promise<HTMLElement> {
+  let button: HTMLElement | null = null;
+  await waitFor(() => {
+    button = within(container).getByRole("button", { name });
+    expect(button).toBeTruthy();
+  });
+  if (!button) throw new Error(`Button not found: ${name}`);
+  return button;
 }
 
 function fileTabTitles(): string[] {
@@ -1708,14 +1727,47 @@ function repositoryValidation() {
   };
 }
 
-function cliReadiness(entry: string) {
+function aiEntryReadiness(entry: string, provider?: Record<string, unknown>) {
+  if (entry === "aiApi" || entry === "localAi") {
+    const label = entry === "aiApi" ? "AI API" : "Local AI";
+    const model = String(provider?.model || "");
+    const baseUrl = String(provider?.baseUrl || "");
+    const credential = String(provider?.credential || "");
+    const configured = entry === "aiApi" ? Boolean(model && baseUrl && credential) : Boolean(model && baseUrl);
+    return {
+      entry,
+      ready: configured,
+      status: {
+        state: configured ? "ready" : "notConfigured",
+        code: configured ? "success" : "not_configured",
+        severity: configured ? "success" : "warning",
+        message: configured ? `${label} Codex-backed repo-scoped write is ready.` : "Connection settings are incomplete.",
+        nextAction: configured ? "Use this entry for repo-scoped AI Chat or check again." : "Complete the entry settings, then run readiness again.",
+        checkedAt: "2026-07-03T00:00:00.000Z",
+      },
+      settings: {
+        entry,
+        ...(provider || {}),
+      },
+      checks: [
+        { id: "provider", label: entry === "aiApi" ? "Provider settings" : "Local settings", status: configured ? "ready" : "error", message: configured ? "Ready" : "Settings are incomplete." },
+        { id: "binary", label: "Codex CLI binary", status: "ready", message: "Ready" },
+        { id: "wrapper", label: "Codex repo-scoped write wrapper", status: "ready", message: "Ready" },
+        { id: "workspace", label: "Workspace", status: "ready", message: "Ready" },
+        { id: "auth-isolation", label: "Isolated auth", status: configured ? "ready" : "error", message: configured ? "Ready" : "Pending settings." },
+      ],
+    };
+  }
   const codex = entry === "codexCli";
   return {
     entry,
     ready: true,
     status: {
       state: "ready",
-      message: codex ? ["Co", "dex CLI read-only wrapper is ready."].join("") : "Claude Code CLI read-only wrapper is ready.",
+      code: "success",
+      severity: "success",
+      message: codex ? ["Co", "dex CLI repo-scoped write wrapper is ready."].join("") : "Claude Code CLI repo-scoped write wrapper is ready.",
+      nextAction: "Use this entry for repo-scoped AI Chat or check again.",
       checkedAt: "2026-07-03T00:00:00.000Z",
     },
     settings: {
@@ -1724,14 +1776,15 @@ function cliReadiness(entry: string) {
       version: codex ? "codex-cli 0.142.5" : "2.1.199",
       authState: "configured",
       readOnlyWrapperState: "ready",
-      executionMode: "readOnly",
+      executionMode: "repoWrite",
       lastCheckedAt: "2026-07-03T00:00:00.000Z",
-      readinessMessage: codex ? ["Co", "dex CLI read-only wrapper is ready."].join("") : "Claude Code CLI read-only wrapper is ready.",
+      readinessMessage: codex ? ["Co", "dex CLI repo-scoped write wrapper is ready."].join("") : "Claude Code CLI repo-scoped write wrapper is ready.",
     },
     checks: [
       { id: "binary", label: "Binary", status: "ready", message: "Ready" },
       { id: "auth", label: "Existing CLI auth", status: "ready", message: "Ready" },
-      { id: "wrapper", label: "Read-only wrapper", status: "ready", message: "Ready" },
+      { id: "wrapper", label: "Repo-scoped write wrapper", status: "ready", message: "Ready" },
+      { id: "workspace", label: "Workspace", status: "ready", message: "Ready" },
     ],
   };
 }

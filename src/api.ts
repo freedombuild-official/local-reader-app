@@ -3,7 +3,7 @@ import type {
   AIChatResponse,
   AIChatStreamEvent,
   AIConnectionStatus,
-  AICliEntryKind,
+  AIEntryKind,
   AIProviderSettings,
   CliAIEntryReadiness,
   FileResponse,
@@ -97,11 +97,11 @@ export async function testAIProviderConnection(provider: AIProviderSettings): Pr
   });
 }
 
-export async function fetchAIEntryReadiness(entry: AICliEntryKind): Promise<CliAIEntryReadiness> {
+export async function fetchAIEntryReadiness(entry: AIEntryKind, provider?: AIProviderSettings, repoId = ""): Promise<CliAIEntryReadiness> {
   return requestJson<CliAIEntryReadiness>("/api/ai/entry-readiness", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ entry }),
+    body: JSON.stringify({ entry, provider, repoId }),
   });
 }
 

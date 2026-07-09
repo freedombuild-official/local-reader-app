@@ -127,7 +127,7 @@ export function AIChatPanel({ aiSettings, session, onSessionChange, modelBehavio
             return;
           }
           if (event.type === "done") {
-            updateSessionAndFollow((current) => replaceLastAssistant(current, event.message.content));
+            updateSessionAndFollow((current) => replaceLastAssistant(current, appendRunSummary(event.message.content, event.run)));
             return;
           }
           if (event.type === "error") {
@@ -413,6 +413,14 @@ function replaceLastAssistant(session: AIChatSessionState, content: string): AIC
     ...session,
     messages: session.messages.map((message, index) => (index === session.messages.length - 1 && message.role === "assistant" ? { ...message, content } : message)),
   };
+}
+
+function appendRunSummary(content: string, run: { changedPaths: Array<{ path: string; status: string }>; warnings: string[] }): string {
+  const changed = run.changedPaths.length
+    ? ["Changed paths:", ...run.changedPaths.map((item) => `- ${item.status}: ${item.path}`)].join("\n")
+    : "No repository changes.";
+  const warnings = run.warnings.length ? ["Warnings:", ...run.warnings.map((warning) => `- ${warning}`)].join("\n") : "";
+  return [content, changed, warnings].filter(Boolean).join("\n\n");
 }
 
 function renderAIMessage(content: string): string {

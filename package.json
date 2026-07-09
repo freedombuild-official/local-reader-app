@@ -1,7 +1,7 @@
 {
   "name": "reader-wiki",
   "version": "0.1.0",
-  "description": "Local HTTP read-only wiki viewer for local repositories.",
+  "description": "Local HTTP wiki viewer with guarded AI Chat writes for local repositories.",
   "license": "MIT",
   "type": "module",
   "scripts": {
