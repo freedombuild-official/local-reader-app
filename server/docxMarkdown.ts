@@ -19,23 +19,27 @@ export async function extractMarkdownFromDocx(filePath: string, byteLength: numb
   return markdown;
 }
 
-async function readDocxDocumentXml(filePath: string): Promise<string> {
+export async function extractMarkdownFromDocxBuffer(buffer: Buffer): Promise<string> {
+  if (buffer.byteLength > DOCX_VIEWER_MAX_BYTES) throw new HttpError(413, "The .docx file is too large to display.");
+  const documentXml = await readDocxDocumentXml(buffer);
+  const markdown = extractTextFromWordDocumentXml(documentXml);
+  if (!isMarkdownSource(markdown)) throw new HttpError(415, DOCX_MARKDOWN_UNSUPPORTED_MESSAGE);
+  return markdown;
+}
+
+async function readDocxDocumentXml(source: string | Buffer): Promise<string> {
   try {
-    return await readZipEntry(filePath, WORD_DOCUMENT_ENTRY);
+    return await readZipEntry(source, WORD_DOCUMENT_ENTRY);
   } catch (error) {
     if (isHttpError(error)) throw error;
     throw new HttpError(415, "The .docx file could not be read.");
   }
 }
 
-function readZipEntry(filePath: string, targetEntryName: string): Promise<string> {
+async function readZipEntry(source: string | Buffer, targetEntryName: string): Promise<string> {
+  const options = { lazyEntries: true, strictFileNames: true, validateEntrySizes: true };
+  const zipFile = Buffer.isBuffer(source) ? await yauzl.fromBufferPromise(source, options) : await yauzl.openPromise(source, options);
   return new Promise((resolve, reject) => {
-    yauzl.open(filePath, { lazyEntries: true, strictFileNames: true, validateEntrySizes: true }, (openError, zipFile) => {
-      if (openError || !zipFile) {
-        reject(openError || new Error("Failed to open .docx"));
-        return;
-      }
-
       if (zipFile.entryCount > DOCX_VIEWER_MAX_ENTRIES) {
         zipFile.close();
         reject(new HttpError(413, "The .docx internal structure is too large to display."));
@@ -98,7 +102,6 @@ function readZipEntry(filePath: string, targetEntryName: string): Promise<string
       });
       zipFile.once("error", fail);
       zipFile.readEntry();
-    });
   });
 }
 

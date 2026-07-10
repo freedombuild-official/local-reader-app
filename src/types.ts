@@ -4,6 +4,7 @@ export type RepoListItem = {
   root: string;
   defaultPath: string;
   exists: boolean;
+  revision: string;
 };
 
 export type TreeNode = {
@@ -21,6 +22,7 @@ export type DiffStatus = GitStatus | "binary";
 
 export type FileResponse = {
   repoId: string;
+  revision: string;
   path: string;
   name: string;
   extension: string;
@@ -87,8 +89,11 @@ export type RepoSyncStatus = {
 
 export type RepoOpenResponse = {
   repoId: string;
+  revision: string;
   sync: RepoSyncStatus;
   tree: TreeSnapshot;
+  treeTruncated: boolean;
+  treeWarnings: string[];
 };
 
 export type RepositoryConfigSourceMode = "default" | "env";
@@ -104,6 +109,7 @@ export type RepositoryConfigEntryDraft = {
 
 export type RepositoryConfigDraft = {
   entries: RepositoryConfigEntryDraft[];
+  expectedConfigRevision?: string;
 };
 
 export type RepositoryConfigCheck = {
@@ -125,6 +131,7 @@ export type RepositoryConfigState = {
   readable: boolean;
   writable: boolean;
   entries: RepositoryConfigEntryDraft[];
+  configRevision: string;
   parseError?: string;
   validation?: RepositoryConfigValidation;
   yaml?: string;
@@ -230,6 +237,7 @@ export type AIChatContextPathRequest = {
 
 export type AIChatContextRequest = {
   repoId: string;
+  expectedRevision: string;
   path?: string;
   includeContent?: boolean;
   primaryPaths?: AIChatContextPathRequest[];
@@ -253,6 +261,7 @@ export type AIChatContextItem = {
 
 export type AIChatContext = {
   repoId: string;
+  revision: string;
   systemPromptVersion: string;
   primaryItems: AIChatContextItem[];
   ruleItems: AIChatContextItem[];
@@ -291,9 +300,10 @@ export type AIChangedPath = {
 };
 
 export type AIChatRunSummary = {
-  accessMode: "repoWrite";
+  accessMode: "readOnly" | "repoWrite";
   entry: AIEntryKind;
-  substrate: "codexCli" | "claudeCli";
+  substrate: "codexCli" | "claudeCli" | "directProvider";
+  auditState: "verified" | "unverified";
   changedPaths: AIChangedPath[];
   repairs: string[];
   warnings: string[];
@@ -330,7 +340,7 @@ export type AIChatResponse = {
 };
 
 export type AIChatStreamEvent =
-  | { type: "meta"; context: AIChatContext; status?: AIConnectionStatus }
+  | { type: "meta"; runId: string; context: AIChatContext; status?: AIConnectionStatus }
   | { type: "delta"; content: string }
   | { type: "done"; message: AIChatMessage; context: AIChatContext; status: AIConnectionStatus; run: AIChatRunSummary }
-  | { type: "error"; error: string };
+  | { type: "error"; error: string; details?: { run?: AIChatRunSummary; processTreeUnverified?: boolean } };

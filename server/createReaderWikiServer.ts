@@ -5,6 +5,7 @@ import path from "node:path";
 import { createApiRouter } from "./api.js";
 import { createHttpDeliveryService } from "./httpDelivery.js";
 import { createRepositoryRegistry, type RepositoryRegistry } from "./repositoryRegistry.js";
+import { createReaderWikiSecurity, formatUrlHost, isLoopbackHost } from "./security.js";
 
 export type ReaderWikiServerOptions = {
   dev?: boolean;
@@ -15,6 +16,8 @@ export type ReaderWikiServerOptions = {
   host?: string;
   port?: number;
   hmrPort?: number;
+  allowNonLoopback?: boolean;
+  sessionToken?: string;
 };
 
 export type ReaderWikiServerHandle = {
@@ -22,6 +25,7 @@ export type ReaderWikiServerHandle = {
   server: Server;
   url: string;
   port: number;
+  sessionToken: string;
   close: () => Promise<void>;
 };
 
@@ -30,14 +34,22 @@ export async function startReaderWikiServer(options: ReaderWikiServerOptions = {
   const configPath = path.resolve(options.configPath || path.join(packageRoot, "repositories.yaml"));
   const distPath = path.resolve(options.distPath || path.join(packageRoot, "dist"));
   const port = options.port ?? 5173;
+  const host = options.host || "127.0.0.1";
+  if (!isLoopbackHost(host)) {
+    throw new Error("Reader-Wiki is a loopback-only application and refuses non-loopback binding.");
+  }
   const repositoryRegistry = options.repositoryRegistry || createRepositoryRegistry({ configPath });
   const httpDelivery = createHttpDeliveryService(repositoryRegistry);
+  const security = createReaderWikiSecurity({ bindHost: host, token: options.sessionToken, dev: options.dev });
   const app = express();
 
-  app.use("/api", createApiRouter(repositoryRegistry, httpDelivery, { configPath, packageRoot }));
+  app.disable("x-powered-by");
+  app.use(security.headers);
+  app.use(security.issueSession);
+  app.use("/api", security.protectApi, createApiRouter(repositoryRegistry, httpDelivery, { configPath, packageRoot }));
   app.use("/delivery", httpDelivery.router);
 
-  const hmrPort = options.dev ? await resolveHmrPort(options.hmrPort, options.host) : undefined;
+  const hmrPort = options.dev ? await resolveHmrPort(options.hmrPort, host) : undefined;
   const vite = options.dev ? await createViteMiddleware({ packageRoot, hmrPort }) : null;
   if (vite) {
     app.use(vite.middlewares);
@@ -46,15 +58,16 @@ export async function startReaderWikiServer(options: ReaderWikiServerOptions = {
     app.get("*", (_request, response) => response.sendFile(path.join(distPath, "index.html")));
   }
 
-  const server = await listen(app, port, options.host);
+  const server = await listen(app, port, host);
   const address = server.address();
   const actualPort = typeof address === "object" && address ? address.port : port;
-  const urlHost = options.host || "localhost";
+  security.setPort(actualPort);
   return {
     app,
     server,
-    url: `http://${urlHost}:${actualPort}`,
+    url: `http://${formatUrlHost(host)}:${actualPort}`,
     port: actualPort,
+    sessionToken: security.token,
     close: async () => {
       await closeServer(server);
       if (vite) await vite.close();
@@ -89,9 +102,9 @@ function findAvailablePort(host: string | undefined): Promise<number> {
   });
 }
 
-function listen(app: Express, port: number, host?: string): Promise<Server> {
+function listen(app: Express, port: number, host: string): Promise<Server> {
   return new Promise((resolve, reject) => {
-    const server = host ? app.listen(port, host) : app.listen(port);
+    const server = app.listen(port, host);
     server.once("listening", () => resolve(server));
     server.once("error", reject);
   });

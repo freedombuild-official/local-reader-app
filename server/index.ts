@@ -5,7 +5,7 @@ import { startReaderWikiServer, type ReaderWikiServerHandle } from "./createRead
 const args = new Set(process.argv.slice(2));
 const isDev = args.has("--dev");
 const port = Number(process.env.PORT || 5173);
-const host = process.env.HOST || undefined;
+const host = process.env.HOST || "127.0.0.1";
 const hmrPort = process.env.VITE_HMR_PORT ? Number(process.env.VITE_HMR_PORT) : undefined;
 const packageRoot = process.cwd();
 const configPath = process.env.READER_WIKI_CONFIG || path.join(packageRoot, "repositories.yaml");

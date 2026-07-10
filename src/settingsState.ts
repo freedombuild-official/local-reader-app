@@ -259,7 +259,7 @@ export function derivedAIStatus(entry: AIEntrySettings | null): AIConnectionStat
     return aiStatus("notConfigured", "needs_test", "info", entry.readinessMessage || "CLI readiness has not been checked.", "Run readiness check for this CLI entry.", entry.lastCheckedAt || "");
   }
   if (aiConfigured(entry)) {
-    return aiStatus("configured", "needs_test", "warning", "Codex-backed write readiness has not been tested.", "Test this entry before using it for AI Chat.");
+    return aiStatus("configured", "needs_test", "warning", "Endpoint and model readiness have not been tested.", "Check readiness before using this context-only entry for AI Chat.");
   }
   return aiStatus("notConfigured", "not_configured", "info", "Connection settings are incomplete.", providerNextAction(entry));
 }
@@ -304,6 +304,19 @@ export function updateAIEntryStatus(settings: AISettingsState, entry: AIEntryKin
       ...settings.entries,
       [normalized]: { ...settings.entries[normalized], lastCheckedAt: status.checkedAt } as AIEntrySettings,
     },
+  };
+}
+
+export function invalidateAIReadiness(settings: AISettingsState): AISettingsState {
+  return {
+    ...settings,
+    entries: {
+      ...settings.entries,
+      codexCli: { ...settings.entries.codexCli, readOnlyWrapperState: "unknown", executionMode: "unknown", lastCheckedAt: "" } as CliAIEntrySettings,
+      claudeCli: { ...settings.entries.claudeCli, readOnlyWrapperState: "unknown", executionMode: "unknown", lastCheckedAt: "" } as CliAIEntrySettings,
+    },
+    statuses: { aiApi: null, localAi: null, codexCli: null, claudeCli: null },
+    lastCheckedAtByEntry: { aiApi: "", localAi: "", codexCli: "", claudeCli: "" },
   };
 }
 

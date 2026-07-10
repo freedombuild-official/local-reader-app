@@ -1,15 +1,20 @@
+import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import { json as expressJson, type NextFunction, type Request, type Response, Router } from "express";
 import { HttpError, isHttpError } from "./errors.js";
-import { buildAIChatContext } from "./aiContext.js";
+import { buildAIChatContextForRepository } from "./aiContext.js";
 import { requestRepoWriteAIChatCompletion, type AICommandRunner } from "./aiCliAdapters.js";
 import { probeAIEntryReadiness } from "./aiEntries.js";
-import { providerReadiness, testAIConnection } from "./aiProviders.js";
+import { providerReadiness, requestAIChatCompletion, requestAIChatCompletionStream, testAIConnection } from "./aiProviders.js";
 import type { HttpDeliveryService } from "./httpDelivery.js";
 import { createRepositoryRegistry, type RepositoryRegistry } from "./repositoryRegistry.js";
 import { loadRepositoryConfigState, previewRepositoryConfig, saveRepositoryConfigDraft, validateRepositoryConfigDraft } from "./repositoryConfig.js";
+import { assertRepositoryRevision, repositoryRevision } from "./repositoryRevision.js";
 import { readGitStatusEntries, readRepoFile, readTree, readTreeSnapshot, resolveRepoImage, resolveRepoPdf, syncRepository } from "./repoFiles.js";
-import type { AIChatExecutionTarget, AIChatRequest, AIEntryKind, AIProviderSettings, RepositoryConfigDraft } from "./types.js";
+import type { AIChatExecutionTarget, AIChatRequest, AIChatRunSummary, AIEntryKind, AIProviderSettings, RepositoryConfigDraft } from "./types.js";
+
+const READINESS_ATTESTATION_TTL_MS = 60_000;
+const AI_GLOBAL_CONCURRENCY_LIMIT = 4;
 
 type ApiRouterOptions = {
   configPath?: string;
@@ -21,6 +26,47 @@ export function createApiRouter(registryOrConfigPath: RepositoryRegistry | strin
   const router = Router();
   const registry = typeof registryOrConfigPath === "string" ? createRepositoryRegistry({ configPath: registryOrConfigPath }) : registryOrConfigPath;
   const configPath = path.resolve(options.configPath || (typeof registryOrConfigPath === "string" ? registryOrConfigPath : registry.configPath || path.join(process.cwd(), "repositories.yaml")));
+  const readinessAttestations = new Map<string, number>();
+  const activeAIRuns = new Map<string, { abort: () => void }>();
+  const activeAIRepos = new Set<string>();
+  let activeAIRequests = 0;
+  let configSaveActive = false;
+  const experimentalAIWrite = process.env.READER_WIKI_EXPERIMENTAL_AI_WRITE === "1";
+
+  function storeReadinessAttestation(entry: AIEntryKind, repoId: string, revision: string, provider: AIProviderSettings | undefined): void {
+    readinessAttestations.set(readinessAttestationKey(entry, repoId, revision, provider), Date.now() + READINESS_ATTESTATION_TTL_MS);
+  }
+
+  function assertReadinessAttestation(target: AIChatExecutionTarget, repoId: string, revision: string): void {
+    const provider = "provider" in target ? target.provider : undefined;
+    const expiresAt = readinessAttestations.get(readinessAttestationKey(targetEntry(target), repoId, revision, provider)) || 0;
+    if (expiresAt < Date.now()) throw new HttpError(409, "AI Entry readiness attestation is missing or expired.");
+  }
+
+  async function withRepoAILock<T>(repoId: string, work: () => Promise<T>): Promise<T> {
+    if (configSaveActive) throw new HttpError(409, "Repository config is being saved. Retry after Settings finishes.");
+    if (activeAIRepos.has(repoId)) throw new HttpError(409, "Another AI Chat run is still active for this repository.");
+    activeAIRepos.add(repoId);
+    let keepRepoLocked = false;
+    try {
+      return await withAIRequestSlot(work);
+    } catch (error) {
+      keepRepoLocked = hasUnverifiedProcessTree(error);
+      throw error;
+    } finally {
+      if (!keepRepoLocked) activeAIRepos.delete(repoId);
+    }
+  }
+
+  async function withAIRequestSlot<T>(work: () => Promise<T>): Promise<T> {
+    if (activeAIRequests >= AI_GLOBAL_CONCURRENCY_LIMIT) throw new HttpError(429, "Reader-Wiki AI concurrency limit is active. Try again after another request finishes.");
+    activeAIRequests += 1;
+    try {
+      return await work();
+    } finally {
+      activeAIRequests -= 1;
+    }
+  }
   router.use("/http-delivery", expressJson({ limit: "20kb" }));
   router.use("/repo-open", expressJson({ limit: "20kb" }));
   router.use("/repository-config", expressJson({ limit: "100kb" }));
@@ -39,7 +85,7 @@ export function createApiRouter(registryOrConfigPath: RepositoryRegistry | strin
     try {
       const repo = await registry.findRepository(String(request.query.repo || ""));
       setNoStore(response);
-      response.json({ repoId: repo.id, path: String(request.query.path || ""), nodes: await readTree(repo, request.query.path) });
+      response.json({ repoId: repo.id, revision: await repositoryRevision(repo), path: String(request.query.path || ""), nodes: await readTree(repo, request.query.path) });
     } catch (error) {
       next(error);
     }
@@ -49,7 +95,7 @@ export function createApiRouter(registryOrConfigPath: RepositoryRegistry | strin
     try {
       const repo = await registry.findRepository(String(request.query.repo || ""));
       setNoStore(response);
-      response.json({ repoId: repo.id, statuses: await readGitStatusEntries(repo) });
+      response.json({ repoId: repo.id, revision: await repositoryRevision(repo), statuses: await readGitStatusEntries(repo) });
     } catch (error) {
       next(error);
     }
@@ -58,10 +104,11 @@ export function createApiRouter(registryOrConfigPath: RepositoryRegistry | strin
   router.post("/repo-open", async (request, response, next) => {
     try {
       const repo = await registry.findRepository(String(request.body?.repoId || ""));
+      const revision = await assertRepositoryRevision(repo, request.body?.expectedRevision);
       setNoStore(response);
       const sync = await syncRepository(repo);
-      const tree = await readTreeSnapshot(repo);
-      response.json({ repoId: repo.id, sync, tree });
+      const treeSnapshot = await readTreeSnapshot(repo);
+      response.json({ repoId: repo.id, revision, sync, tree: treeSnapshot.tree, treeTruncated: treeSnapshot.truncated, treeWarnings: treeSnapshot.warnings });
     } catch (error) {
       next(error);
     }
@@ -95,11 +142,20 @@ export function createApiRouter(registryOrConfigPath: RepositoryRegistry | strin
   });
 
   router.post("/repository-config/save", async (request, response, next) => {
+    if (configSaveActive || activeAIRepos.size > 0) {
+      next(new HttpError(409, "Repository config cannot be changed while an AI Chat run is active."));
+      return;
+    }
+    configSaveActive = true;
     try {
       setNoStore(response);
-      response.json(await saveRepositoryConfigDraft(request.body as RepositoryConfigDraft, configPath));
+      const state = await saveRepositoryConfigDraft(request.body as RepositoryConfigDraft, configPath);
+      httpDelivery?.stopAll();
+      response.json(state);
     } catch (error) {
       next(error);
+    } finally {
+      configSaveActive = false;
     }
   });
 
@@ -107,7 +163,7 @@ export function createApiRouter(registryOrConfigPath: RepositoryRegistry | strin
     try {
       const repo = await registry.findRepository(String(request.query.repo || ""));
       setNoStore(response);
-      response.json(await readRepoFile(repo, request.query.path));
+      response.json({ ...(await readRepoFile(repo, request.query.path)), revision: await repositoryRevision(repo) });
     } catch (error) {
       next(error);
     }
@@ -119,76 +175,160 @@ export function createApiRouter(registryOrConfigPath: RepositoryRegistry | strin
   });
 
   router.post("/ai/test-connection", async (request, response, next) => {
+    const abortScope = requestAbortScope(request, response);
     try {
       setNoStore(response);
-      response.json(await testAIConnection(request.body as AIProviderSettings));
+      response.json(await withAIRequestSlot(() => testAIConnection(request.body as AIProviderSettings, abortScope.signal)));
     } catch (error) {
       next(error);
+    } finally {
+      abortScope.cleanup();
     }
   });
 
   router.post("/ai/entry-readiness", async (request, response, next) => {
+    const abortScope = requestAbortScope(request, response);
     try {
       setNoStore(response);
       const entry = normalizeAIEntryKind(request.body?.entry);
       const repoId = String(request.body?.repoId || "");
       const repo = repoId ? await registry.findRepository(repoId) : undefined;
-      response.json(await probeAIEntryReadiness(entry, {
-        provider: request.body?.provider as AIProviderSettings | undefined,
-        repo,
-        runner: options.aiCommandRunner,
-      }));
+      const provider = request.body?.provider as AIProviderSettings | undefined;
+      const revision = repo ? await assertRepositoryRevision(repo, request.body?.expectedRevision) : "no-repository";
+      const readiness = await withAIRequestSlot(() => probeAIEntryReadiness(entry, {
+          provider,
+          repo,
+          runner: options.aiCommandRunner,
+          signal: abortScope.signal,
+        }));
+      if (repo) {
+        const currentRepo = await registry.findRepository(repoId);
+        await assertRepositoryRevision(currentRepo, revision);
+      }
+      if (readiness.ready) storeReadinessAttestation(entry, repoId, revision, provider);
+      response.json({ ...readiness, revision });
     } catch (error) {
       next(error);
+    } finally {
+      abortScope.cleanup();
     }
   });
 
   router.post("/ai/chat", async (request, response, next) => {
+    const abortScope = requestAbortScope(request, response);
     try {
       const body = request.body as AIChatRequest;
       setNoStore(response);
       const target = resolveAIChatTarget(body);
       assertAIChatTargetReady(target);
-      const context = await buildAIChatContext(registry, body.context);
-      const repo = await registry.findRepository(context.repoId);
-      const result = await requestCheckedRepoWriteAIChatCompletion({ target, messages: body.messages, context, repo, attachments: body.attachments, modelBehavior: body.modelBehavior, runner: options.aiCommandRunner });
-      response.json({ message: { role: "assistant", content: result.content }, context, status: result.status, run: result.run });
+      const repoId = String(body.context?.repoId || "");
+      const execution = await withRepoAILock(repoId, async () => {
+        const repo = await registry.findRepository(repoId);
+        const context = await buildAIChatContextForRepository(repo, body.context);
+        assertReadinessAttestation(target, context.repoId, context.revision);
+        const result = await (async () => {
+        if (isDirectProviderTarget(target)) {
+          const direct = await requestAIChatCompletion({
+            provider: target.provider,
+            messages: body.messages,
+            context,
+            attachments: body.attachments,
+            modelBehavior: body.modelBehavior,
+            signal: abortScope.signal,
+          });
+          return { ...direct, run: contextOnlyRunSummary(target) };
+        }
+        if (!experimentalAIWrite) throw new HttpError(403, "CLI repository writes are disabled by the public execution policy.");
+        return requestRepoWriteAIChatCompletion({ target, messages: body.messages, context, repo, attachments: body.attachments, modelBehavior: body.modelBehavior, runner: options.aiCommandRunner, signal: abortScope.signal });
+        })();
+        return { context, result };
+      });
+      response.json({ message: { role: "assistant", content: execution.result.content }, context: execution.context, status: execution.result.status, run: execution.result.run });
     } catch (error) {
       next(error);
+    } finally {
+      abortScope.cleanup();
     }
   });
 
   router.post("/ai/chat/stream", async (request, response, next) => {
     const body = request.body as AIChatRequest;
+    const abortScope = requestAbortScope(request, response);
+    const runId = randomUUID();
+    activeAIRuns.set(runId, { abort: abortScope.abort });
     try {
       const target = resolveAIChatTarget(body);
       assertAIChatTargetReady(target);
-      const context = await buildAIChatContext(registry, body.context);
-      setNoStore(response);
-      response.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
-      response.setHeader("X-Content-Type-Options", "nosniff");
-      response.write(`${JSON.stringify({ type: "meta", context })}\n`);
-      const repo = await registry.findRepository(context.repoId);
-      const result = await requestCheckedRepoWriteAIChatCompletion({ target, messages: body.messages, context, repo, attachments: body.attachments, modelBehavior: body.modelBehavior, runner: options.aiCommandRunner });
-      response.write(`${JSON.stringify({ type: "delta", content: result.content })}\n`);
-      response.write(`${JSON.stringify({ type: "done", message: { role: "assistant", content: result.content }, context, status: result.status, run: result.run })}\n`);
-      response.end();
+      const repoId = String(body.context?.repoId || "");
+      const execution = await withRepoAILock(repoId, async () => {
+        const repo = await registry.findRepository(repoId);
+        const context = await buildAIChatContextForRepository(repo, body.context);
+        assertReadinessAttestation(target, context.repoId, context.revision);
+        setNoStore(response);
+        response.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
+        response.setHeader("X-Content-Type-Options", "nosniff");
+        if (!canWriteResponse(response)) throw new HttpError(499, "AI Chat request was canceled.");
+        response.write(`${JSON.stringify({ type: "meta", runId, context })}\n`);
+        const result = await (async () => {
+        if (isDirectProviderTarget(target)) {
+          const direct = await requestAIChatCompletionStream({
+            provider: target.provider,
+            messages: body.messages,
+            context,
+            attachments: body.attachments,
+            modelBehavior: body.modelBehavior,
+            signal: abortScope.signal,
+          }, (content) => {
+            if (canWriteResponse(response)) response.write(`${JSON.stringify({ type: "delta", content })}\n`);
+          });
+          return { ...direct, run: contextOnlyRunSummary(target) };
+        }
+        if (!experimentalAIWrite) throw new HttpError(403, "CLI repository writes are disabled by the public execution policy.");
+        const cli = await requestRepoWriteAIChatCompletion({ target, messages: body.messages, context, repo, attachments: body.attachments, modelBehavior: body.modelBehavior, runner: options.aiCommandRunner, signal: abortScope.signal });
+        if (canWriteResponse(response)) response.write(`${JSON.stringify({ type: "delta", content: cli.content })}\n`);
+        return cli;
+        })();
+        return { context, result };
+      });
+      if (canWriteResponse(response)) {
+        response.write(`${JSON.stringify({ type: "done", message: { role: "assistant", content: execution.result.content }, context: execution.context, status: execution.result.status, run: execution.result.run })}\n`);
+        response.end();
+      }
     } catch (error) {
+      if (!canWriteResponse(response)) return;
       if (!response.headersSent) {
         next(error);
         return;
       }
       const httpError = isHttpError(error) ? error : new HttpError(500, "Reader-Wiki AI Chat stream failed.");
-      response.write(`${JSON.stringify({ type: "error", error: httpError.message })}\n`);
+      response.write(`${JSON.stringify({ type: "error", error: httpError.message, ...(httpError.details === undefined ? {} : { details: httpError.details }) })}\n`);
       response.end();
+    } finally {
+      activeAIRuns.delete(runId);
+      abortScope.cleanup();
+    }
+  });
+
+  router.post("/ai/cancel", (request, response, next) => {
+    try {
+      const runId = String(request.body?.runId || "");
+      const run = activeAIRuns.get(runId);
+      if (!run) throw new HttpError(404, "AI Chat run is no longer active.");
+      run.abort();
+      setNoStore(response);
+      response.status(202).json({ runId, state: "canceling" });
+    } catch (error) {
+      next(error);
     }
   });
 
   router.post("/http-delivery/start", async (request, response, next) => {
     try {
       if (!httpDelivery) throw new HttpError(503, "HTTP Delivery is not available.");
+      const repo = await registry.findRepository(String(request.body?.repoId || ""));
+      const revision = await assertRepositoryRevision(repo, request.body?.expectedRevision);
       setNoStore(response);
-      response.json(await httpDelivery.start({ repoId: String(request.body?.repoId || ""), path: String(request.body?.path || ""), baseUrl: requestBaseUrl(request) }));
+      response.json(await httpDelivery.start({ repo, revision, path: String(request.body?.path || ""), baseUrl: requestBaseUrl(request) }));
     } catch (error) {
       next(error);
     }
@@ -207,14 +347,17 @@ export function createApiRouter(registryOrConfigPath: RepositoryRegistry | strin
   router.get("/image", async (request, response, next) => {
     try {
       const repo = await registry.findRepository(String(request.query.repo || ""));
+      const revision = await assertRepositoryRevision(repo, request.query.revision);
       const image = await resolveRepoImage(repo, request.query.path);
       setNoStore(response);
       response.setHeader("Content-Type", image.mimeType);
       response.setHeader("Content-Length", String(image.byteLength));
       response.setHeader("X-Content-Type-Options", "nosniff");
-      response.sendFile(image.realPath, (error) => {
-        if (error) next(error);
-      });
+      response.setHeader("X-Reader-Wiki-Revision", revision);
+      if (image.mimeType === "image/svg+xml") {
+        response.setHeader("Content-Security-Policy", "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:; connect-src 'none'; frame-ancestors 'none'");
+      }
+      response.send(image.bytes);
     } catch (error) {
       next(error);
     }
@@ -223,15 +366,15 @@ export function createApiRouter(registryOrConfigPath: RepositoryRegistry | strin
   router.get("/pdf", async (request, response, next) => {
     try {
       const repo = await registry.findRepository(String(request.query.repo || ""));
+      const revision = await assertRepositoryRevision(repo, request.query.revision);
       const pdf = await resolveRepoPdf(repo, request.query.path);
       setNoStore(response);
       response.setHeader("Content-Type", pdf.mimeType);
       response.setHeader("Content-Length", String(pdf.byteLength));
       response.setHeader("Content-Disposition", `inline; filename*=UTF-8''${encodeURIComponent(path.basename(pdf.relativePath))}`);
       response.setHeader("X-Content-Type-Options", "nosniff");
-      response.sendFile(pdf.realPath, (error) => {
-        if (error) next(error);
-      });
+      response.setHeader("X-Reader-Wiki-Revision", revision);
+      response.send(pdf.bytes);
     } catch (error) {
       next(error);
     }
@@ -243,7 +386,7 @@ export function createApiRouter(registryOrConfigPath: RepositoryRegistry | strin
       return;
     }
     const httpError = isHttpError(error) ? error : new HttpError(500, "Reader-Wiki API failed.");
-    response.status(httpError.status).json({ error: httpError.message });
+    response.status(httpError.status).json({ error: httpError.message, ...(httpError.details === undefined ? {} : { details: httpError.details }) });
   });
 
   return router;
@@ -279,19 +422,56 @@ function setNoStore(response: Response): void {
 }
 
 function requestBaseUrl(request: Request): string {
-  const forwardedProto = String(request.headers["x-forwarded-proto"] || "").split(",")[0].trim();
-  const protocol = forwardedProto || request.protocol || "http";
+  const protocol = request.protocol || "http";
   return `${protocol}://${request.get("host") || "localhost"}`;
 }
 
-async function requestCheckedRepoWriteAIChatCompletion(request: Parameters<typeof requestRepoWriteAIChatCompletion>[0]) {
-  const readiness = await probeAIEntryReadiness(targetEntry(request.target), {
-    provider: "provider" in request.target ? request.target.provider : undefined,
-    repo: request.repo,
-    runner: request.runner,
-  });
-  if (!readiness.ready) throw new HttpError(409, readiness.status.message || "CLI readiness is not confirmed.");
-  return requestRepoWriteAIChatCompletion(request);
+function isDirectProviderTarget(target: AIChatExecutionTarget): target is Extract<AIChatExecutionTarget, { kind: "codexBackedProvider" | "codexBackedLocal" }> {
+  return target.kind === "codexBackedProvider" || target.kind === "codexBackedLocal";
+}
+
+function contextOnlyRunSummary(target: Extract<AIChatExecutionTarget, { kind: "codexBackedProvider" | "codexBackedLocal" }>): AIChatRunSummary {
+  return {
+    accessMode: "readOnly",
+    entry: target.provider.entry,
+    substrate: "directProvider",
+    auditState: "verified",
+    changedPaths: [],
+    repairs: [],
+    warnings: ["Context-only execution: Reader-Wiki did not grant repository write tools."],
+  };
+}
+
+function requestAbortScope(request: Request, response: Response): { signal: AbortSignal; abort: () => void; cleanup: () => void } {
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  const close = () => {
+    if (!response.writableEnded) controller.abort();
+  };
+  request.once("aborted", abort);
+  response.once("close", close);
+  return {
+    signal: controller.signal,
+    abort,
+    cleanup: () => {
+      request.removeListener("aborted", abort);
+      response.removeListener("close", close);
+    },
+  };
+}
+
+function readinessAttestationKey(entry: AIEntryKind, repoId: string, revision: string, provider: AIProviderSettings | undefined): string {
+  const fingerprint = createHash("sha256").update(JSON.stringify(provider || {})).digest("hex");
+  return `${entry}:${repoId}:${revision}:${fingerprint}`;
+}
+
+function canWriteResponse(response: Response): boolean {
+  return !response.destroyed && response.writable && !response.writableEnded;
+}
+
+function hasUnverifiedProcessTree(error: unknown): boolean {
+  if (!isHttpError(error) || !error.details || typeof error.details !== "object") return false;
+  return (error.details as { processTreeUnverified?: unknown }).processTreeUnverified === true;
 }
 
 function targetEntry(target: AIChatExecutionTarget): AIEntryKind {

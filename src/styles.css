@@ -470,9 +470,8 @@ main:is(.app-shell, .settings-shell) {
 .file-tab {
   position: relative;
   display: grid;
-  grid-template-columns: 18px minmax(42px, 1fr) 54px 28px;
+  grid-template-columns: minmax(0, 1fr) 28px;
   align-items: center;
-  gap: 6px;
   flex: 0 0 max(var(--file-tab-min-width), var(--file-tab-visible-width));
   min-width: 0;
   min-height: 38px;
@@ -480,11 +479,27 @@ main:is(.app-shell, .settings-shell) {
   border-bottom: 2px solid transparent;
   background: #f8fbfc;
   color: #34434a;
-  cursor: pointer;
-  padding: 0 0 0 10px;
+  padding: 0;
   text-align: left;
   user-select: none;
 }
+.file-tab-main {
+  display: grid;
+  grid-template-columns: 18px minmax(42px, 1fr) 54px;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+  height: 100%;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  padding: 0 0 0 10px;
+  text-align: left;
+}
+.file-tab-main:focus-visible { outline: 2px solid #287888; outline-offset: -2px; }
 .file-tab:hover { background: #ffffff; color: #10262d; }
 .file-tab.active { background: #ffffff; color: #10262d; border-bottom-color: #287888; font-weight: 700; }
 .file-tab.inactive { opacity: 0.88; }
@@ -952,6 +967,11 @@ main:is(.app-shell, .settings-shell) {
   overflow-wrap: anywhere;
 }
 .memo-textarea:focus { outline: 0; }
+.memo-textarea:focus-visible {
+  border-radius: 4px;
+  outline: 2px solid #287888;
+  outline-offset: 3px;
+}
 .memo-preview {
   max-width: none;
   min-width: 0;

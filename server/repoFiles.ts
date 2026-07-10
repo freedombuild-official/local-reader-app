@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
-import { readdir, readFile, realpath, stat } from "node:fs/promises";
+import type { Dirent } from "node:fs";
+import { opendir, readFile, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import {
@@ -10,25 +11,40 @@ import {
   isPdfFileName,
   isUnsupportedViewerFileName,
 } from "../shared/fileClassification.js";
-import { extractMarkdownFromDocx } from "./docxMarkdown.js";
+import { extractMarkdownFromDocxBuffer } from "./docxMarkdown.js";
 import { HttpError, isHttpError } from "./errors.js";
 import { renderMarkdown } from "./markdown.js";
-import { isExcludedPath, isExcludedRealPath, isInsideRoot, normalizeRelativePath, resolveRepoPath } from "./pathGuard.js";
+import { isExcludedPath, isExcludedRealPath, isInsideRoot, normalizeRelativePath, readGuardedRepoFile, resolveRepoPath } from "./pathGuard.js";
+import { repositoryRevision } from "./repositoryRevision.js";
 import { getImageViewerByteLimit, getTextViewerByteLimit, PDF_VIEWER_MAX_BYTES } from "./viewerLimits.js";
 import type { DiffStatus, FileInformation, FileKind, FileResponse, GitStatus, GitStatusEntry, RepoSyncStatus, RepositoryConfig, TreeNode, TreeSnapshot } from "./types.js";
 
 const execFileAsync = promisify(execFile);
-const GIT_READ_ENV = { ...process.env, GIT_OPTIONAL_LOCKS: "0" };
+const GIT_READ_ENV = { ...process.env, GIT_OPTIONAL_LOCKS: "0", GIT_NO_LAZY_FETCH: "1", GIT_TERMINAL_PROMPT: "0" };
 const GIT_SYNC_ENV = { ...GIT_READ_ENV, GIT_TERMINAL_PROMPT: "0" };
 const PDF_MIME_TYPE = "application/pdf";
 const DOCX_MIME_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 const GIT_MAX_BUFFER = 10 * 1024 * 1024;
 const GIT_SYNC_TIMEOUT_MS = 15_000;
+const GIT_READ_TIMEOUT_MS = 10_000;
+const TREE_DIRECTORY_MAX_ENTRIES = 5_000;
+const TREE_SNAPSHOT_MAX_NODES = 20_000;
+const TREE_SNAPSHOT_MAX_DEPTH = 32;
+const TREE_SNAPSHOT_MAX_MS = 5_000;
+const TREE_SNAPSHOT_MAX_SERIALIZED_BYTES = 5 * 1024 * 1024;
 
 type ExistingTreeTarget = {
   relativePath: string;
   realPath: string | null;
   rootRealPath: string;
+};
+
+type TreeSnapshotBudget = {
+  startedAt: number;
+  nodes: number;
+  serializedBytes: number;
+  truncated: boolean;
+  warnings: string[];
 };
 
 export async function readTree(repo: RepositoryConfig, inputPath: unknown): Promise<TreeNode[]> {
@@ -37,7 +53,9 @@ export async function readTree(repo: RepositoryConfig, inputPath: unknown): Prom
   const nodesByPath = new Map<string, TreeNode>();
 
   if (target.realPath) {
-    const entries = await readdir(target.realPath, { withFileTypes: true });
+    const boundedDirectory = await readDirectoryEntriesBounded(target.realPath);
+    if (boundedDirectory.truncated) throw new HttpError(413, `Directory contains more than ${TREE_DIRECTORY_MAX_ENTRIES} entries.`);
+    const entries = boundedDirectory.entries;
     for (const entry of entries) {
       const childRelativePath = joinRelativePath(target.relativePath, entry.name);
       if (isExcludedPath(repo, childRelativePath)) continue;
@@ -68,42 +86,27 @@ export async function readTree(repo: RepositoryConfig, inputPath: unknown): Prom
   return sortTreeNodes(Array.from(nodesByPath.values()));
 }
 
-export async function readTreeSnapshot(repo: RepositoryConfig): Promise<TreeSnapshot> {
+export async function readTreeSnapshot(repo: RepositoryConfig): Promise<{ tree: TreeSnapshot; truncated: boolean; warnings: string[] }> {
   const gitStatuses = await readGitStatuses(repo);
   const rootRealPath = await realpath(repo.root);
   const snapshot: TreeSnapshot = {};
-  await collectTreeSnapshot(repo, "", rootRealPath, rootRealPath, gitStatuses, snapshot, new Set());
-  return snapshot;
+  const budget: TreeSnapshotBudget = { startedAt: Date.now(), nodes: 0, serializedBytes: 0, truncated: false, warnings: [] };
+  await collectTreeSnapshot(repo, "", rootRealPath, rootRealPath, gitStatuses, snapshot, new Set(), budget, 0);
+  return { tree: snapshot, truncated: budget.truncated, warnings: Array.from(new Set(budget.warnings)) };
 }
 
 export async function syncRepository(repo: RepositoryConfig): Promise<RepoSyncStatus> {
-  if (!repo.fetchRemote) {
-    return { state: "disabled", message: "Git remote fetch disabled.", fetched: false };
-  }
-  if (!(await isGitWorkTree(repo.root))) {
-    return { state: "skipped", message: "Git sync skipped: this repository is not a Git work tree.", fetched: false };
-  }
-  const remotes = await readGitRemoteNames(repo.root);
-  if (!remotes.length) {
-    return { state: "skipped", message: "Git sync skipped: no remote is configured.", fetched: false };
-  }
-  try {
-    await execFileAsync("git", ["-C", repo.root, "fetch", "--all", "--prune"], {
-      env: GIT_SYNC_ENV,
-      maxBuffer: GIT_MAX_BUFFER,
-      timeout: GIT_SYNC_TIMEOUT_MS,
-    });
-    return { state: "synced", message: "Git remote metadata fetched.", fetched: true };
-  } catch (error) {
-    return {
-      state: "warning",
-      message: gitFetchWarningMessage(error),
-      fetched: false,
-    };
-  }
+  return {
+    state: "disabled",
+    message: repo.fetchRemote
+      ? "Git remote fetch is disabled by the public execution policy."
+      : "Git remote fetch disabled.",
+    fetched: false,
+  };
 }
 
 export async function readRepoFile(repo: RepositoryConfig, inputPath: unknown): Promise<FileResponse> {
+  const revision = await repositoryRevision(repo);
   const relativePath = normalizeVisibleRelativePath(repo, inputPath);
   const gitStatuses = await readGitStatuses(repo);
   const gitStatus = gitStatuses.get(relativePath);
@@ -113,7 +116,7 @@ export async function readRepoFile(repo: RepositoryConfig, inputPath: unknown): 
     resolved = await resolveRepoPath(repo, relativePath);
   } catch (error) {
     if (isHttpError(error) && error.status === 404 && gitStatus === "deleted") {
-      return readDeletedRepoFile(repo, relativePath);
+      return readDeletedRepoFile(repo, relativePath, revision);
     }
     throw error;
   }
@@ -164,7 +167,7 @@ export async function readRepoFile(repo: RepositoryConfig, inputPath: unknown): 
 
   if (isDocxFileName(resolved.relativePath)) {
     try {
-      const content = await extractMarkdownFromDocx(resolved.realPath, fileStat.size);
+      const content = await extractMarkdownFromDocxBuffer((await readGuardedRepoFile(repo, resolved.relativePath, fileStat.size)).bytes);
       const lineCount = countLines(content);
       return {
         repoId: repo.id,
@@ -177,7 +180,7 @@ export async function readRepoFile(repo: RepositoryConfig, inputPath: unknown): 
         fileInfo: createFileInformation(resolved.relativePath, "markdown", fileStat, content, gitStatus, "displayable", DOCX_MIME_TYPE),
         gitDiff: await gitDiffForText(repo, resolved.relativePath, gitStatus, lineCount),
         docx: { byteLength: fileStat.size, source: "markdown-in-docx" },
-        markdown: renderMarkdown(content, { repoId: repo.id, currentPath: resolved.relativePath, repoRoot: repo.root }),
+        markdown: renderMarkdown(content, { repoId: repo.id, currentPath: resolved.relativePath, repoRoot: repo.root, revision }),
       };
     } catch (error) {
       const viewerStatus = isHttpError(error) && error.status === 413 ? "oversized" : "unsupported";
@@ -193,7 +196,7 @@ export async function readRepoFile(repo: RepositoryConfig, inputPath: unknown): 
     return createMetadataFileResponse(repo.id, resolved.relativePath, extension, kind, fileStat, gitStatus, "oversized", getTextMimeType(resolved.relativePath, kind));
   }
 
-  const buffer = await readFile(resolved.realPath);
+  const { bytes: buffer } = await readGuardedRepoFile(repo, resolved.relativePath, getTextViewerByteLimit(resolved.relativePath));
   if (looksBinary(buffer)) {
     return createBinaryFileResponse(repo.id, resolved.relativePath, extension, fileStat, gitStatus);
   }
@@ -212,28 +215,25 @@ export async function readRepoFile(repo: RepositoryConfig, inputPath: unknown): 
   };
   const gitDiff = await gitDiffForText(repo, resolved.relativePath, gitStatus, lineCount);
   if (gitDiff) response.gitDiff = gitDiff;
-  if (kind === "markdown") response.markdown = renderMarkdown(content, { repoId: repo.id, currentPath: resolved.relativePath, repoRoot: repo.root });
+  if (kind === "markdown") response.markdown = renderMarkdown(content, { repoId: repo.id, currentPath: resolved.relativePath, repoRoot: repo.root, revision });
   return response;
 }
 
-export async function resolveRepoImage(repo: RepositoryConfig, inputPath: unknown): Promise<{ realPath: string; relativePath: string; mimeType: string; byteLength: number }> {
+export async function resolveRepoImage(repo: RepositoryConfig, inputPath: unknown): Promise<{ bytes: Buffer; relativePath: string; mimeType: string; byteLength: number }> {
   const resolved = await resolveRepoPath(repo, inputPath);
   const imageMimeType = getImageMimeTypeForPath(resolved.relativePath);
   if (!imageMimeType) throw new HttpError(415, "The requested file is not an image.");
-  const fileStat = await stat(resolved.realPath);
-  if (!fileStat.isFile()) throw new HttpError(400, "The image API requires a file path.");
   const imageByteLimit = getImageViewerByteLimit(resolved.relativePath);
-  if (imageByteLimit === null || fileStat.size > imageByteLimit) throw new HttpError(413, "The image file is too large to display.");
-  return { realPath: resolved.realPath, relativePath: resolved.relativePath, mimeType: imageMimeType, byteLength: fileStat.size };
+  if (imageByteLimit === null) throw new HttpError(413, "The image file is too large to display.");
+  const guarded = await readGuardedRepoFile(repo, resolved.relativePath, imageByteLimit);
+  return { bytes: guarded.bytes, relativePath: resolved.relativePath, mimeType: imageMimeType, byteLength: guarded.bytes.byteLength };
 }
 
-export async function resolveRepoPdf(repo: RepositoryConfig, inputPath: unknown): Promise<{ realPath: string; relativePath: string; mimeType: string; byteLength: number }> {
+export async function resolveRepoPdf(repo: RepositoryConfig, inputPath: unknown): Promise<{ bytes: Buffer; relativePath: string; mimeType: string; byteLength: number }> {
   const resolved = await resolveRepoPath(repo, inputPath);
   if (!isPdfFileName(resolved.relativePath)) throw new HttpError(415, "The requested file is not a PDF.");
-  const fileStat = await stat(resolved.realPath);
-  if (!fileStat.isFile()) throw new HttpError(400, "The PDF API requires a file path.");
-  if (fileStat.size > PDF_VIEWER_MAX_BYTES) throw new HttpError(413, "The PDF file is too large to display.");
-  return { realPath: resolved.realPath, relativePath: resolved.relativePath, mimeType: PDF_MIME_TYPE, byteLength: fileStat.size };
+  const guarded = await readGuardedRepoFile(repo, resolved.relativePath, PDF_VIEWER_MAX_BYTES);
+  return { bytes: guarded.bytes, relativePath: resolved.relativePath, mimeType: PDF_MIME_TYPE, byteLength: guarded.bytes.byteLength };
 }
 
 export async function readGitStatusEntries(repo: RepositoryConfig): Promise<GitStatusEntry[]> {
@@ -251,7 +251,18 @@ async function collectTreeSnapshot(
   gitStatuses: Map<string, GitStatus>,
   snapshot: TreeSnapshot,
   visitedRealPaths: Set<string>,
+  budget: TreeSnapshotBudget,
+  depth: number,
 ): Promise<void> {
+  if (budget.truncated) return;
+  if (depth > TREE_SNAPSHOT_MAX_DEPTH) {
+    truncateTreeSnapshot(budget, `Tree snapshot stopped at depth ${TREE_SNAPSHOT_MAX_DEPTH}.`);
+    return;
+  }
+  if (Date.now() - budget.startedAt > TREE_SNAPSHOT_MAX_MS) {
+    truncateTreeSnapshot(budget, `Tree snapshot exceeded ${TREE_SNAPSHOT_MAX_MS} ms.`);
+    return;
+  }
   const nodesByPath = new Map<string, TreeNode>();
   if (parentRealPath) {
     if (visitedRealPaths.has(parentRealPath)) {
@@ -259,7 +270,12 @@ async function collectTreeSnapshot(
       return;
     }
     visitedRealPaths.add(parentRealPath);
-    const entries = await readdir(parentRealPath, { withFileTypes: true });
+    const boundedDirectory = await readDirectoryEntriesBounded(parentRealPath);
+    if (boundedDirectory.truncated) {
+      truncateTreeSnapshot(budget, `Directory ${parentPath || "."} exceeds ${TREE_DIRECTORY_MAX_ENTRIES} entries.`);
+      return;
+    }
+    const entries = boundedDirectory.entries;
     for (const entry of entries) {
       const childRelativePath = joinRelativePath(parentPath, entry.name);
       if (isExcludedPath(repo, childRelativePath)) continue;
@@ -287,6 +303,11 @@ async function collectTreeSnapshot(
 
   addGitOnlyTreeNodes(nodesByPath, gitStatuses, parentPath, repo);
   const nodes = sortTreeNodes(Array.from(nodesByPath.values()));
+  budget.nodes += nodes.length;
+  budget.serializedBytes += nodes.reduce((total, node) => total + Buffer.byteLength(node.path, "utf8") + Buffer.byteLength(node.name, "utf8") + 96, 0);
+  if (budget.nodes > TREE_SNAPSHOT_MAX_NODES || budget.serializedBytes > TREE_SNAPSHOT_MAX_SERIALIZED_BYTES || Date.now() - budget.startedAt > TREE_SNAPSHOT_MAX_MS) {
+    truncateTreeSnapshot(budget, "Tree snapshot reached its node, byte, or time limit.");
+  }
   snapshot[parentPath] = nodes;
 
   for (const node of nodes) {
@@ -296,8 +317,33 @@ async function collectTreeSnapshot(
       throw error;
     });
     if (!childRealPath && !hasGitChildStatus(gitStatuses, node.path)) continue;
-    await collectTreeSnapshot(repo, node.path, childRealPath, rootRealPath, gitStatuses, snapshot, visitedRealPaths);
+    await collectTreeSnapshot(repo, node.path, childRealPath, rootRealPath, gitStatuses, snapshot, visitedRealPaths, budget, depth + 1);
   }
+}
+
+export async function readDirectoryEntriesBounded(directoryPath: string, maxEntries = TREE_DIRECTORY_MAX_ENTRIES): Promise<{ entries: Dirent[]; truncated: boolean }> {
+  const directory = await opendir(directoryPath);
+  const entries: Dirent[] = [];
+  let truncated = false;
+  try {
+    while (true) {
+      const entry = await directory.read();
+      if (!entry) break;
+      if (entries.length >= maxEntries) {
+        truncated = true;
+        break;
+      }
+      entries.push(entry);
+    }
+  } finally {
+    await directory.close().catch(() => undefined);
+  }
+  return { entries, truncated };
+}
+
+function truncateTreeSnapshot(budget: TreeSnapshotBudget, warning: string): void {
+  budget.truncated = true;
+  budget.warnings.push(warning);
 }
 
 async function readTreeRealPath(repo: RepositoryConfig, relativePath: string, rootRealPath: string): Promise<string | null> {
@@ -365,7 +411,7 @@ function hasGitChildStatus(statuses: Map<string, GitStatus>, parentPath: string)
   return false;
 }
 
-async function readDeletedRepoFile(repo: RepositoryConfig, relativePath: string): Promise<FileResponse> {
+async function readDeletedRepoFile(repo: RepositoryConfig, relativePath: string, revision: string): Promise<FileResponse> {
   const extension = getFileExtension(relativePath);
   const buffer = await readGitBlob(repo, relativePath);
   const isBinary = isBinaryMarkerPath(relativePath) || looksBinary(buffer);
@@ -394,7 +440,7 @@ async function readDeletedRepoFile(repo: RepositoryConfig, relativePath: string)
     fileInfo,
     gitDiff: { status: isBinary ? "binary" : "deleted", changedLines: isBinary ? [] : lineNumbers(lineCount) },
   };
-  if (kind === "markdown") response.markdown = renderMarkdown(content, { repoId: repo.id, currentPath: relativePath, repoRoot: repo.root });
+  if (kind === "markdown") response.markdown = renderMarkdown(content, { repoId: repo.id, currentPath: relativePath, repoRoot: repo.root, revision });
   return response;
 }
 
@@ -511,9 +557,10 @@ function gitDiffForBinaryMarker(relativePath: string, gitStatus?: GitStatus): Fi
 
 async function readGitStatuses(repo: RepositoryConfig): Promise<Map<string, GitStatus>> {
   try {
-    const { stdout } = await execFileAsync("git", ["-C", repo.root, "status", "--porcelain=v1", "-z", "--untracked-files=all"], {
+    const { stdout } = await execFileAsync("git", ["-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false", "-C", repo.root, "status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignore-submodules=all"], {
       env: GIT_READ_ENV,
       maxBuffer: GIT_MAX_BUFFER,
+      timeout: GIT_READ_TIMEOUT_MS,
     });
     return parseGitStatus(String(stdout), repo);
   } catch {
@@ -631,11 +678,11 @@ function isBinaryMarkerPath(relativePath: string): boolean {
 async function readGitChangedLines(repo: RepositoryConfig, relativePath: string): Promise<number[]> {
   const changedLines = new Set<number>();
   for (const args of [
-    ["-C", repo.root, "diff", "--unified=0", "--", relativePath],
-    ["-C", repo.root, "diff", "--cached", "--unified=0", "--", relativePath],
+    ["-c", "core.fsmonitor=false", "-C", repo.root, "diff", "--no-ext-diff", "--no-textconv", "--unified=0", "--", relativePath],
+    ["-c", "core.fsmonitor=false", "-C", repo.root, "diff", "--cached", "--no-ext-diff", "--no-textconv", "--unified=0", "--", relativePath],
   ]) {
     try {
-      const { stdout } = await execFileAsync("git", args, { env: GIT_READ_ENV, maxBuffer: GIT_MAX_BUFFER });
+      const { stdout } = await execFileAsync("git", args, { env: GIT_READ_ENV, maxBuffer: GIT_MAX_BUFFER, timeout: GIT_READ_TIMEOUT_MS });
       parseChangedLines(String(stdout)).forEach((line) => changedLines.add(line));
     } catch {
       // Keep the rest of the file readable even if git cannot produce a diff.
@@ -664,7 +711,7 @@ async function readGitBlob(repo: RepositoryConfig, relativePath: string): Promis
     execFile(
       "git",
       ["-C", repo.root, "show", `HEAD:${relativePath}`],
-      { env: GIT_READ_ENV, maxBuffer: GIT_MAX_BUFFER, encoding: "buffer" },
+      { env: GIT_READ_ENV, maxBuffer: GIT_MAX_BUFFER, encoding: "buffer", timeout: GIT_READ_TIMEOUT_MS },
       (error, stdout) => {
         if (error) {
           reject(new HttpError(404, "The deleted file is not available in HEAD."));

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type MutableRefObject } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type MutableRefObject } from "react";
 import MarkdownIt from "markdown-it";
 import {
   BookOpen,
@@ -29,9 +29,7 @@ import {
 } from "lucide-react";
 import { fetchFile, fetchHttpDeliveryStatus, fetchRepos, fetchTree, imageFileUrl, openRepository, pdfFileUrl, startHttpDelivery, stopHttpDelivery } from "./api";
 import type { AIChatContextChip, AIChatSessionState, DiffStatus, FileResponse, HttpDeliveryItemStatus, HttpDeliveryStatus, RepoListItem, RepoSyncStatus, TreeNode, TreeSnapshot } from "./types";
-import { AIChatPanel } from "./AIChatPanel";
-import { SettingsView } from "./SettingsView";
-import { activeAIChatTarget, activeAIModelBehavior, defaultAISettings, defaultBasicSettings, loadBasicSettings, normalizeReaderFontScale, persistBasicSettings, type AISettingsState, type BasicSettings, type ReaderFontScale } from "./settingsState";
+import { activeAIChatTarget, activeAIModelBehavior, defaultAISettings, defaultBasicSettings, invalidateAIReadiness, loadBasicSettings, normalizeReaderFontScale, persistBasicSettings, type AISettingsState, type BasicSettings, type ReaderFontScale } from "./settingsState";
 import { injectMarkdownCodeToolbarButtons, installCodeBlockRule } from "../shared/markdownCodeBlocks";
 import { installTableScrollRule } from "../shared/markdownTableScroll";
 import { installTaskListRule } from "../shared/markdownTaskLists";
@@ -83,6 +81,12 @@ const MAX_FILE_TABS = 5;
 const HTTP_DELIVERY_MAX_SESSIONS = 5;
 const TREE_ROW_HEIGHT_PX = 31;
 const HTML_VIEWER_BASE_FONT_SIZE_PX = 16;
+const FILE_TAB_PANEL_ID = "reader-file-tabpanel";
+const RIGHT_PANEL_TABS = [
+  { mode: "outline", label: "Outline" },
+  { mode: "memo", label: "Memo" },
+  { mode: "aiChat", label: "AI Chat" },
+] as const satisfies ReadonlyArray<{ mode: RightPanelMode; label: string }>;
 const defaultAIChatSession: AIChatSessionState = {
   messages: [],
   draft: "",
@@ -97,6 +101,9 @@ const memoMarkdown = new MarkdownIt({ html: false, linkify: true });
 installTableScrollRule(memoMarkdown);
 installCodeBlockRule(memoMarkdown);
 installTaskListRule(memoMarkdown);
+
+const LazyAIChatPanel = lazy(() => import("./AIChatPanel").then((module) => ({ default: module.AIChatPanel })));
+const LazySettingsView = lazy(() => import("./SettingsView").then((module) => ({ default: module.SettingsView })));
 
 export function App() {
   const [appView, setAppView] = useState<AppView>("viewer");
@@ -131,11 +138,14 @@ export function App() {
   const treeSectionRef = useRef<HTMLDivElement | null>(null);
   const treeHorizontalScrollRef = useRef<HTMLDivElement | null>(null);
   const pathMenuRef = useRef<HTMLDivElement | null>(null);
+  const pathMenuTriggerRef = useRef<HTMLElement | null>(null);
   const httpDeliveryPopoverRootRef = useRef<HTMLDivElement | null>(null);
   const viewerBodyRef = useRef<HTMLDivElement | null>(null);
   const repoLoadTokenRef = useRef(0);
   const repoReloadTokenRef = useRef(0);
   const activeRepoIdRef = useRef("");
+  const activeRepoRevisionRef = useRef("");
+  const reposRef = useRef<RepoListItem[]>([]);
 
   useEffect(() => {
     const loaded = loadBasicSettings();
@@ -145,7 +155,9 @@ export function App() {
 
   useEffect(() => {
     activeRepoIdRef.current = activeRepoId;
-  }, [activeRepoId]);
+    activeRepoRevisionRef.current = repos.find((repo) => repo.id === activeRepoId)?.revision || "";
+    reposRef.current = repos;
+  }, [activeRepoId, repos]);
 
   const activeRepo = useMemo(() => repos.find((repo) => repo.id === activeRepoId) || null, [activeRepoId, repos]);
   const activeRepoSyncStatus = activeRepoId ? repoSyncByRepo[activeRepoId] || null : null;
@@ -193,9 +205,10 @@ export function App() {
   }, []);
 
   const loadTree = useCallback(async (repoId: string, path: string) => {
-    const nodes = await fetchTree(repoId, path);
-    setTreeCache((current) => ({ ...current, [path]: nodes }));
-    return nodes;
+    const result = await fetchTree(repoId, path);
+    if (activeRepoIdRef.current !== repoId || activeRepoRevisionRef.current !== result.revision) return [];
+    setTreeCache((current) => ({ ...current, [path]: result.nodes }));
+    return result.nodes;
   }, []);
 
   const refreshFileTab = useCallback(async (repoId: string, tabId: string, path: string) => {
@@ -205,6 +218,8 @@ export function App() {
     }));
     try {
       const nextFile = await fetchFile(repoId, path);
+      const expectedRevision = reposRef.current.find((repo) => repo.id === repoId)?.revision || "";
+      if (!expectedRevision || nextFile.revision !== expectedRevision) throw new Error("Repository revision changed. Reload the repository before opening this file.");
       setTabsByRepo((current) => ({
         ...current,
         [repoId]: (current[repoId] || []).map((tab) =>
@@ -271,11 +286,18 @@ export function App() {
 
   const selectRepo = useCallback(
     async (repo: RepoListItem) => {
+      const identityChanged = activeRepoIdRef.current !== repo.id || activeRepoRevisionRef.current !== repo.revision;
       const loadToken = repoLoadTokenRef.current + 1;
       repoLoadTokenRef.current = loadToken;
       repoReloadTokenRef.current += 1;
+      activeRepoIdRef.current = repo.id;
+      activeRepoRevisionRef.current = repo.revision;
       setRepositoryReloadingRepoId("");
       setActiveRepoId(repo.id);
+      if (identityChanged) {
+        setAISettings((current) => invalidateAIReadiness(current));
+        setAIChatSession(defaultAIChatSession);
+      }
       setTreeCache({});
       setExpanded(new Set([""]));
       setError("");
@@ -285,10 +307,13 @@ export function App() {
         [repo.id]: { state: "syncing", message: "Loading repository metadata...", fetched: false },
       }));
       try {
-        const opened = await openRepository(repo.id);
-        if (repoLoadTokenRef.current !== loadToken || opened.repoId !== repo.id) return;
+        const opened = await openRepository(repo.id, repo.revision);
+        if (repoLoadTokenRef.current !== loadToken || opened.repoId !== repo.id || opened.revision !== repo.revision) return;
         setTreeCache(opened.tree);
-        setRepoSyncByRepo((current) => ({ ...current, [repo.id]: opened.sync }));
+        setRepoSyncByRepo((current) => ({
+          ...current,
+          [repo.id]: opened.treeTruncated && opened.treeWarnings.length ? { ...opened.sync, state: "warning", message: opened.treeWarnings.join(" ") } : opened.sync,
+        }));
         const existingTabs = tabsByRepo[repo.id] || [];
         if (existingTabs.length) {
           const nextActiveTabId = activeTabByRepo[repo.id] || existingTabs[0].id;
@@ -327,8 +352,9 @@ export function App() {
     }));
 
     try {
-      const opened = await openRepository(repoId);
-      const stillActive = repoReloadTokenRef.current === reloadToken && activeRepoIdRef.current === repoId && opened.repoId === repoId;
+      const expectedRevision = activeRepoRevisionRef.current;
+      const opened = await openRepository(repoId, expectedRevision);
+      const stillActive = repoReloadTokenRef.current === reloadToken && activeRepoIdRef.current === repoId && opened.repoId === repoId && opened.revision === expectedRevision;
       if (stillActive) {
         setTreeCache(opened.tree);
         setRepoSyncByRepo((current) => ({ ...current, [repoId]: opened.sync }));
@@ -354,13 +380,28 @@ export function App() {
   }, [activeRepoId, refreshFileTab, tabsByRepo]);
 
   const reloadRepositoriesAfterSettingsSave = useCallback(async () => {
+    const previousActiveRepo = repos.find((repo) => repo.id === activeRepoId) || null;
     const nextRepos = await fetchRepos();
+    reposRef.current = nextRepos;
     setRepos(nextRepos);
-    const stillActive = nextRepos.some((repo) => repo.id === activeRepoId);
+    const nextActiveRepo = nextRepos.find((repo) => repo.id === activeRepoId) || null;
+    const stillActive = Boolean(nextActiveRepo);
+    if (previousActiveRepo && nextActiveRepo && previousActiveRepo.revision !== nextActiveRepo.revision) {
+      repoLoadTokenRef.current += 1;
+      repoReloadTokenRef.current += 1;
+      setTreeCache({});
+      setExpanded(new Set([""]));
+      setTabsByRepo((current) => ({ ...current, [activeRepoId]: [] }));
+      setActiveTabByRepo((current) => ({ ...current, [activeRepoId]: "" }));
+      setAIChatSession(defaultAIChatSession);
+      setAISettings((current) => invalidateAIReadiness(current));
+      await selectRepo(nextActiveRepo);
+      return;
+    }
     if (!stillActive && nextRepos[0]) {
       await selectRepo(nextRepos[0]);
     }
-  }, [activeRepoId, selectRepo]);
+  }, [activeRepoId, repos, selectRepo]);
 
   useEffect(() => {
     let cancelled = false;
@@ -370,6 +411,7 @@ export function App() {
       try {
         const nextRepos = await fetchRepos();
         if (cancelled) return;
+        reposRef.current = nextRepos;
         setRepos(nextRepos);
         const firstRepo = nextRepos[0];
         if (firstRepo) await selectRepo(firstRepo);
@@ -391,13 +433,14 @@ export function App() {
 
   useEffect(() => {
     if (!pathMenu) return undefined;
+    focusFirstMenuItem(pathMenuRef.current);
     function closeMenu(event: MouseEvent) {
       const target = event.target;
       if (target instanceof Node && pathMenuRef.current?.contains(target)) return;
       setPathMenu(null);
     }
     function closeMenuOnEscape(event: KeyboardEvent) {
-      if (event.key === "Escape") setPathMenu(null);
+      if (event.key === "Escape") closePathMenu(true);
     }
     window.addEventListener("click", closeMenu);
     window.addEventListener("keydown", closeMenuOnEscape);
@@ -574,7 +617,7 @@ export function App() {
     setHttpDeliveryPendingPath(path);
     setHttpDeliveryError("");
     try {
-      const status = await startHttpDelivery(repoId, path);
+      const status = await startHttpDelivery(repoId, path, activeRepoRevisionRef.current);
       setHttpDeliveryStatus(status);
       const item = findHttpDeliveryItem(status, repoId, path);
       if (item) navigateHttpDeliveryTab(deliveryTab, item.url);
@@ -606,6 +649,7 @@ export function App() {
   function openPathMenu(node: TreeNode, event: ReactMouseEvent<HTMLElement>) {
     event.preventDefault();
     event.stopPropagation();
+    pathMenuTriggerRef.current = event.currentTarget;
     setPathMenu({
       node,
       relativePath: node.path,
@@ -621,14 +665,20 @@ export function App() {
     } catch {
       // Clipboard permission can be denied; closing the menu keeps the local UI stable.
     } finally {
-      setPathMenu(null);
+      closePathMenu(true);
     }
+  }
+
+  function closePathMenu(restoreFocus: boolean) {
+    const trigger = pathMenuTriggerRef.current;
+    setPathMenu(null);
+    if (restoreFocus) restoreMenuTriggerFocus(trigger);
   }
 
   function openPathMenuFileInNewTab() {
     if (!activeRepoId || !pathMenu || pathMenu.node.type !== "file") return;
     void openFile(activeRepoId, pathMenu.relativePath, { mode: "new-preview" });
-    setPathMenu(null);
+    closePathMenu(true);
   }
 
   function sendPathFromMenuToAIChat() {
@@ -650,7 +700,7 @@ export function App() {
       ],
     }));
     setRightPanelMode("aiChat");
-    setPathMenu(null);
+    closePathMenu(true);
   }
 
   function jumpToTreePath(path: string) {
@@ -662,17 +712,20 @@ export function App() {
 
   if (appView === "settings") {
     return (
-      <SettingsView
-        basicSettings={basicSettings}
-        aiSettings={aiSettings}
-        activeRepoId={activeRepoId}
-        initialCategory={settingsCategory}
-        basicSaveError={basicSaveError}
-        onBack={() => setAppView("viewer")}
-        onBasicSettingsChange={updateBasicSettings}
-        onAISettingsChange={setAISettings}
-        onRepositoriesChanged={reloadRepositoriesAfterSettingsSave}
-      />
+      <Suspense fallback={<main className="settings-view"><p className="state-text">Loading Settings...</p></main>}>
+        <LazySettingsView
+          basicSettings={basicSettings}
+          aiSettings={aiSettings}
+          activeRepoId={activeRepoId}
+          activeRepoRevision={activeRepo?.revision || ""}
+          initialCategory={settingsCategory}
+          basicSaveError={basicSaveError}
+          onBack={() => setAppView("viewer")}
+          onBasicSettingsChange={updateBasicSettings}
+          onAISettingsChange={setAISettings}
+          onRepositoriesChanged={reloadRepositoriesAfterSettingsSave}
+        />
+      </Suspense>
     );
   }
 
@@ -776,21 +829,23 @@ export function App() {
                 aria-label={`${pathMenu.relativePath} path actions`}
                 style={{ left: pathMenu.x, top: pathMenu.y }}
                 onClick={(event) => event.stopPropagation()}
+                onKeyDown={(event) => handleMenuKeyDown(event, () => closePathMenu(true))}
               >
-                <button type="button" role="menuitem" onClick={() => void copyPathFromMenu(pathMenu.absolutePath)}>
+                <button type="button" role="menuitem" tabIndex={-1} onClick={() => void copyPathFromMenu(pathMenu.absolutePath)}>
                   Copy Absolute Path
                 </button>
-                <button type="button" role="menuitem" onClick={() => void copyPathFromMenu(pathMenu.relativePath)}>
+                <button type="button" role="menuitem" tabIndex={-1} onClick={() => void copyPathFromMenu(pathMenu.relativePath)}>
                   Copy Relative Path
                 </button>
                 {pathMenu.node.type === "file" ? (
-                  <button type="button" role="menuitem" onClick={openPathMenuFileInNewTab}>
+                  <button type="button" role="menuitem" tabIndex={-1} onClick={openPathMenuFileInNewTab}>
                     Open in New Tab
                   </button>
                 ) : null}
                 <button
                   type="button"
                   role="menuitem"
+                  tabIndex={-1}
                   aria-disabled={aiPathSendReady ? undefined : "true"}
                   className={aiPathSendReady ? "" : "disabled"}
                   title={aiPathSendReady ? "Send a path to AI Chat" : "AI Entry の認証が必要です"}
@@ -850,7 +905,15 @@ export function App() {
           }}
         />
         {error ? <p className="state-text error">{error}</p> : null}
-        <div className="viewer-body" ref={viewerBodyRef} style={readerTypographyStyle}>
+        <div
+          id={FILE_TAB_PANEL_ID}
+          className="viewer-body"
+          ref={viewerBodyRef}
+          role="tabpanel"
+          aria-labelledby={activeTab ? fileTabDomId(activeTab.id) : undefined}
+          tabIndex={activeTab ? 0 : undefined}
+          style={readerTypographyStyle}
+        >
           <FileViewer tab={activeTab} outline={outline} readerFontScale={basicSettings.readerFontScale} colorMode={basicSettings.colorMode} />
         </div>
       </section>
@@ -870,6 +933,7 @@ export function App() {
         onAIChatSessionChange={updateAIChatSession}
         aiModelBehavior={aiModelBehavior}
         activeRepoId={activeRepoId}
+        activeRepoRevision={activeRepo?.revision || ""}
         rootTreeNodes={treeCache[""] || []}
         onOpenSettings={() => openSettings("aiChat")}
       />
@@ -913,6 +977,7 @@ function TreeView({
         <ul className="tree tree-list-column">
           {rows.map((row, rowIndex) => {
             const { node, depth, isExpanded, isSelected, iconKind } = row;
+            const gitStatusDescriptionId = node.gitStatus ? `tree-git-status-${rowIndex}` : undefined;
             return (
               <li key={node.path}>
                 <button
@@ -923,6 +988,8 @@ function TreeView({
                   data-tree-depth={depth}
                   data-tree-index={rowIndex}
                   style={treeRowStyle(depth)}
+                  aria-expanded={node.type === "directory" ? isExpanded : undefined}
+                  aria-describedby={gitStatusDescriptionId}
                   onClick={() => (node.type === "directory" ? onToggleDirectory(node.path) : onOpenFile(node.path))}
                   onContextMenu={(event) => onOpenPathMenu(node, event)}
                 >
@@ -933,6 +1000,11 @@ function TreeView({
                   <TreeIcon kind={iconKind} className="tree-icon" />
                   <span className="tree-name">{node.name}</span>
                 </button>
+                {node.gitStatus ? (
+                  <span id={gitStatusDescriptionId} className="visually-hidden">
+                    Git status: {gitStatusLabel(node.gitStatus)}
+                  </span>
+                ) : null}
               </li>
             );
           })}
@@ -1014,6 +1086,19 @@ function treeRowStyle(depth: number): CSSProperties {
     "--tree-guides-width": `${guideWidth}px`,
     "--tree-indent-width": "18px",
   } as CSSProperties;
+}
+
+function gitStatusLabel(status: DiffStatus): string {
+  switch (status) {
+    case "new":
+      return "new";
+    case "changed":
+      return "changed";
+    case "deleted":
+      return "deleted";
+    case "binary":
+      return "binary change";
+  }
 }
 
 type TreeIconKind =
@@ -1111,14 +1196,19 @@ function FileTabBar({ tabs, activeTabId, notice, onActivate, onToggleFixed, onTo
 }) {
   const sequenceStartActiveByTabRef = useRef(new Map<string, boolean>());
   const lastTapRef = useRef<{ tabId: string; time: number; startedActive: boolean } | null>(null);
+  const tabListRef = useRef<HTMLDivElement | null>(null);
+  const tabRefs = useRef(new Map<string, HTMLButtonElement>());
+  const tabMenuRef = useRef<HTMLDivElement | null>(null);
+  const tabMenuTriggerRef = useRef<HTMLElement | null>(null);
   const [tabMenu, setTabMenu] = useState<TabContextMenu>(null);
   useEffect(() => {
     if (!tabMenu) return undefined;
+    focusFirstMenuItem(tabMenuRef.current);
     function closeMenu() {
       setTabMenu(null);
     }
     function closeMenuOnEscape(event: KeyboardEvent) {
-      if (event.key === "Escape") setTabMenu(null);
+      if (event.key === "Escape") closeTabMenu(true);
     }
     window.addEventListener("click", closeMenu);
     window.addEventListener("keydown", closeMenuOnEscape);
@@ -1134,6 +1224,7 @@ function FileTabBar({ tabs, activeTabId, notice, onActivate, onToggleFixed, onTo
   function openTabMenu(tabId: string, event: ReactMouseEvent<HTMLElement>) {
     event.preventDefault();
     event.stopPropagation();
+    tabMenuTriggerRef.current = event.currentTarget;
     setTabMenu({
       tabId,
       x: Math.max(8, event.clientX),
@@ -1141,10 +1232,34 @@ function FileTabBar({ tabs, activeTabId, notice, onActivate, onToggleFixed, onTo
     });
   }
 
+  function closeTabMenu(restoreFocus: boolean) {
+    const trigger = tabMenuTriggerRef.current;
+    setTabMenu(null);
+    if (restoreFocus) {
+      restoreMenuTriggerFocus(trigger, () => tabListRef.current?.querySelector<HTMLElement>('[role="tab"][tabindex="0"]') || null);
+    }
+  }
+
+  function moveTabFocus(currentIndex: number, key: string) {
+    let nextIndex = currentIndex;
+    if (key === "ArrowRight") nextIndex = (currentIndex + 1) % tabs.length;
+    else if (key === "ArrowLeft") nextIndex = (currentIndex - 1 + tabs.length) % tabs.length;
+    else if (key === "Home") nextIndex = 0;
+    else if (key === "End") nextIndex = tabs.length - 1;
+    else return false;
+    const nextTab = tabs[nextIndex];
+    onActivate(nextTab.id);
+    tabRefs.current.get(nextTab.id)?.focus();
+    return true;
+  }
+
   return (
     <div className="file-tab-bar-wrap">
-      <div className="file-tab-bar" role="tablist" aria-label="Open files">
-        {tabs.map((tab) => {
+      <span id="file-tab-keyboard-help" className="visually-hidden">
+        Use Left and Right Arrow to move between open files, Delete to close the current file, and Shift+F10 for tab actions.
+      </span>
+      <div ref={tabListRef} className="file-tab-bar" role="tablist" aria-label="Open files" aria-orientation="horizontal">
+        {tabs.map((tab, tabIndex) => {
           const active = tab.id === activeTabId;
           const stateLabel = tab.isPinned ? "Pinned" : tab.isPreview ? "Preview" : "Fixed";
           return (
@@ -1152,70 +1267,103 @@ function FileTabBar({ tabs, activeTabId, notice, onActivate, onToggleFixed, onTo
               key={tab.id}
               className={`file-tab${active ? " active" : " inactive"}${tab.isPreview ? " preview" : " fixed"}${tab.isPinned ? " pinned" : ""}`}
               data-testid="file-tab"
-              role="tab"
-              tabIndex={0}
-              aria-label={tab.title}
-              aria-selected={active}
               title={tab.path}
-              onClick={(event) => {
-                const detail = event.detail || 1;
-                if (detail <= 1 || !sequenceStartActiveByTabRef.current.has(tab.id)) {
-                  sequenceStartActiveByTabRef.current.set(tab.id, active);
-                }
-                onActivate(tab.id);
-                if (active && detail <= 1) onReveal(tab.id);
-              }}
-              onDoubleClick={() => {
-                const sequenceStartedActive = sequenceStartActiveByTabRef.current.get(tab.id) ?? active;
-                sequenceStartActiveByTabRef.current.delete(tab.id);
-                if (sequenceStartedActive) onToggleFixed(tab.id);
-              }}
-              onKeyDown={(event) => {
-                if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) {
-                  event.preventDefault();
-                  const rect = event.currentTarget.getBoundingClientRect();
-                  setTabMenu({ tabId: tab.id, x: rect.left + 12, y: rect.bottom + 4 });
-                  return;
-                }
-                if (event.key !== "Enter" && event.key !== " ") return;
-                event.preventDefault();
-                onActivate(tab.id);
-                if (active) onReveal(tab.id);
-              }}
-              onPointerUp={(event) => {
-                if (event.pointerType === "mouse") return;
-                const now = typeof performance !== "undefined" ? performance.now() : Date.now();
-                const previousTap = lastTapRef.current;
-                if (previousTap && previousTap.tabId === tab.id && now - previousTap.time <= 360 && previousTap.startedActive) {
-                  lastTapRef.current = null;
-                  onToggleFixed(tab.id);
-                  return;
-                }
-                lastTapRef.current = { tabId: tab.id, time: now, startedActive: active };
-              }}
-              onContextMenu={(event) => openTabMenu(tab.id, event)}
             >
-              <span className="file-tab-glyph" aria-hidden="true">{tab.isPinned ? "P" : tab.isPreview ? "~" : "="}</span>
-              <span className="file-tab-title">{tab.title}</span>
-              <span className="file-tab-state">{stateLabel}</span>
-              <button type="button" className="file-tab-close" aria-label={`Close ${tab.title}`} onClick={(event) => {
+              <button
+                type="button"
+                className="file-tab-main"
+                role="tab"
+                id={fileTabDomId(tab.id)}
+                ref={(element) => {
+                  if (element) tabRefs.current.set(tab.id, element);
+                  else tabRefs.current.delete(tab.id);
+                }}
+                tabIndex={active || (!activeTabId && tabIndex === 0) ? 0 : -1}
+                aria-label={tab.title}
+                aria-selected={active}
+                aria-controls={FILE_TAB_PANEL_ID}
+                aria-describedby="file-tab-keyboard-help"
+                aria-keyshortcuts="ArrowLeft ArrowRight Home End Delete Shift+F10"
+                onClick={(event) => {
+                  const detail = event.detail || 1;
+                  if (detail <= 1 || !sequenceStartActiveByTabRef.current.has(tab.id)) {
+                    sequenceStartActiveByTabRef.current.set(tab.id, active);
+                  }
+                  onActivate(tab.id);
+                  if (active && detail <= 1) onReveal(tab.id);
+                }}
+                onDoubleClick={() => {
+                  const sequenceStartedActive = sequenceStartActiveByTabRef.current.get(tab.id) ?? active;
+                  sequenceStartActiveByTabRef.current.delete(tab.id);
+                  if (sequenceStartedActive) onToggleFixed(tab.id);
+                }}
+                onKeyDown={(event) => {
+                  if (moveTabFocus(tabIndex, event.key)) {
+                    event.preventDefault();
+                    return;
+                  }
+                  if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) {
+                    event.preventDefault();
+                    const rect = event.currentTarget.getBoundingClientRect();
+                    tabMenuTriggerRef.current = event.currentTarget;
+                    setTabMenu({ tabId: tab.id, x: rect.left + 12, y: rect.bottom + 4 });
+                    return;
+                  }
+                  if (event.key === "Delete") {
+                    event.preventDefault();
+                    onClose(tab.id);
+                    restoreMenuTriggerFocus(null, () => tabListRef.current?.querySelector<HTMLElement>('[role="tab"][tabindex="0"]') || null);
+                    return;
+                  }
+                  if (event.key !== "Enter" && event.key !== " ") return;
+                  event.preventDefault();
+                  onActivate(tab.id);
+                  if (active) onReveal(tab.id);
+                }}
+                onPointerUp={(event) => {
+                  if (event.pointerType === "mouse") return;
+                  const now = typeof performance !== "undefined" ? performance.now() : Date.now();
+                  const previousTap = lastTapRef.current;
+                  if (previousTap && previousTap.tabId === tab.id && now - previousTap.time <= 360 && previousTap.startedActive) {
+                    lastTapRef.current = null;
+                    onToggleFixed(tab.id);
+                    return;
+                  }
+                  lastTapRef.current = { tabId: tab.id, time: now, startedActive: active };
+                }}
+                onContextMenu={(event) => openTabMenu(tab.id, event)}
+              >
+                <span className="file-tab-glyph" aria-hidden="true">{tab.isPinned ? "P" : tab.isPreview ? "~" : "="}</span>
+                <span className="file-tab-title">{tab.title}</span>
+                <span className="file-tab-state">{stateLabel}</span>
+              </button>
+              <span className="file-tab-close" aria-hidden="true" title={`Close ${tab.title}`} onClick={(event) => {
                 event.stopPropagation();
                 onClose(tab.id);
               }}>
                 x
-              </button>
+              </span>
             </div>
           );
         })}
       </div>
       {menuTab && tabMenu ? (
-        <div className="file-tab-menu" role="menu" style={{ left: tabMenu.x, top: tabMenu.y }} onClick={(event) => event.stopPropagation()}>
+        <div
+          ref={tabMenuRef}
+          className="file-tab-menu"
+          role="menu"
+          aria-label={`${menuTab.title} tab actions`}
+          style={{ left: tabMenu.x, top: tabMenu.y }}
+          onClick={(event) => event.stopPropagation()}
+          onKeyDown={(event) => handleMenuKeyDown(event, () => closeTabMenu(true))}
+        >
           <button
             type="button"
             role="menuitem"
+            tabIndex={-1}
             onClick={() => {
               onToggleFixed(menuTab.id);
-              setTabMenu(null);
+              closeTabMenu(true);
             }}
           >
             {menuTab.isPreview ? "Fix Tab" : "Return to Preview"}
@@ -1223,9 +1371,10 @@ function FileTabBar({ tabs, activeTabId, notice, onActivate, onToggleFixed, onTo
           <button
             type="button"
             role="menuitem"
+            tabIndex={-1}
             onClick={() => {
               onTogglePin(menuTab.id);
-              setTabMenu(null);
+              closeTabMenu(true);
             }}
           >
             {menuTab.isPinned ? "Unpin" : "Pin"}
@@ -1233,9 +1382,10 @@ function FileTabBar({ tabs, activeTabId, notice, onActivate, onToggleFixed, onTo
           <button
             type="button"
             role="menuitem"
+            tabIndex={-1}
             onClick={() => {
               onHttpDelivery(menuTab.id);
-              setTabMenu(null);
+              closeTabMenu(true);
             }}
           >
             HTTP Delivery
@@ -1243,9 +1393,10 @@ function FileTabBar({ tabs, activeTabId, notice, onActivate, onToggleFixed, onTo
           <button
             type="button"
             role="menuitem"
+            tabIndex={-1}
             onClick={() => {
               onClose(menuTab.id);
-              setTabMenu(null);
+              closeTabMenu(true);
             }}
           >
             Close
@@ -1255,6 +1406,55 @@ function FileTabBar({ tabs, activeTabId, notice, onActivate, onToggleFixed, onTo
       {notice ? <p className="file-tab-notice">{notice}</p> : null}
     </div>
   );
+}
+
+function fileTabDomId(tabId: string): string {
+  return `reader-file-tab-${encodeURIComponent(tabId).replaceAll("%", "_")}`;
+}
+
+function rightPanelTabDomId(mode: RightPanelMode): string {
+  return `reader-side-panel-tab-${mode}`;
+}
+
+function rightPanelDomId(mode: RightPanelMode): string {
+  return `reader-side-panel-${mode}`;
+}
+
+function enabledMenuItems(menu: HTMLElement | null): HTMLElement[] {
+  if (!menu) return [];
+  return Array.from(menu.querySelectorAll<HTMLElement>('[role="menuitem"]')).filter((item) => item.getAttribute("aria-disabled") !== "true");
+}
+
+function focusFirstMenuItem(menu: HTMLElement | null): void {
+  enabledMenuItems(menu)[0]?.focus();
+}
+
+function handleMenuKeyDown(event: ReactKeyboardEvent<HTMLElement>, onEscape: () => void): void {
+  if (event.key === "Escape") {
+    event.preventDefault();
+    event.stopPropagation();
+    onEscape();
+    return;
+  }
+  const items = enabledMenuItems(event.currentTarget);
+  if (!items.length) return;
+  const currentIndex = items.indexOf(document.activeElement as HTMLElement);
+  let nextIndex: number;
+  if (event.key === "ArrowDown") nextIndex = currentIndex < 0 ? 0 : (currentIndex + 1) % items.length;
+  else if (event.key === "ArrowUp") nextIndex = currentIndex < 0 ? items.length - 1 : (currentIndex - 1 + items.length) % items.length;
+  else if (event.key === "Home") nextIndex = 0;
+  else if (event.key === "End") nextIndex = items.length - 1;
+  else return;
+  event.preventDefault();
+  event.stopPropagation();
+  items[nextIndex].focus();
+}
+
+function restoreMenuTriggerFocus(trigger: HTMLElement | null, fallback?: () => HTMLElement | null): void {
+  queueMicrotask(() => {
+    if (trigger?.isConnected) trigger.focus();
+    else fallback?.()?.focus();
+  });
 }
 
 function ViewModeControl({ file, mode, onChange }: { file: FileResponse | null; mode: ViewMode; onChange: (mode: ViewMode) => void }) {
@@ -1306,8 +1506,8 @@ function FileViewer({ tab, outline, readerFontScale, colorMode }: { tab: FileTab
     return <article className="markdown-body" onClick={handleMarkdownClick} dangerouslySetInnerHTML={{ __html: withOutlineHeadingIds(file.markdown?.html || "", outline) }} />;
   }
   if (file.kind === "html") return <iframe className="html-frame" title={file.name} sandbox="" srcDoc={buildSandboxedHtmlSrcDoc(file.content, readerFontScale, colorMode)} />;
-  if (file.kind === "image") return <img className="image-viewer" alt={file.name} src={imageFileUrl(file.repoId, file.path, file.assetVersion)} />;
-  if (file.kind === "pdf") return <iframe className="pdf-frame" title={file.name} src={pdfFileUrl(file.repoId, file.path, file.assetVersion)} />;
+  if (file.kind === "image") return <img className="image-viewer" alt={file.name} src={imageFileUrl(file.repoId, file.path, file.revision, file.assetVersion)} />;
+  if (file.kind === "pdf") return <iframe className="pdf-frame" title={file.name} src={pdfFileUrl(file.repoId, file.path, file.revision, file.assetVersion)} />;
   if (file.kind === "binary") return <BinaryFileState file={file} />;
   return <CodeBlock content={file.content} label="Raw" gitDiff={file.gitDiff} />;
 }
@@ -1423,7 +1623,7 @@ function HttpDeliveryPanel({ status, stoppingItemIds, error, onStop }: {
   );
 }
 
-function RightPanel({ mode, onModeChange, file, outline, onHeadingSelect, memoText, memoMode, onMemoTextChange, onMemoModeChange, aiSettings, aiChatSession, onAIChatSessionChange, aiModelBehavior, activeRepoId, rootTreeNodes, onOpenSettings }: {
+function RightPanel({ mode, onModeChange, file, outline, onHeadingSelect, memoText, memoMode, onMemoTextChange, onMemoModeChange, aiSettings, aiChatSession, onAIChatSessionChange, aiModelBehavior, activeRepoId, activeRepoRevision, rootTreeNodes, onOpenSettings }: {
   mode: RightPanelMode;
   onModeChange: (mode: RightPanelMode) => void;
   file: FileResponse | null;
@@ -1438,22 +1638,52 @@ function RightPanel({ mode, onModeChange, file, outline, onHeadingSelect, memoTe
   onAIChatSessionChange: (updater: (session: AIChatSessionState) => AIChatSessionState) => void;
   aiModelBehavior: ReturnType<typeof activeAIModelBehavior>;
   activeRepoId: string;
+  activeRepoRevision: string;
   rootTreeNodes: TreeNode[];
   onOpenSettings: () => void;
 }) {
+  const tabRefs = useRef(new Map<RightPanelMode, HTMLButtonElement>());
+
+  function moveRightPanelTabFocus(currentIndex: number, key: string) {
+    let nextIndex = currentIndex;
+    if (key === "ArrowRight") nextIndex = (currentIndex + 1) % RIGHT_PANEL_TABS.length;
+    else if (key === "ArrowLeft") nextIndex = (currentIndex - 1 + RIGHT_PANEL_TABS.length) % RIGHT_PANEL_TABS.length;
+    else if (key === "Home") nextIndex = 0;
+    else if (key === "End") nextIndex = RIGHT_PANEL_TABS.length - 1;
+    else return false;
+    const nextMode = RIGHT_PANEL_TABS[nextIndex].mode;
+    onModeChange(nextMode);
+    tabRefs.current.get(nextMode)?.focus();
+    return true;
+  }
+
   return (
     <aside className={`right-panel ${mode === "aiChat" ? "ai-chat-right-panel" : ""}`} aria-label="Reader side panel">
       <header className="right-panel-header">
-        <div className="right-panel-tabs" role="tablist" aria-label="Side panel views">
-          <button type="button" role="tab" aria-selected={mode === "outline"} className={mode === "outline" ? "active" : ""} onClick={() => onModeChange("outline")}>
-            Outline
-          </button>
-          <button type="button" role="tab" aria-selected={mode === "memo"} className={mode === "memo" ? "active" : ""} onClick={() => onModeChange("memo")}>
-            Memo
-          </button>
-          <button type="button" role="tab" aria-selected={mode === "aiChat"} className={mode === "aiChat" ? "active" : ""} onClick={() => onModeChange("aiChat")}>
-            AI Chat
-          </button>
+        <div className="right-panel-tabs" role="tablist" aria-label="Side panel views" aria-orientation="horizontal">
+          {RIGHT_PANEL_TABS.map((tab, tabIndex) => (
+            <button
+              key={tab.mode}
+              ref={(element) => {
+                if (element) tabRefs.current.set(tab.mode, element);
+                else tabRefs.current.delete(tab.mode);
+              }}
+              id={rightPanelTabDomId(tab.mode)}
+              type="button"
+              role="tab"
+              tabIndex={mode === tab.mode ? 0 : -1}
+              aria-selected={mode === tab.mode}
+              aria-controls={rightPanelDomId(tab.mode)}
+              className={mode === tab.mode ? "active" : ""}
+              onClick={() => onModeChange(tab.mode)}
+              onKeyDown={(event) => {
+                if (!moveRightPanelTabFocus(tabIndex, event.key)) return;
+                event.preventDefault();
+              }}
+            >
+              {tab.label}
+            </button>
+          ))}
         </div>
       </header>
       {mode === "outline" ? (
@@ -1461,18 +1691,27 @@ function RightPanel({ mode, onModeChange, file, outline, onHeadingSelect, memoTe
       ) : mode === "memo" ? (
         <MemoPanel memoText={memoText} memoMode={memoMode} onMemoTextChange={onMemoTextChange} onMemoModeChange={onMemoModeChange} />
       ) : (
-        <section className="side-panel-body ai-chat-side-panel">
-          <AIChatPanel
-            aiSettings={aiSettings}
-            session={aiChatSession}
-            onSessionChange={onAIChatSessionChange}
-            modelBehavior={aiModelBehavior}
-            activeRepoId={activeRepoId}
-            activeFile={file}
-            rootTreeNodes={rootTreeNodes}
-            onOpenSettings={onOpenSettings}
-            onMarkdownClick={handleMarkdownClick}
-          />
+        <section
+          id={rightPanelDomId("aiChat")}
+          className="side-panel-body ai-chat-side-panel"
+          role="tabpanel"
+          aria-labelledby={rightPanelTabDomId("aiChat")}
+          tabIndex={0}
+        >
+          <Suspense fallback={<p className="state-text">Loading AI Chat...</p>}>
+            <LazyAIChatPanel
+              aiSettings={aiSettings}
+              session={aiChatSession}
+              onSessionChange={onAIChatSessionChange}
+              modelBehavior={aiModelBehavior}
+              activeRepoId={activeRepoId}
+              activeRepoRevision={activeRepoRevision}
+              activeFile={file}
+              rootTreeNodes={rootTreeNodes}
+              onOpenSettings={onOpenSettings}
+              onMarkdownClick={handleMarkdownClick}
+            />
+          </Suspense>
         </section>
       )}
     </aside>
@@ -1481,7 +1720,13 @@ function RightPanel({ mode, onModeChange, file, outline, onHeadingSelect, memoTe
 
 function OutlinePanel({ file, outline, onHeadingSelect }: { file: FileResponse | null; outline: OutlineItem[]; onHeadingSelect: (headingId: string) => void }) {
   return (
-    <section className="side-panel-body">
+    <section
+      id={rightPanelDomId("outline")}
+      className="side-panel-body"
+      role="tabpanel"
+      aria-labelledby={rightPanelTabDomId("outline")}
+      tabIndex={0}
+    >
       <FileInformationPanel file={file} />
       <h2>Table of Contents</h2>
       {!file ? (
@@ -1621,7 +1866,13 @@ function MemoPanel({ memoText, memoMode, onMemoTextChange, onMemoModeChange }: {
   }
 
   return (
-    <section className="memo-panel" aria-label="Memo panel">
+    <section
+      id={rightPanelDomId("memo")}
+      className="memo-panel"
+      role="tabpanel"
+      aria-labelledby={rightPanelTabDomId("memo")}
+      tabIndex={0}
+    >
       <header className="memo-panel-header">
         <h2>Memo</h2>
         <div className="memo-panel-actions" aria-label="Memo actions">
@@ -1776,7 +2027,7 @@ function writeHttpDeliveryPendingDocument(tab: Window, request: HttpDeliveryPend
   try {
     const payload = safeJsonForInlineScript(request);
     tab.document.open();
-    tab.document.write(`<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Starting HTTP Delivery</title><style>:root{font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#1f2933;background:#ffffff}body{margin:0;display:grid;min-height:100vh;place-items:center}main{max-width:420px;padding:32px;text-align:center}h1{font-size:18px;margin:0 0 8px}p{color:#5b6670;font-size:13px;margin:0}</style></head><body><main><h1>Starting HTTP Delivery</h1><p>This tab will navigate when the local item is ready.</p></main><script>const request=${payload};async function start(){try{const response=await fetch(request.startUrl,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({repoId:request.repoId,path:request.path})});if(!response.ok)throw new Error("HTTP Delivery start failed.");const status=await response.json();const item=Array.isArray(status.items)?status.items.find((item)=>item&&item.repoId===request.repoId&&item.path===request.path):null;if(!item||!item.url)throw new Error("HTTP Delivery item was not found.");window.location.replace(item.url)}catch(error){document.body.textContent=error&&error.message?error.message:"HTTP Delivery failed."}}start();</script></body></html>`);
+    tab.document.write(`<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Starting HTTP Delivery</title><style>:root{font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#1f2933;background:#ffffff}body{margin:0;display:grid;min-height:100vh;place-items:center}main{max-width:420px;padding:32px;text-align:center}h1{font-size:18px;margin:0 0 8px}p{color:#5b6670;font-size:13px;margin:0}</style></head><body><main><h1>Starting HTTP Delivery</h1><p>This tab will navigate when the local item is ready.</p></main><script>const request=${payload};async function start(){try{const response=await fetch(request.startUrl,{method:"POST",headers:{"Content-Type":"application/json","X-Reader-Wiki-Request":"1"},body:JSON.stringify({repoId:request.repoId,path:request.path})});if(!response.ok)throw new Error("HTTP Delivery start failed.");const status=await response.json();const item=Array.isArray(status.items)?status.items.find((item)=>item&&item.repoId===request.repoId&&item.path===request.path):null;if(!item||!item.url)throw new Error("HTTP Delivery item was not found.");window.location.replace(item.url)}catch(error){document.body.textContent=error&&error.message?error.message:"HTTP Delivery failed."}}start();</script></body></html>`);
     tab.document.close();
   } catch {
     // Some popup surfaces do not expose the new tab document. The opener still drives navigation.

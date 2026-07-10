@@ -22,17 +22,16 @@ export async function fetchRepos(): Promise<RepoListItem[]> {
   return data.repositories;
 }
 
-export async function fetchTree(repoId: string, path: string): Promise<TreeNode[]> {
+export async function fetchTree(repoId: string, path: string): Promise<{ revision: string; nodes: TreeNode[] }> {
   const query = new URLSearchParams({ repo: repoId, path });
-  const data = await requestJson<{ nodes: TreeNode[] }>(`/api/tree?${query.toString()}`);
-  return data.nodes;
+  return requestJson<{ revision: string; nodes: TreeNode[] }>(`/api/tree?${query.toString()}`);
 }
 
-export async function openRepository(repoId: string): Promise<RepoOpenResponse> {
+export async function openRepository(repoId: string, expectedRevision: string): Promise<RepoOpenResponse> {
   return requestJson<RepoOpenResponse>("/api/repo-open", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ repoId }),
+    body: JSON.stringify({ repoId, expectedRevision }),
   });
 }
 
@@ -45,11 +44,11 @@ export async function fetchHttpDeliveryStatus(): Promise<HttpDeliveryStatus> {
   return requestJson<HttpDeliveryStatus>("/api/http-delivery/status");
 }
 
-export async function startHttpDelivery(repoId: string, path: string): Promise<HttpDeliveryStatus> {
+export async function startHttpDelivery(repoId: string, path: string, expectedRevision: string): Promise<HttpDeliveryStatus> {
   return requestJson<HttpDeliveryStatus>("/api/http-delivery/start", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ repoId, path }),
+    body: JSON.stringify({ repoId, path, expectedRevision }),
   });
 }
 
@@ -97,11 +96,11 @@ export async function testAIProviderConnection(provider: AIProviderSettings): Pr
   });
 }
 
-export async function fetchAIEntryReadiness(entry: AIEntryKind, provider?: AIProviderSettings, repoId = ""): Promise<CliAIEntryReadiness> {
+export async function fetchAIEntryReadiness(entry: AIEntryKind, provider?: AIProviderSettings, repoId = "", expectedRevision = ""): Promise<CliAIEntryReadiness> {
   return requestJson<CliAIEntryReadiness>("/api/ai/entry-readiness", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ entry, provider, repoId }),
+    body: JSON.stringify({ entry, provider, repoId, expectedRevision }),
   });
 }
 
@@ -114,10 +113,18 @@ export async function sendAIChatMessage(request: AIChatRequest, signal?: AbortSi
   });
 }
 
+export async function cancelAIChatRun(runId: string): Promise<void> {
+  await requestJson<{ runId: string; state: "canceling" }>("/api/ai/cancel", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ runId }),
+  });
+}
+
 export async function streamAIChatMessage(request: AIChatRequest, onEvent: (event: AIChatStreamEvent) => void, signal?: AbortSignal): Promise<void> {
   const response = await fetch("/api/ai/chat/stream", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", "X-Reader-Wiki-Request": "1" },
     body: JSON.stringify(request),
     signal,
     cache: "no-store",
@@ -145,20 +152,23 @@ export async function streamAIChatMessage(request: AIChatRequest, onEvent: (even
   if (buffer.trim()) onEvent(JSON.parse(buffer) as AIChatStreamEvent);
 }
 
-export function imageFileUrl(repoId: string, path: string, assetVersion = ""): string {
-  const query = new URLSearchParams({ repo: repoId, path });
+export function imageFileUrl(repoId: string, path: string, revision: string, assetVersion = ""): string {
+  const query = new URLSearchParams({ repo: repoId, path, revision });
   if (assetVersion) query.set("v", assetVersion);
   return `/api/image?${query.toString()}`;
 }
 
-export function pdfFileUrl(repoId: string, path: string, assetVersion = ""): string {
-  const query = new URLSearchParams({ repo: repoId, path });
+export function pdfFileUrl(repoId: string, path: string, revision: string, assetVersion = ""): string {
+  const query = new URLSearchParams({ repo: repoId, path, revision });
   if (assetVersion) query.set("v", assetVersion);
   return `/api/pdf?${query.toString()}`;
 }
 
 async function requestJson<T>(url: string, init: RequestInit = {}): Promise<T> {
-  const response = await fetch(url, { ...init, cache: "no-store" });
+  const headers = new Headers(init.headers);
+  const method = String(init.method || "GET").toUpperCase();
+  if (!["GET", "HEAD", "OPTIONS"].includes(method)) headers.set("X-Reader-Wiki-Request", "1");
+  const response = await fetch(url, { ...init, headers, cache: "no-store" });
   const data = (await response.json().catch(() => ({}))) as { error?: string };
   if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
   return data as T;

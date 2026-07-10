@@ -1,6 +1,7 @@
 import { access, readFile, realpath } from "node:fs/promises";
 import { HttpError } from "./errors.js";
-import { parseRepositoryConfig } from "./repositoryConfig.js";
+import { parseRepositoryConfig, validateRepositoryConfigDraft } from "./repositoryConfig.js";
+import { repositoryRevision } from "./repositoryRevision.js";
 import type { RepoListItem, RepositoryConfig } from "./types.js";
 
 export type RepositoryRegistryOptions = {
@@ -24,7 +25,22 @@ export async function loadConfigRepositories(configPath: string): Promise<Reposi
     }
     throw error;
   });
-  return parseRepositoryConfig(raw);
+  const repositories = parseRepositoryConfig(raw);
+  const validation = await validateRepositoryConfigDraft({
+    entries: repositories.map((repo) => ({
+      id: repo.id,
+      label: repo.label,
+      root: repo.root,
+      defaultPath: repo.defaultPath || "",
+      excludes: repo.excludes || [],
+      fetchRemote: repo.fetchRemote === true,
+    })),
+  }, configPath);
+  const runtimeErrors = validation.checks.filter((item) => item.status === "error" && item.id !== "config:writable");
+  if (runtimeErrors.length) {
+    throw new HttpError(500, `Repository config is unsafe: ${runtimeErrors.map((item) => item.message).join(" ")}`);
+  }
+  return repositories;
 }
 
 class FileBackedRepositoryRegistry implements RepositoryRegistry {
@@ -49,6 +65,7 @@ class FileBackedRepositoryRegistry implements RepositoryRegistry {
       root: repo.root,
       defaultPath: repo.defaultPath || "",
       exists: await pathExists(repo.root),
+      revision: await repositoryRevision(repo),
     };
   }
 }

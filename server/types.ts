@@ -13,6 +13,7 @@ export type RepoListItem = {
   root: string;
   defaultPath: string;
   exists: boolean;
+  revision: string;
 };
 
 export type TreeNode = {
@@ -37,6 +38,7 @@ export type GitStatusEntry = {
 
 export type GitStatusResponse = {
   repoId: string;
+  revision: string;
   statuses: GitStatusEntry[];
 };
 
@@ -48,12 +50,16 @@ export type RepoSyncStatus = {
 
 export type RepoOpenResponse = {
   repoId: string;
+  revision: string;
   sync: RepoSyncStatus;
   tree: TreeSnapshot;
+  treeTruncated: boolean;
+  treeWarnings: string[];
 };
 
 export type FileResponse = {
   repoId: string;
+  revision?: string;
   path: string;
   name: string;
   extension: string;
@@ -125,6 +131,7 @@ export type RepositoryConfigEntryDraft = {
 
 export type RepositoryConfigDraft = {
   entries: RepositoryConfigEntryDraft[];
+  expectedConfigRevision?: string;
 };
 
 export type RepositoryConfigCheck = {
@@ -146,6 +153,7 @@ export type RepositoryConfigState = {
   readable: boolean;
   writable: boolean;
   entries: RepositoryConfigEntryDraft[];
+  configRevision: string;
   parseError?: string;
   validation?: RepositoryConfigValidation;
   yaml?: string;
@@ -251,6 +259,7 @@ export type AIChatContextPathRequest = {
 
 export type AIChatContextRequest = {
   repoId: string;
+  expectedRevision: string;
   path?: string;
   includeContent?: boolean;
   primaryPaths?: AIChatContextPathRequest[];
@@ -274,6 +283,7 @@ export type AIChatContextItem = {
 
 export type AIChatContext = {
   repoId: string;
+  revision: string;
   systemPromptVersion: string;
   primaryItems: AIChatContextItem[];
   ruleItems: AIChatContextItem[];
@@ -291,9 +301,10 @@ export type AIChangedPath = {
 };
 
 export type AIChatRunSummary = {
-  accessMode: "repoWrite";
+  accessMode: "readOnly" | "repoWrite";
   entry: AIEntryKind;
-  substrate: "codexCli" | "claudeCli";
+  substrate: "codexCli" | "claudeCli" | "directProvider";
+  auditState: "verified" | "unverified";
   changedPaths: AIChangedPath[];
   repairs: string[];
   warnings: string[];

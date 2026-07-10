@@ -49,6 +49,7 @@ type SettingsViewProps = {
   basicSettings: BasicSettings;
   aiSettings: AISettingsState;
   activeRepoId: string;
+  activeRepoRevision: string;
   initialCategory?: SettingsCategory;
   basicSaveError: string;
   onBack: () => void;
@@ -69,6 +70,7 @@ export function SettingsView({
   basicSettings,
   aiSettings,
   activeRepoId,
+  activeRepoRevision,
   initialCategory = "basic",
   basicSaveError,
   onBack,
@@ -89,6 +91,8 @@ export function SettingsView({
   const [repoMessage, setRepoMessage] = useState("");
   const [testingEntry, setTestingEntry] = useState<AIEntryKind | null>(null);
   const aiDraftRef = useRef(aiDraft);
+  const readinessGenerationRef = useRef(0);
+  const activeRepoIdentityRef = useRef(`${activeRepoId}:${activeRepoRevision}`);
 
   useEffect(() => {
     setBasicDraft(basicSettings);
@@ -99,6 +103,12 @@ export function SettingsView({
     aiDraftRef.current = normalized;
     setAiDraft(normalized);
   }, [aiSettings]);
+
+  useEffect(() => {
+    activeRepoIdentityRef.current = `${activeRepoId}:${activeRepoRevision}`;
+    readinessGenerationRef.current += 1;
+    setTestingEntry(null);
+  }, [activeRepoId, activeRepoRevision]);
 
   useEffect(() => {
     setCategory(initialCategory);
@@ -182,7 +192,7 @@ export function SettingsView({
     setRepoSaveState("pending");
     setRepoMessage("Saving repository config...");
     try {
-      const nextState = await saveRepositoryConfig({ entries: repoDraft });
+      const nextState = await saveRepositoryConfig({ entries: repoDraft, expectedConfigRevision: repoState?.configRevision });
       setRepoState(nextState);
       setRepoDraft(nextState.entries);
       setExpandedRepoIndex((current) => normalizeExpandedRepoIndex(current, nextState.entries));
@@ -230,17 +240,22 @@ export function SettingsView({
 
   async function testEntry(entry: AIEntryKind, settingsSnapshot?: AISettingsState) {
     const entryAtStart = entry;
+    const repoIdentityAtStart = `${activeRepoId}:${activeRepoRevision}`;
+    const requestGeneration = readinessGenerationRef.current + 1;
+    readinessGenerationRef.current = requestGeneration;
     const settingsAtStart = settingsSnapshot ? normalizeAISettingsState(settingsSnapshot) : aiDraftRef.current;
     const providerFingerprint = isProviderEntryKind(entryAtStart) ? providerSettingsFingerprint(aiEntryProvider(settingsAtStart, entryAtStart)) : "";
     setTestingEntry(entry);
     try {
       const provider = isProviderEntryKind(entryAtStart) ? aiEntryProvider(settingsAtStart, entryAtStart) : undefined;
-      const readiness = await fetchAIEntryReadiness(entryAtStart, provider, activeRepoId);
+      const readiness = await fetchAIEntryReadiness(entryAtStart, provider, activeRepoId, activeRepoRevision);
+      if (readinessGenerationRef.current !== requestGeneration || activeRepoIdentityRef.current !== repoIdentityAtStart) return;
       commitAISettingsUpdate((current) => {
         if (isProviderEntryKind(entryAtStart) && providerSettingsFingerprint(aiEntryProvider(current, entryAtStart)) !== providerFingerprint) return current;
         return updateCliEntryReadiness(current, readiness);
       });
     } catch (error) {
+      if (readinessGenerationRef.current !== requestGeneration || activeRepoIdentityRef.current !== repoIdentityAtStart) return;
       const failed: AIConnectionStatus = {
         state: "failed",
         code: "provider_http_error",
@@ -254,7 +269,9 @@ export function SettingsView({
         return updateAIEntryStatus(current, entryAtStart, failed);
       });
     } finally {
-      setTestingEntry((current) => (current === entryAtStart ? null : current));
+      if (readinessGenerationRef.current === requestGeneration) {
+        setTestingEntry((current) => (current === entryAtStart ? null : current));
+      }
     }
   }
 
@@ -502,10 +519,10 @@ function RepositoriesSettingsPanel({
                             {repo.excludes.length ? repo.excludes.map((exclude) => <span key={exclude}>{exclude}</span>) : <span>No excludes configured</span>}
                           </div>
                           <label className="settings-toggle wide">
-                            <input type="checkbox" checked={repo.fetchRemote} onChange={(event) => onUpdateExpandedRepo({ fetchRemote: event.target.checked })} />
-                            <span>Fetch-only Git sync</span>
+                            <input type="checkbox" checked={false} disabled />
+                            <span>Remote Git fetch (disabled in the public build)</span>
                           </label>
-                          {repo.fetchRemote ? <p className="settings-message warning wide">Fetch-only means no pull, checkout, merge, reset, or working tree changes.</p> : null}
+                          {repo.fetchRemote ? <p className="settings-message warning wide">This config requests remote fetch, but the public execution policy will not run it.</p> : null}
                         </div>
                       </details>
                     </div>
@@ -696,8 +713,8 @@ function AIChatSettingsPanel({
             <AuthenticationEntryCard
               entry="aiApi"
               title="AI API"
-              subtitle="Codex-backed provider / model / credential"
-              note="Provider settings are checked together with the Codex CLI substrate. Credentials stay in this browser run and are passed only to the child process environment."
+              subtitle="Direct context-only provider / model / credential"
+              note="Reader-Wiki checks the HTTPS endpoint and model directly. Credentials stay in this browser run and are sent only with provider requests."
               configured={configured}
               lastCheckedAt={settings.lastCheckedAtByEntry.aiApi}
               status={effectiveAIStatus(settings, "aiApi")}
@@ -717,8 +734,8 @@ function AIChatSettingsPanel({
             <AuthenticationEntryCard
               entry="localAi"
               title="Local AI"
-              subtitle="Codex-backed local runtime / model"
-              note="Use Ollama or LM Studio through Codex CLI. Reader-Wiki does not start runtimes, load models, or launch auth flows."
+              subtitle="Direct context-only local runtime / model"
+              note="Use a loopback Ollama or LM Studio endpoint directly. Reader-Wiki does not start runtimes, load models, or launch auth flows."
               configured={configured}
               lastCheckedAt={settings.lastCheckedAtByEntry.localAi}
               status={effectiveAIStatus(settings, "localAi")}
@@ -734,7 +751,7 @@ function AIChatSettingsPanel({
               />
             </AuthenticationEntryCard>
           ) : null}
-          {isProviderEntryKind(activeEntry) ? <p className="settings-message">Provider credentials stay in the current browser run and are never written to repository config, browser storage, or the default Codex auth store.</p> : null}
+          {isProviderEntryKind(activeEntry) ? <p className="settings-message">Provider credentials stay in the current browser run and are never written to repository config or browser persistent storage.</p> : null}
         </SettingsCard>
       ) : null}
       {activeEntry && behaviorCapability ? (
@@ -748,15 +765,15 @@ function AIChatSettingsPanel({
           />
         </SettingsCard>
       ) : null}
-      <SettingsCard title="Access policy" eyebrow="AI Chat" status="Repo-scoped writes">
+      <SettingsCard title="Access policy" eyebrow="AI Chat" status="Context-only by default">
         <div className="policy-grid">
           <div className="policy-item ready">
             <strong>Read selected context</strong>
             <small>AI Chat receives selected files, directories, attachments, and repository rule context with repository-relative paths.</small>
           </div>
           <div className="policy-item">
-            <strong>Repo-scoped writes</strong>
-            <small>Write-capable entries may edit only inside the active repository root and report changed repository-relative paths.</small>
+            <strong>Public write policy</strong>
+            <small>AI API and Local AI cannot edit repositories. CLI repository writes remain disabled unless an operator explicitly enables the experimental development path.</small>
           </div>
           <div className="policy-item">
             <strong>Guarded execution</strong>
@@ -873,7 +890,13 @@ function AuthenticationEntryCard({
             <>
               <ReadinessRow label="Active entry" status="ready" value={title} />
               <ReadinessRow label="Connection fields" status={configured ? "ready" : "warning"} value={configured ? "Configured" : "Incomplete"} />
-              <ReadinessRow label="Connection check" status={readinessRowStatus(status)} value={statusLabelText || statusLabel(status)} detail={status.message} />
+              <ReadinessRow label="Endpoint / model check" status={readinessRowStatus(status)} value={statusLabelText || statusLabel(status)} detail={status.message} />
+              <ReadinessRow
+                label="Context-only execution"
+                status={readinessRowStatus(status)}
+                value={status.state === "ready" ? "Ready" : "Not ready"}
+                detail={status.state === "ready" ? "Reader-Wiki will send selected context without repository write tools." : "Complete the endpoint and model check before context-only AI Chat is enabled."}
+              />
               <ReadinessRow label="Next action" status={readinessRowStatus(status)} value={status.nextAction || "No action available"} />
               <ReadinessRow label="Last check" status={lastCheckedAt ? "ready" : "warning"} value={formatLastCheck(lastCheckedAt)} />
               {detailsChildren}
@@ -1172,10 +1195,10 @@ function entryIcon(entry: AIEntryKind): string {
 }
 
 function entryDescription(entry: AIEntryKind): string {
-  if (entry === "codexCli") return "Installed CLI with repo-scoped non-interactive write execution.";
-  if (entry === "claudeCli") return "Installed CLI with tool-restricted repo write execution.";
-  if (entry === "aiApi") return "Remote API provider executed through Codex CLI.";
-  return "Local Ollama or LM Studio runtime executed through Codex CLI.";
+  if (entry === "codexCli") return "Installed CLI; repository writes are disabled by the public execution policy.";
+  if (entry === "claudeCli") return "Installed CLI; repository writes are disabled by the public execution policy.";
+  if (entry === "aiApi") return "Remote HTTPS provider with selected context only.";
+  return "Loopback Ollama or LM Studio runtime with selected context only.";
 }
 
 function Field({ label, value, onChange, wide = false }: { label: string; value: string; onChange: (value: string) => void; wide?: boolean }) {
@@ -1249,11 +1272,11 @@ function connectionHint(provider: AIProviderSettings, status: AIConnectionStatus
     if (!provider.credential?.trim()) return "Enter an API key.";
     if (!provider.model.trim()) return "Choose a model.";
     if ((provider.provider === "openaiCompatible" || provider.provider === "custom") && !provider.baseUrl.trim()) return "Add a Base URL in Endpoint settings.";
-    return "Ready to check this provider through Codex CLI.";
+    return "Ready for a direct server-side endpoint and model check.";
   }
-  if (provider.runtime !== "ollama" && provider.runtime !== "lmStudio") return "Choose Ollama or LM Studio for Codex-backed Local AI.";
+  if (provider.runtime !== "ollama" && provider.runtime !== "lmStudio") return "Choose Ollama or LM Studio for Local AI.";
   if (!provider.model.trim()) return "Choose a local model.";
-  return "Ready to check this local runtime through Codex CLI.";
+  return "Ready for a direct loopback endpoint and model check.";
 }
 
 function cliAuthLabel(entry: CliAIEntrySettings): string {

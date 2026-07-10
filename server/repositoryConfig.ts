@@ -1,4 +1,5 @@
-import { access, constants, mkdir, readFile, realpath, rename, stat, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { access, constants, mkdir, open, readFile, realpath, rename, rm, stat } from "node:fs/promises";
 import path from "node:path";
 import { isAbsolute } from "node:path";
 import { parse, stringify } from "yaml";
@@ -19,6 +20,8 @@ type RawRegistry = {
   repositories?: unknown;
 };
 
+const configSaveTails = new Map<string, Promise<void>>();
+
 export function configSourceMode(configPath: string, packageRoot = process.cwd()): RepositoryConfigSourceMode {
   const defaultPath = path.resolve(packageRoot, "repositories.yaml");
   return path.resolve(configPath) === defaultPath ? "default" : "env";
@@ -36,6 +39,7 @@ export async function loadRepositoryConfigState(configPath: string, packageRoot 
       readable: false,
       writable: fileState.writable,
       entries: [],
+      configRevision: "missing",
       parseError: `Repository config was not found: ${resolvedConfigPath}`,
     };
   }
@@ -53,6 +57,7 @@ export async function loadRepositoryConfigState(configPath: string, packageRoot 
       readable: true,
       writable: fileState.writable,
       entries,
+      configRevision: hashConfig(raw),
       validation,
       yaml: generateRepositoryConfigYaml({ entries }),
     };
@@ -65,6 +70,7 @@ export async function loadRepositoryConfigState(configPath: string, packageRoot 
       readable: true,
       writable: fileState.writable,
       entries: [],
+      configRevision: hashConfig(raw),
       parseError: message,
     };
   }
@@ -97,6 +103,7 @@ export async function validateRepositoryConfigDraft(draft: RepositoryConfigDraft
   for (const [entryId, count] of ids.entries()) {
     checks.push(check(count === 1, `id:${entryId}:unique`, `${entryId} ID is unique`, "Repository IDs must be unique."));
   }
+  checks.push(...await repositoryRootRelationshipChecks(entries));
 
   checks.push(await configFileWritableCheck(configPath));
   try {
@@ -123,13 +130,28 @@ export async function saveRepositoryConfigDraft(draft: RepositoryConfigDraft, co
   if (!validation.valid) {
     throw new HttpError(400, "Repository config validation failed.");
   }
-  const yaml = generateRepositoryConfigYaml({ entries });
-  const directory = path.dirname(resolvedConfigPath);
-  await mkdir(directory, { recursive: true });
-  const tempPath = path.join(directory, `.repositories.${process.pid}.${Date.now()}.tmp`);
-  await writeFile(tempPath, yaml, "utf8");
-  await rename(tempPath, resolvedConfigPath);
-  return loadRepositoryConfigState(resolvedConfigPath);
+  return withConfigSaveLock(resolvedConfigPath, async () => {
+    const yaml = generateRepositoryConfigYaml({ entries });
+    const directory = path.dirname(resolvedConfigPath);
+    await mkdir(directory, { recursive: true });
+    await assertConfigRevision(resolvedConfigPath, draft.expectedConfigRevision);
+    const tempPath = path.join(directory, `.repositories.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`);
+    try {
+      const handle = await open(tempPath, "wx", 0o600);
+      try {
+        await handle.writeFile(yaml, "utf8");
+        await handle.sync();
+      } finally {
+        await handle.close();
+      }
+      await assertConfigRevision(resolvedConfigPath, draft.expectedConfigRevision);
+      await rename(tempPath, resolvedConfigPath);
+    } catch (error) {
+      await rm(tempPath, { force: true });
+      throw error;
+    }
+    return loadRepositoryConfigState(resolvedConfigPath);
+  });
 }
 
 export function normalizeDraftEntries(entries: RepositoryConfigEntryDraft[]): RepositoryConfigEntryDraft[] {
@@ -217,10 +239,77 @@ async function rootExistsCheck(entry: RepositoryConfigEntryDraft, index: number)
     return check(false, `entry:${index}:rootExists`, `${entry.id || `Entry ${index + 1}`} root exists`, "Root cannot be checked until it is absolute.");
   }
   try {
-    await access(await realpath(entry.root), constants.R_OK);
-    return check(true, `entry:${index}:rootExists`, `${entry.id || `Entry ${index + 1}`} root exists`, "Root must exist.");
+    const canonicalRoot = await realpath(entry.root);
+    await access(canonicalRoot, constants.R_OK);
+    const rootStat = await stat(canonicalRoot);
+    return check(rootStat.isDirectory(), `entry:${index}:rootExists`, `${entry.id || `Entry ${index + 1}`} root is a readable directory`, "Root must be a readable directory, not a regular file.");
   } catch {
     return check(false, `entry:${index}:rootExists`, `${entry.id || `Entry ${index + 1}`} root exists`, "Root path was not found or is not readable.");
+  }
+}
+
+async function repositoryRootRelationshipChecks(entries: RepositoryConfigEntryDraft[]): Promise<RepositoryConfigCheck[]> {
+  const roots = await Promise.all(entries.map(async (entry, index) => {
+    if (!isAbsolute(entry.root)) return null;
+    try {
+      return { index, id: entry.id || `Entry ${index + 1}`, root: await realpath(entry.root) };
+    } catch {
+      return null;
+    }
+  }));
+  const checks: RepositoryConfigCheck[] = [];
+  for (let leftIndex = 0; leftIndex < roots.length; leftIndex += 1) {
+    const left = roots[leftIndex];
+    if (!left) continue;
+    for (let rightIndex = leftIndex + 1; rightIndex < roots.length; rightIndex += 1) {
+      const right = roots[rightIndex];
+      if (!right) continue;
+      const leftFolded = left.root.normalize("NFC").toLocaleLowerCase("en-US");
+      const rightFolded = right.root.normalize("NFC").toLocaleLowerCase("en-US");
+      const duplicate = left.root === right.root;
+      const caseCollision = !duplicate && leftFolded === rightFolded;
+      const nested = pathInside(left.root, right.root) || pathInside(right.root, left.root);
+      checks.push(check(!duplicate, `roots:${leftIndex}:${rightIndex}:duplicate`, `${left.id} and ${right.id} roots are distinct`, "Repository roots must not resolve to the same directory."));
+      checks.push(check(!caseCollision, `roots:${leftIndex}:${rightIndex}:caseCollision`, `${left.id} and ${right.id} roots have distinct case-folded identities`, "Repository roots must not differ only by case or Unicode normalization."));
+      checks.push(check(!nested, `roots:${leftIndex}:${rightIndex}:nested`, `${left.id} and ${right.id} roots are not nested`, "Nested repository roots are disabled to avoid overlapping visibility and AI execution boundaries."));
+    }
+  }
+  return checks;
+}
+
+function pathInside(parent: string, candidate: string): boolean {
+  const relative = path.relative(parent, candidate);
+  return Boolean(relative && !relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+async function assertConfigRevision(configPath: string, expectedRevision: string | undefined): Promise<void> {
+  const current = await readFile(configPath).then((bytes) => hashConfig(bytes)).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") return "missing";
+    throw error;
+  });
+  if (!expectedRevision || expectedRevision !== current) {
+    throw new HttpError(409, "Repository config changed after it was loaded. Reload Settings before saving.", { currentConfigRevision: current });
+  }
+}
+
+function hashConfig(value: string | Buffer): string {
+  return createHash("sha256").update(value).digest("base64url").slice(0, 24);
+}
+
+async function withConfigSaveLock<T>(configPath: string, work: () => Promise<T>): Promise<T> {
+  const previous = configSaveTails.get(configPath) || Promise.resolve();
+  let release: () => void = () => {};
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const tail = previous.catch(() => undefined).then(() => gate);
+  configSaveTails.set(configPath, tail);
+  await previous.catch(() => undefined);
+  try {
+    return await work();
+  } finally {
+    release();
+    if (configSaveTails.get(configPath) === tail) configSaveTails.delete(configPath);
   }
 }
 

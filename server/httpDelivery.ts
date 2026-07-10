@@ -1,15 +1,19 @@
 import { createHash, randomUUID } from "node:crypto";
-import { readFile, realpath, stat } from "node:fs/promises";
+import { realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import { type NextFunction, type Request, type Response, Router } from "express";
+import MarkdownIt from "markdown-it";
 import { getImageMimeTypeForPath, isPdfFileName } from "../shared/fileClassification.js";
 import { HttpError, isHttpError } from "./errors.js";
 import { renderMarkdown } from "./markdown.js";
-import { isExcludedRealPath, isInsideRoot, relativePathFromRoot, resolveRepoPath, type ResolvedRepoPath } from "./pathGuard.js";
+import { isExcludedRealPath, isInsideRoot, readGuardedRepoFile, relativePathFromRoot, resolveRepoPath, type ResolvedRepoPath } from "./pathGuard.js";
 import type { RepositoryRegistry } from "./repositoryRegistry.js";
+import { assertRepositoryRevision } from "./repositoryRevision.js";
 import type { HttpDeliveryItemStatus, RepositoryConfig } from "./types.js";
 
 export const HTTP_DELIVERY_MAX_SESSIONS = 5;
+const HTTP_DELIVERY_MARKDOWN_MAX_BYTES = 2 * 1024 * 1024;
+const HTTP_DELIVERY_ASSET_MAX_BYTES = 25 * 1024 * 1024;
 
 const MARKDOWN_DELIVERY_SCRIPT = `(() => {
   const copyLabels = {
@@ -136,19 +140,29 @@ const MARKDOWN_DELIVERY_SCRIPT_HASH = createHash("sha256").update(MARKDOWN_DELIV
 const MARKDOWN_DELIVERY_CSP = [
   "default-src 'none'",
   "img-src 'self' https:",
+  "connect-src 'none'",
   "style-src 'unsafe-inline'",
   `script-src 'sha256-${MARKDOWN_DELIVERY_SCRIPT_HASH}'`,
   "base-uri 'none'",
   "form-action 'none'",
+  "frame-ancestors 'none'",
 ].join("; ");
 
-type InternalSession = HttpDeliveryItemStatus;
+type InternalSession = HttpDeliveryItemStatus & {
+  allowedAssets: Set<string>;
+  repo: RepositoryConfig;
+  revision: string;
+};
+
+const deliveryMarkdown = new MarkdownIt({ html: false, linkify: false });
+const PASSIVE_ASSET_EXTENSIONS = new Set([".gif", ".jpeg", ".jpg", ".pdf", ".png", ".webp"]);
 
 export type HttpDeliveryService = {
   router: Router;
   status: () => { state: "idle" | "running"; items: HttpDeliveryItemStatus[] };
-  start: (payload: { repoId: string; path: string; baseUrl: string }) => Promise<{ state: "idle" | "running"; items: HttpDeliveryItemStatus[] }>;
+  start: (payload: { repo: RepositoryConfig; revision: string; path: string; baseUrl: string }) => Promise<{ state: "idle" | "running"; items: HttpDeliveryItemStatus[] }>;
   stop: (deliveryId: string) => { state: "idle" | "running"; items: HttpDeliveryItemStatus[] };
+  stopAll: () => void;
 };
 
 export function createHttpDeliveryService(registry: RepositoryRegistry): HttpDeliveryService {
@@ -158,28 +172,40 @@ export function createHttpDeliveryService(registry: RepositoryRegistry): HttpDel
   function publicStatus() {
     return {
       state: items.size > 0 ? ("running" as const) : ("idle" as const),
-      items: Array.from(items.values()).sort((left, right) => left.startedAt.localeCompare(right.startedAt)),
+      items: Array.from(items.values())
+        .map(({ allowedAssets: _allowedAssets, repo: _repo, revision: _revision, ...item }) => item)
+        .sort((left, right) => left.startedAt.localeCompare(right.startedAt)),
     };
   }
 
-  async function start(payload: { repoId: string; path: string; baseUrl: string }) {
-    const repo = await registry.findRepository(payload.repoId);
+  async function start(payload: { repo: RepositoryConfig; revision: string; path: string; baseUrl: string }) {
+    const repo = { ...payload.repo, excludes: [...(payload.repo.excludes || [])] };
+    await assertRepositoryRevision(repo, payload.revision);
     const resolved = await resolveRepoPath(repo, payload.path);
     const fileStat = await stat(resolved.realPath);
     if (!fileStat.isFile()) throw new HttpError(400, "HTTP Delivery requires a file path.");
+    if (isActiveDeliveryPath(resolved.relativePath)) {
+      throw new HttpError(415, "HTTP Delivery does not execute HTML or SVG files.");
+    }
 
-    const existing = Array.from(items.values()).find((item) => item.repoId === repo.id && item.path === resolved.relativePath);
+    const existing = Array.from(items.values()).find((item) => item.repoId === repo.id && item.revision === payload.revision && item.path === resolved.relativePath);
     if (existing) return publicStatus();
     if (items.size >= HTTP_DELIVERY_MAX_SESSIONS) throw new HttpError(409, `HTTP Delivery supports up to ${HTTP_DELIVERY_MAX_SESSIONS} active files.`);
 
     const id = randomUUID();
     const url = `${payload.baseUrl.replace(/\/$/, "")}/delivery/${encodeURIComponent(id)}/${encodeURIComponent(path.basename(resolved.relativePath))}`;
+    const allowedAssets = isMarkdownFileName(resolved.relativePath)
+      ? await collectPassiveMarkdownAssets(repo, resolved)
+      : new Set<string>();
     items.set(id, {
       id,
       repoId: repo.id,
       path: resolved.relativePath,
       url,
       startedAt: new Date().toISOString(),
+      allowedAssets,
+      repo,
+      revision: payload.revision,
     });
     return publicStatus();
   }
@@ -189,31 +215,43 @@ export function createHttpDeliveryService(registry: RepositoryRegistry): HttpDel
     return publicStatus();
   }
 
+  function stopAll() {
+    items.clear();
+  }
+
   async function handleDeliveryRequest(request: Request, response: Response, next: NextFunction) {
     try {
       const item = items.get(String(request.params.deliveryId || ""));
       if (!item) throw new HttpError(404, "HTTP Delivery item was not found.");
-      const repo = await registry.findRepository(item.repoId);
+      try {
+        const currentRepo = await registry.findRepository(item.repoId);
+        await assertRepositoryRevision(currentRepo, item.revision);
+      } catch {
+        items.delete(item.id);
+        throw new HttpError(409, "HTTP Delivery expired because the repository configuration changed.");
+      }
+      const repo = item.repo;
       const resolved = await resolveRepoPath(repo, item.path);
       const deliveryPath = String(request.params[0] || "");
-      const deliveryFile = await resolveDeliveryFile(repo, resolved, deliveryPath);
-      const fileStat = await stat(deliveryFile.realPath);
-      if (!fileStat.isFile()) throw new HttpError(403, "Directory listing is disabled.");
+      const assetQuery = typeof request.query.asset === "string" ? request.query.asset : "";
+      const deliveryFile = assetQuery
+        ? await resolveAllowedDeliveryAsset(repo, assetQuery, item.allowedAssets)
+        : await resolveDeliveryFile(repo, resolved, deliveryPath, item.allowedAssets);
+      const isMarkdown = isMarkdownFileName(deliveryFile.relativePath);
+      const guarded = await readGuardedRepoFile(repo, deliveryFile.relativePath, isMarkdown ? HTTP_DELIVERY_MARKDOWN_MAX_BYTES : HTTP_DELIVERY_ASSET_MAX_BYTES);
 
       response.setHeader("Cache-Control", "no-store, max-age=0");
       response.setHeader("X-Content-Type-Options", "nosniff");
       response.setHeader("Content-Disposition", `inline; filename*=UTF-8''${encodeURIComponent(path.basename(deliveryFile.relativePath))}`);
 
-      if (isMarkdownFileName(deliveryFile.relativePath)) {
-        await sendMarkdownHtml(response, repo, deliveryFile.relativePath, deliveryFile.realPath);
+      if (isMarkdown) {
+        sendMarkdownHtml(response, repo, deliveryFile.relativePath, guarded.bytes.toString("utf8"), `/delivery/${encodeURIComponent(item.id)}`);
         return;
       }
 
       response.setHeader("Content-Type", mimeTypeForDeliveryPath(deliveryFile.relativePath));
-      response.setHeader("Content-Length", String(fileStat.size));
-      response.sendFile(deliveryFile.realPath, (error) => {
-        if (error) next(error);
-      });
+      response.setHeader("Content-Length", String(guarded.bytes.byteLength));
+      response.send(guarded.bytes);
     } catch (error) {
       next(error);
     }
@@ -237,7 +275,7 @@ export function createHttpDeliveryService(registry: RepositoryRegistry): HttpDel
       .send(httpError.message);
   });
 
-  return { router, status: publicStatus, start, stop };
+  return { router, status: publicStatus, start, stop, stopAll };
 }
 
 type DeliveryFile = {
@@ -245,9 +283,11 @@ type DeliveryFile = {
   realPath: string;
 };
 
-async function resolveDeliveryFile(repo: RepositoryConfig, target: ResolvedRepoPath, deliveryPath: string): Promise<DeliveryFile> {
+async function resolveDeliveryFile(repo: RepositoryConfig, target: ResolvedRepoPath, deliveryPath: string, allowedAssets: Set<string>): Promise<DeliveryFile> {
   const assetPath = normalizeDeliveryAssetPath(deliveryPath);
-  if (!assetPath) return { relativePath: target.relativePath, realPath: target.realPath };
+  if (!assetPath || assetPath === path.posix.basename(target.relativePath)) {
+    return { relativePath: target.relativePath, realPath: target.realPath };
+  }
 
   const parentRealPath = await realpath(path.dirname(target.realPath));
   const candidateRealPath = await realpath(path.resolve(parentRealPath, assetPath)).catch(() => {
@@ -264,10 +304,78 @@ async function resolveDeliveryFile(repo: RepositoryConfig, target: ResolvedRepoP
     throw new HttpError(403, "This path is excluded.");
   }
 
+  const relativePath = relativePathFromRoot(target.rootRealPath, candidateRealPath);
+  if (!allowedAssets.has(relativePath)) {
+    throw new HttpError(403, "HTTP Delivery asset is not referenced by the delivered Markdown file.");
+  }
   return {
-    relativePath: relativePathFromRoot(target.rootRealPath, candidateRealPath),
+    relativePath,
     realPath: candidateRealPath,
   };
+}
+
+async function resolveAllowedDeliveryAsset(repo: RepositoryConfig, inputPath: string, allowedAssets: Set<string>): Promise<DeliveryFile> {
+  const relativePath = normalizeDeliveryAssetPath(inputPath);
+  if (!relativePath || !allowedAssets.has(relativePath)) {
+    throw new HttpError(403, "HTTP Delivery asset is not referenced by the delivered Markdown file.");
+  }
+  const resolved = await resolveRepoPath(repo, relativePath);
+  return { relativePath: resolved.relativePath, realPath: resolved.realPath };
+}
+
+async function collectPassiveMarkdownAssets(repo: RepositoryConfig, target: ResolvedRepoPath): Promise<Set<string>> {
+  const source = (await readGuardedRepoFile(repo, target.relativePath, HTTP_DELIVERY_MARKDOWN_MAX_BYTES)).bytes.toString("utf8");
+  const references = markdownAssetReferences(source);
+  const allowed = new Set<string>();
+  for (const reference of references) {
+    const assetPath = normalizeDeliveryAssetPath(reference);
+    if (!assetPath || isSensitiveAssetPath(assetPath) || !PASSIVE_ASSET_EXTENSIONS.has(path.posix.extname(assetPath).toLowerCase())) continue;
+    const candidateRelativePath = path.posix.normalize(path.posix.join(path.posix.dirname(target.relativePath), assetPath));
+    if (candidateRelativePath === ".." || candidateRelativePath.startsWith("../")) continue;
+    try {
+      const resolved = await resolveRepoPath(repo, candidateRelativePath);
+      const fileStat = await stat(resolved.realPath);
+      if (fileStat.isFile()) allowed.add(resolved.relativePath);
+    } catch {
+      // Broken or excluded references stay unavailable instead of widening delivery.
+    }
+  }
+  return allowed;
+}
+
+function markdownAssetReferences(source: string): Set<string> {
+  const references = new Set<string>();
+  const visit = (tokens: ReturnType<typeof deliveryMarkdown.parse>) => {
+    for (const token of tokens) {
+      const value = token.type === "image"
+        ? token.attrGet("src")
+        : token.type === "link_open"
+          ? token.attrGet("href")
+          : null;
+      const normalized = normalizeMarkdownReference(value || "");
+      if (normalized) references.add(normalized);
+      if (token.children?.length) visit(token.children);
+    }
+  };
+  visit(deliveryMarkdown.parse(source, {}));
+  return references;
+}
+
+function normalizeMarkdownReference(input: string): string {
+  const value = input.trim();
+  if (!value || value.startsWith("#") || value.startsWith("/") || /^[a-z][a-z0-9+.-]*:/i.test(value)) return "";
+  const withoutQuery = value.split(/[?#]/, 1)[0] || "";
+  try {
+    return decodeURIComponent(withoutQuery);
+  } catch {
+    return "";
+  }
+}
+
+function isSensitiveAssetPath(input: string): boolean {
+  const segments = input.toLowerCase().split("/");
+  if (segments.some((segment) => segment.startsWith("."))) return true;
+  return segments.some((segment) => /(^|[._-])(credential|password|passwd|secret|token|private[-_]?key)s?([._-]|$)/.test(segment));
 }
 
 function normalizeDeliveryAssetPath(input: string): string {
@@ -284,10 +392,10 @@ function normalizeDeliveryAssetPath(input: string): string {
   return normalized.replace(/^\.\//, "");
 }
 
-async function sendMarkdownHtml(response: Response, repo: RepositoryConfig, relativePath: string, realPath: string): Promise<void> {
-  const source = await readFile(realPath, "utf8");
-  const rendered = renderMarkdown(source, { repoId: repo.id, currentPath: relativePath, repoRoot: repo.root });
+function sendMarkdownHtml(response: Response, repo: RepositoryConfig, relativePath: string, source: string, localAssetBaseUrl: string): void {
+  const rendered = renderMarkdown(source, { repoId: repo.id, currentPath: relativePath, repoRoot: repo.root, localAssetBaseUrl });
   const html = buildMarkdownHtmlDocument(path.posix.basename(relativePath) || relativePath || "Markdown", rendered.html);
+  response.setHeader("Content-Security-Policy", MARKDOWN_DELIVERY_CSP);
   response.setHeader("Content-Type", "text/html; charset=utf-8");
   response.setHeader("Content-Length", String(Buffer.byteLength(html, "utf8")));
   response.send(html);
@@ -348,6 +456,11 @@ function buildMarkdownHtmlDocument(title: string, bodyHtml: string): string {
 function isMarkdownFileName(relativePath: string): boolean {
   const extension = path.posix.extname(relativePath).toLowerCase();
   return extension === ".md" || extension === ".markdown";
+}
+
+function isActiveDeliveryPath(relativePath: string): boolean {
+  const extension = path.posix.extname(relativePath).toLowerCase();
+  return extension === ".html" || extension === ".htm" || extension === ".svg";
 }
 
 function escapeHtml(value: string): string {

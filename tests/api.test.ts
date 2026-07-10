@@ -1,8 +1,11 @@
+// @vitest-environment node
+
 import express from "express";
+import { JSDOM } from "jsdom";
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { type Server } from "node:http";
-import { mkdir, mkdtemp, readFile, realpath, unlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, realpath, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -10,6 +13,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createApiRouter } from "../server/api.js";
 import { safeCliEnv, type AICommandRunner } from "../server/aiCliAdapters.js";
 import { testAIConnection } from "../server/aiProviders.js";
+import { HttpError } from "../server/errors.js";
 import { createHttpDeliveryService } from "../server/httpDelivery.js";
 import { createRepositoryRegistry } from "../server/repositoryRegistry.js";
 
@@ -92,7 +96,7 @@ describe("api", () => {
     }
   });
 
-  it("uses fetch-only Git sync only when enabled without changing the working tree", async () => {
+  it("does not execute legacy fetchRemote requests in the public build", async () => {
     const remote = await mkdtemp(path.join(tmpdir(), "reader-wiki-remote-"));
     await git(remote, "init", "--bare");
     const root = await mkdtemp(path.join(tmpdir(), "reader-wiki-git-open-"));
@@ -113,7 +117,7 @@ describe("api", () => {
       const response = await postJson(`${server.url}/api/repo-open`, { repoId: "docs" });
       expect(response.status).toBe(200);
       const data = await response.json() as { sync?: { state?: string; fetched?: boolean; message?: string }; tree?: Record<string, Array<{ path: string }>> };
-      expect(data.sync).toEqual({ state: "synced", message: "Git remote metadata fetched.", fetched: true });
+      expect(data.sync).toEqual({ state: "disabled", message: "Git remote fetch is disabled by the public execution policy.", fetched: false });
       expect(data.tree?.[""]).toEqual(expect.arrayContaining([expect.objectContaining({ path: "README.md" })]));
       const { stdout: afterStatus } = await execFileAsync("git", ["-C", root, "status", "--porcelain=v1"]);
       expect(String(afterStatus).trim()).toBe(String(beforeStatus).trim());
@@ -147,7 +151,7 @@ describe("api", () => {
     }
   });
 
-  it("keeps serving local tree metadata when fetch-only Git sync fails", async () => {
+  it("keeps serving local tree metadata without invoking a configured missing remote", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "reader-wiki-git-open-fail-"));
     await git(root, "init");
     await git(root, "config", "user.email", "reader-wiki@example.test");
@@ -165,7 +169,7 @@ describe("api", () => {
       const response = await postJson(`${server.url}/api/repo-open`, { repoId: "docs" });
       expect(response.status).toBe(200);
       const data = await response.json() as { sync?: { state?: string; fetched?: boolean; message?: string }; tree?: Record<string, Array<{ path: string }>> };
-      expect(data.sync).toEqual({ state: "warning", message: "Git fetch failed. Showing the current local state.", fetched: false });
+      expect(data.sync).toEqual({ state: "disabled", message: "Git remote fetch is disabled by the public execution policy.", fetched: false });
       expect(data.tree?.[""]).toEqual(expect.arrayContaining([expect.objectContaining({ path: "README.md" })]));
     } finally {
       await server.close();
@@ -285,6 +289,9 @@ describe("api", () => {
       ].join("\n"),
     );
     await writeFile(path.join(root, "asset.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a]));
+    await writeFile(path.join(root, "credentials.json"), '{"secret":"not-deliverable"}');
+    await writeFile(path.join(root, "active.html"), "<script>fetch('/api/repos')</script>");
+    await writeFile(path.join(root, "active.svg"), '<svg xmlns="http://www.w3.org/2000/svg"><script>fetch("/api/repos")</script></svg>');
     await mkdir(path.join(root, "assets"));
     await writeFile(path.join(root, "assets", "inside.txt"), "inside\n");
     await writeFile(path.join(tmpdir(), "reader-wiki-outside.txt"), "outside\n");
@@ -321,14 +328,20 @@ describe("api", () => {
       expect(deliveredHtml).toContain("<h1>Hello</h1>");
       expect(deliveredHtml).not.toContain("# Hello");
       expect(deliveredHtml).not.toContain("__readerWikiUserScriptMarker");
+      expect(deliveredHtml).toContain(`/delivery/${firstStatus.items[0].id}?asset=asset.png`);
+      expect(deliveredHtml).not.toContain("/api/image");
 
-      const pageDocument = new DOMParser().parseFromString(deliveredHtml, "text/html");
+      const pageDom = new JSDOM(deliveredHtml, { runScripts: "outside-only" });
+      const pageWindow = pageDom.window;
+      const pageDocument = pageWindow.document;
       const contentSecurityPolicy = pageDocument.querySelector('meta[http-equiv="Content-Security-Policy"]')?.getAttribute("content") || "";
       const inlineScript = pageDocument.querySelector("script")?.textContent || "";
       const inlineScriptHash = createHash("sha256").update(inlineScript, "utf8").digest("base64");
       expect(contentSecurityPolicy).toContain(`script-src 'sha256-${inlineScriptHash}'`);
       expect(contentSecurityPolicy).not.toContain("script-src 'unsafe-inline'");
       expect(contentSecurityPolicy).toContain("default-src 'none'");
+      expect(delivered.headers.get("content-security-policy")).toContain("frame-ancestors 'none'");
+      expect(delivered.headers.get("content-security-policy")).toContain("connect-src 'none'");
       expect(deliveredHtml).toContain(".markdown-code-block.wrapped pre");
       expect(deliveredHtml).toContain(".markdown-code-copy-button[data-copy-state=\"copied\"]");
       expect(deliveredHtml).toContain(".markdown-code-copy-button[data-copy-state=\"error\"]");
@@ -337,37 +350,32 @@ describe("api", () => {
       expect(inlineScript).toContain("toggleCodeBlockWrap");
       expect(inlineScript).toContain("dataset.wrapState");
 
-      const originalBody = document.body.innerHTML;
-      const originalClipboard = navigator.clipboard;
       const writeText = vi.fn().mockResolvedValue(undefined);
-      Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
-      try {
-        document.body.innerHTML = pageDocument.body.innerHTML;
-        new Function(inlineScript)();
-        const copyButton = document.querySelector<HTMLButtonElement>(".markdown-code-copy-button");
-        const wrapButton = document.querySelector<HTMLButtonElement>(".markdown-code-wrap-button");
-        const codeBlock = document.querySelector<HTMLElement>(".markdown-code-block");
-        expect(copyButton).toBeTruthy();
-        expect(wrapButton).toBeTruthy();
-        expect(codeBlock).toBeTruthy();
-        copyButton?.click();
-        await new Promise((resolve) => window.setTimeout(resolve, 0));
-        expect(writeText).toHaveBeenCalledWith(expect.stringContaining('console.log("copy me")'));
-        expect(copyButton?.dataset.copyState).toBe("copied");
+      Object.defineProperty(pageWindow.navigator, "clipboard", { configurable: true, value: { writeText } });
+      pageWindow.eval(inlineScript);
+      const copyButton = pageDocument.querySelector<HTMLButtonElement>(".markdown-code-copy-button");
+      const wrapButton = pageDocument.querySelector<HTMLButtonElement>(".markdown-code-wrap-button");
+      const codeBlock = pageDocument.querySelector<HTMLElement>(".markdown-code-block");
+      expect(copyButton).toBeTruthy();
+      expect(wrapButton).toBeTruthy();
+      expect(codeBlock).toBeTruthy();
+      copyButton?.click();
+      await new Promise((resolve) => pageWindow.setTimeout(resolve, 0));
+      expect(writeText).toHaveBeenCalledWith(expect.stringContaining('console.log("copy me")'));
+      expect(copyButton?.dataset.copyState).toBe("copied");
 
-        wrapButton?.click();
-        expect(codeBlock?.classList.contains("wrapped")).toBe(true);
-        expect(wrapButton?.dataset.wrapState).toBe("on");
-        expect(wrapButton?.getAttribute("aria-pressed")).toBe("true");
-        expect(wrapButton?.getAttribute("aria-label")).toBe("Disable code wrap");
-      } finally {
-        Object.defineProperty(navigator, "clipboard", { configurable: true, value: originalClipboard });
-        document.body.innerHTML = originalBody;
-      }
+      wrapButton?.click();
+      expect(codeBlock?.classList.contains("wrapped")).toBe(true);
+      expect(wrapButton?.dataset.wrapState).toBe("on");
+      expect(wrapButton?.getAttribute("aria-pressed")).toBe("true");
+      expect(wrapButton?.getAttribute("aria-label")).toBe("Disable code wrap");
+      pageWindow.close();
 
       const deliveredAsset = await fetch(new URL("asset.png", firstStatus.items[0].url));
       expect(deliveredAsset.status).toBe(200);
       expect(deliveredAsset.headers.get("content-type")).toBe("image/png");
+
+      expect((await fetch(new URL("credentials.json", firstStatus.items[0].url))).status).toBe(403);
 
       const directoryListing = await fetch(new URL("assets", firstStatus.items[0].url));
       expect(directoryListing.status).toBe(403);
@@ -394,6 +402,9 @@ describe("api", () => {
 
       const guarded = await postJson(`${server.url}/api/http-delivery/start`, { repoId: "docs", path: "../reader-wiki-outside.txt" });
       expect(guarded.status).toBe(400);
+
+      expect((await postJson(`${server.url}/api/http-delivery/start`, { repoId: "docs", path: "active.html" })).status).toBe(415);
+      expect((await postJson(`${server.url}/api/http-delivery/start`, { repoId: "docs", path: "active.svg" })).status).toBe(415);
     } finally {
       await server.close();
     }
@@ -401,6 +412,7 @@ describe("api", () => {
 
   it("validates, previews, and saves repository config without touching repository directories", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "reader-wiki-settings-api-"));
+    const secondRoot = await mkdtemp(path.join(tmpdir(), "reader-wiki-settings-second-api-"));
     await writeFile(path.join(root, "README.md"), "# Hello\n");
     const configPath = path.join(root, "repositories.yaml");
     await writeFile(configPath, `repositories:\n  - id: docs\n    label: Docs\n    root: ${root}\n    defaultPath: README.md\n    excludes:\n      - .git\n`);
@@ -418,7 +430,7 @@ describe("api", () => {
       const draft = {
         entries: [
           { id: "docs", label: "Docs", root, defaultPath: "README.md", excludes: [".git", "node_modules"], fetchRemote: false },
-          { id: "second", label: "Second", root, defaultPath: "", excludes: [".git"], fetchRemote: true },
+          { id: "second", label: "Second", root: secondRoot, defaultPath: "", excludes: [".git"], fetchRemote: true },
         ],
       };
       const previewResponse = await postJson(`${server.url}/api/repository-config/preview`, draft);
@@ -445,7 +457,7 @@ describe("api", () => {
     }
   });
 
-  it("checks Codex-backed AI API readiness and answers with guarded repo-scoped write context", async () => {
+  it("runs Local AI directly with explicit context and no repository write access", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "reader-wiki-ai-api-"));
     await mkdir(path.join(root, "private"));
     await writeFile(path.join(root, "README.md"), "# AI Context\n\nVisible content\n");
@@ -460,17 +472,11 @@ describe("api", () => {
     const calls: Array<{ binary: string; args: string[]; cwd: string; input: string; env: NodeJS.ProcessEnv }> = [];
     const runner: AICommandRunner = async (binary, args, options) => {
       calls.push({ binary, args, cwd: options.cwd, input: options.input || "", env: options.env });
-      if (binary !== "codex") throw new Error("Unexpected command");
-      if (args.includes("--version")) return { stdout: "codex-cli 0.143.0\n", stderr: "" };
-      if (args.includes("--help")) return { stdout: "--sandbox workspace-write --ephemeral --json --profile --oss --local-provider\n", stderr: "" };
-      if (options.input) {
-        await writeFile(path.join(options.cwd, "ai-api-output.md"), "# AI API output\n");
-        return { stdout: '{"type":"item.completed","item":{"type":"agent_message","text":"I can read the active file and perform repo-scoped write."}}\n', stderr: "" };
-      }
-      throw new Error("Unexpected command");
+      throw new Error("Direct provider execution must not invoke a CLI adapter.");
     };
     const app = express();
     app.use("/v1", express.json({ limit: "100kb" }));
+    app.get("/v1/models", (_request, response) => response.json({ data: [{ id: "openai/gpt-oss-20b" }] }));
     app.post("/v1/chat/completions", (request, response) => {
       const body = request.body as { messages?: Array<{ content?: string }> };
       const joined = (body.messages || []).map((message) => message.content || "").join("\n");
@@ -479,12 +485,12 @@ describe("api", () => {
     app.use("/api", createApiRouter(configPath, undefined, { aiCommandRunner: runner }));
     const server = await listen(app);
     const provider = {
-      entry: "aiApi",
-      provider: "openaiCompatible",
-      model: "local-test",
+      entry: "localAi" as const,
+      runtime: "lmStudio" as const,
+      model: "openai/gpt-oss-20b",
       baseUrl: `${server.url}/v1`,
-      apiFormat: "openaiCompatible",
-      credential: "test-key",
+      apiFormat: "openaiCompatible" as const,
+      credential: "",
     };
     try {
       const testResponse = await postJson(`${server.url}/api/ai/test-connection`, provider);
@@ -492,20 +498,23 @@ describe("api", () => {
       const providerStatus = await testResponse.json() as { state?: string; code?: string; severity?: string; nextAction?: string };
       expect(providerStatus).toMatchObject({ state: "ready", code: "success", severity: "success", nextAction: expect.any(String) });
 
-      const readinessResponse = await postJson(`${server.url}/api/ai/entry-readiness`, { entry: "aiApi", provider, repoId: "docs" });
+      const readinessResponse = await postJson(`${server.url}/api/ai/entry-readiness`, { entry: "localAi", provider, repoId: "docs" });
       expect(readinessResponse.status).toBe(200);
       const readiness = await readinessResponse.json() as { ready?: boolean; status?: { state?: string; code?: string }; settings?: { entry?: string } };
-      expect(readiness).toMatchObject({ ready: true, status: { state: "ready", code: "success" }, settings: { entry: "aiApi" } });
+      expect(readiness).toMatchObject({ ready: true, status: { state: "ready", code: "success" }, settings: { entry: "localAi" } });
+      expect((readiness as { checks?: Array<{ id?: string; message?: string }> }).checks).toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: "execution-policy", message: expect.stringContaining("cannot write") }),
+      ]));
 
       const unverifiedResponse = await postJson(`${server.url}/api/ai/chat`, {
-        target: { kind: "codexBackedProvider", provider },
+        target: { kind: "codexBackedLocal", provider },
         messages: [{ role: "user", content: "Read hidden notes." }],
         context: { repoId: "docs", primaryPaths: [{ path: "private/notes.md", includeContent: true }] },
       });
       expect(unverifiedResponse.status).toBe(409);
 
       const chatResponse = await postJson(`${server.url}/api/ai/chat`, {
-        target: { kind: "codexBackedProvider", provider, status: readiness.status },
+        target: { kind: "codexBackedLocal", provider, status: readiness.status },
         messages: [{ role: "user", content: "Summarize this file." }],
         context: { repoId: "docs", primaryPaths: [{ path: "README.md", includeContent: true, source: "manual" }], rulePaths: [{ path: "AGENTS.md", source: "auto-root-rule" }] },
       });
@@ -520,25 +529,16 @@ describe("api", () => {
       expect(chat.context?.primaryItems?.[0]).toMatchObject({ path: "README.md", contentIncluded: true });
       expect(chat.context?.ruleItems?.[0]).toMatchObject({ path: "AGENTS.md", content: expect.stringContaining("Use project rules") });
       expect(chat.run).toMatchObject({
-        accessMode: "repoWrite",
-        entry: "aiApi",
-        substrate: "codexCli",
-        changedPaths: [expect.objectContaining({ path: "ai-api-output.md", status: "new" })],
+        accessMode: "readOnly",
+        entry: "localAi",
+        substrate: "directProvider",
+        changedPaths: [],
       });
-      const chatCall = calls.find((call) => call.input.includes("Visible content"));
-      expect(chatCall?.cwd).toBe(await realpath(root));
-      expect(chatCall?.input).toContain("Reader-Wiki runtime work order");
-      expect(chatCall?.input).toContain("sha256=");
-      expect(chatCall?.input).toContain("After writing, re-read each changed file");
-      expect(chatCall?.args).toEqual(expect.arrayContaining(["--profile", "reader-wiki-ai-api", "--sandbox", "workspace-write", "--json", "--ephemeral", "--skip-git-repo-check"]));
-      expect(chatCall?.env.CODEX_HOME).toContain(path.join("reader-wiki-codex-home", "aiApi"));
-      expect(chatCall?.env.READER_WIKI_AI_API_KEY).toBe("test-key");
-      const profileText = await readFile(path.join(String(chatCall?.env.CODEX_HOME), "reader-wiki-ai-api.config.toml"), "utf8");
-      expect(profileText).toContain("env_key = \"READER_WIKI_AI_API_KEY\"");
-      expect(profileText).not.toContain("test-key");
+      expect(calls).toEqual([]);
+      await expect(readFile(path.join(root, "ai-api-output.md"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
 
       const missingRuleResponse = await postJson(`${server.url}/api/ai/chat`, {
-        target: { kind: "codexBackedProvider", provider, status: readiness.status },
+        target: { kind: "codexBackedLocal", provider, status: readiness.status },
         messages: [{ role: "user", content: "Use missing rules only." }],
         context: { repoId: "docs", rulePaths: [{ path: "CLAUDE.md", source: "auto-root-rule" }] },
       });
@@ -548,7 +548,7 @@ describe("api", () => {
       expect(missingRuleChat.context?.primaryItems).toEqual([]);
 
       const directoryResponse = await postJson(`${server.url}/api/ai/chat`, {
-        target: { kind: "codexBackedProvider", provider, status: readiness.status },
+        target: { kind: "codexBackedLocal", provider, status: readiness.status },
         messages: [{ role: "user", content: "Summarize docs." }],
         context: { repoId: "docs", primaryPaths: [{ path: "docs", kind: "directory", source: "manual" }] },
       });
@@ -558,7 +558,7 @@ describe("api", () => {
       expect(directoryChat.context?.primaryItems?.[0]?.content).not.toContain("deep.md");
 
       const streamResponse = await postJson(`${server.url}/api/ai/chat/stream`, {
-        target: { kind: "codexBackedProvider", provider, status: readiness.status },
+        target: { kind: "codexBackedLocal", provider, status: readiness.status },
         messages: [{ role: "user", content: "Summarize this file with attachment." }],
         context: { repoId: "docs", primaryPaths: [{ path: "README.md", includeContent: true, source: "manual" }], rulePaths: [{ path: "AGENTS.md", source: "auto-root-rule" }] },
         attachments: [{ id: "a1", name: "note.md", mimeType: "text/markdown", sizeBytes: 5, contentIncluded: true, content: "Note." }],
@@ -568,10 +568,10 @@ describe("api", () => {
       const streamEvents = await readJsonLines(streamResponse);
       expect(streamEvents.map((event) => event.type)).toEqual(["meta", "delta", "done"]);
       expect(streamEvents[1]).toMatchObject({ type: "delta", content: expect.stringContaining("active file") });
-      expect(streamEvents[2]).toMatchObject({ type: "done", message: { content: expect.stringContaining("active file") }, run: { accessMode: "repoWrite", entry: "aiApi" } });
+      expect(streamEvents[2]).toMatchObject({ type: "done", message: { content: expect.stringContaining("active file") }, run: { accessMode: "readOnly", entry: "localAi", substrate: "directProvider", changedPaths: [] } });
 
       const excludedResponse = await postJson(`${server.url}/api/ai/chat`, {
-        target: { kind: "codexBackedProvider", provider, status: readiness.status },
+        target: { kind: "codexBackedLocal", provider, status: readiness.status },
         messages: [{ role: "user", content: "Read hidden notes." }],
         context: { repoId: "docs", primaryPaths: [{ path: "private/notes.md", includeContent: true }] },
       });
@@ -581,63 +581,46 @@ describe("api", () => {
     }
   });
 
-  it("checks Codex-backed Local AI readiness with isolated Codex home", async () => {
+  it("keeps CLI repository writes disabled in the public execution policy", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "reader-wiki-local-ai-api-"));
-    await writeFile(path.join(root, "README.md"), "# Local AI Context\n\nVisible content\n");
+    await writeFile(path.join(root, "README.md"), "# Public CLI policy\n");
     const configPath = path.join(root, "repositories.yaml");
     await writeFile(configPath, `repositories:\n  - id: docs\n    label: Docs\n    root: ${root}\n    defaultPath: README.md\n`);
     await initGitRepo(root);
-    const calls: Array<{ binary: string; args: string[]; cwd: string; input: string; env: NodeJS.ProcessEnv }> = [];
-    const runner: AICommandRunner = async (binary, args, options) => {
-      calls.push({ binary, args, cwd: options.cwd, input: options.input || "", env: options.env });
-      if (binary !== "codex") throw new Error("Unexpected command");
-      if (args.includes("--version")) return { stdout: "codex-cli 0.143.0\n", stderr: "" };
-      if (args.includes("--help")) return { stdout: "--sandbox workspace-write --ephemeral --json --oss --local-provider --model\n", stderr: "" };
-      if (options.input) {
-        await writeFile(path.join(options.cwd, "local-ai-output.md"), "# Local AI output\n");
-        return { stdout: '{"type":"item.completed","item":{"type":"agent_message","text":"Local AI wrote inside the active repo."}}\n', stderr: "" };
-      }
-      throw new Error("Unexpected command");
+    const calls: string[] = [];
+    const runner: AICommandRunner = async (binary) => {
+      calls.push(binary);
+      throw new Error("The public policy must not invoke a CLI adapter.");
     };
+    const previous = process.env.READER_WIKI_EXPERIMENTAL_AI_WRITE;
+    delete process.env.READER_WIKI_EXPERIMENTAL_AI_WRITE;
     const app = express();
     app.use("/api", createApiRouter(configPath, undefined, { aiCommandRunner: runner }));
     const server = await listen(app);
-    const provider = {
-      entry: "localAi" as const,
-      runtime: "ollama" as const,
-      model: "llama3.1",
-      baseUrl: "http://127.0.0.1:11434/v1",
-      apiFormat: "openaiCompatible" as const,
-      credential: "",
-    };
     try {
-      const readinessResponse = await postJson(`${server.url}/api/ai/entry-readiness`, { entry: "localAi", provider, repoId: "docs" });
+      const readinessResponse = await postJson(`${server.url}/api/ai/entry-readiness`, { entry: "codexCli", repoId: "docs" });
       expect(readinessResponse.status).toBe(200);
-      const readiness = await readinessResponse.json() as { ready?: boolean; status?: { state?: string; code?: string } };
-      expect(readiness).toMatchObject({ ready: true, status: { state: "ready", code: "success" } });
+      const readiness = await readinessResponse.json() as { ready?: boolean; status?: { code?: string }; checks?: Array<{ id?: string }> };
+      expect(readiness).toMatchObject({ ready: false, status: { code: "wrapper_not_ready" } });
+      expect(readiness.checks).toEqual(expect.arrayContaining([expect.objectContaining({ id: "public-policy" })]));
 
       const chatResponse = await postJson(`${server.url}/api/ai/chat`, {
-        target: { kind: "codexBackedLocal", provider, status: readiness.status },
-        messages: [{ role: "user", content: "Edit locally." }],
+        target: { kind: "codexCli", entry: "codexCli", status: { state: "ready", code: "success" } },
+        messages: [{ role: "user", content: "Edit the repository." }],
         context: { repoId: "docs", path: "README.md", includeContent: true },
       });
-      expect(chatResponse.status).toBe(200);
-      await expect(chatResponse.json()).resolves.toMatchObject({
-        message: { content: expect.stringContaining("active repo") },
-        run: { accessMode: "repoWrite", entry: "localAi", substrate: "codexCli", changedPaths: [expect.objectContaining({ path: "local-ai-output.md", status: "new" })] },
-      });
-      const chatCall = calls.find((call) => call.input.includes("Visible content"));
-      expect(chatCall?.cwd).toBe(await realpath(root));
-      expect(chatCall?.input).toContain("After writing, re-read each changed file");
-      expect(chatCall?.args).toEqual(expect.arrayContaining(["--oss", "--local-provider", "ollama", "--model", "llama3.1", "--sandbox", "workspace-write", "--skip-git-repo-check"]));
-      expect(chatCall?.env.CODEX_HOME).toContain(path.join("reader-wiki-codex-home", "localAi"));
-      expect(chatCall?.env).not.toHaveProperty("READER_WIKI_AI_API_KEY");
+      expect(chatResponse.status).toBe(409);
+      await expect(chatResponse.json()).resolves.toMatchObject({ error: expect.stringContaining("attestation") });
+      expect(calls).toEqual([]);
     } finally {
       await server.close();
+      if (previous === undefined) delete process.env.READER_WIKI_EXPERIMENTAL_AI_WRITE;
+      else process.env.READER_WIKI_EXPERIMENTAL_AI_WRITE = previous;
     }
   });
 
   it("tracks selected file edits without requiring a Git working tree", async () => {
+    const restoreExperimentalAIWrite = enableExperimentalAIWrite();
     const root = await mkdtemp(path.join(tmpdir(), "reader-wiki-non-git-ai-"));
     await writeFile(path.join(root, "README.md"), "# Non Git\n\nVisible content\n");
     const configPath = path.join(root, "repositories.yaml");
@@ -680,10 +663,12 @@ describe("api", () => {
       expect(chatCall?.args).toEqual(expect.arrayContaining(["--sandbox", "workspace-write", "--skip-git-repo-check"]));
     } finally {
       await server.close();
+      restoreExperimentalAIWrite();
     }
   });
 
-  it("repairs duplicate selected-file edits even when the file is Git ignored", async () => {
+  it("warns about duplicate selected-file edits without rewriting user content", async () => {
+    const restoreExperimentalAIWrite = enableExperimentalAIWrite();
     const root = await mkdtemp(path.join(tmpdir(), "reader-wiki-ignored-duplicate-ai-"));
     const selectedPath = "reader-wiki-ai-write-test.md";
     await writeFile(path.join(root, ".gitignore"), `${selectedPath}\n`);
@@ -695,6 +680,7 @@ describe("api", () => {
     const runner: AICommandRunner = async (binary, args, options) => {
       if (binary !== "codex") throw new Error("Unexpected command");
       if (args.includes("--version")) return { stdout: "codex-cli 0.143.0\n", stderr: "" };
+      if (args.includes("login")) return { stdout: "Logged in using ChatGPT\n", stderr: "" };
       if (args.includes("--help")) return { stdout: "--sandbox workspace-write --ephemeral --json --oss --local-provider --model\n", stderr: "" };
       if (options.input) {
         await writeFile(path.join(options.cwd, selectedPath), [
@@ -723,41 +709,35 @@ describe("api", () => {
       }
       throw new Error("Unexpected command");
     };
-    const provider = {
-      entry: "localAi" as const,
-      runtime: "ollama" as const,
-      model: "gpt-oss-20b",
-      baseUrl: "http://127.0.0.1:11434/v1",
-      apiFormat: "openaiCompatible" as const,
-      credential: "",
-    };
     const app = express();
     app.use("/api", createApiRouter(configPath, undefined, { aiCommandRunner: runner }));
     const server = await listen(app);
     try {
-      const readinessResponse = await postJson(`${server.url}/api/ai/entry-readiness`, { entry: "localAi", provider, repoId: "docs" });
+      const readinessResponse = await postJson(`${server.url}/api/ai/entry-readiness`, { entry: "codexCli", repoId: "docs" });
       expect(readinessResponse.status).toBe(200);
       const readiness = await readinessResponse.json() as { ready?: boolean; status?: { state?: string; code?: string } };
       expect(readiness).toMatchObject({ ready: true });
 
       const chatResponse = await postJson(`${server.url}/api/ai/chat`, {
-        target: { kind: "codexBackedLocal", provider, status: readiness.status },
+        target: { kind: "codexCli", entry: "codexCli", status: readiness.status },
         messages: [{ role: "user", content: "Append Write Result 3 once." }],
         context: { repoId: "docs", path: selectedPath, includeContent: true },
       });
       expect(chatResponse.status).toBe(200);
       const chat = await chatResponse.json() as { run?: { changedPaths?: Array<{ path?: string; status?: string }>; repairs?: string[]; warnings?: string[] } };
       expect(chat.run?.changedPaths).toEqual([expect.objectContaining({ path: selectedPath, status: "changed" })]);
-      expect(chat.run?.repairs?.some((repair) => repair.includes("Repaired duplicate edit") && repair.includes("Write Result 3"))).toBe(true);
-      expect(chat.run?.warnings).toEqual([]);
-      const repairedContent = await readFile(path.join(root, selectedPath), "utf8");
-      expect((repairedContent.match(/## Write Result 3/g) || [])).toHaveLength(1);
+      expect(chat.run?.repairs).toEqual([]);
+      expect(chat.run?.warnings?.some((warning) => warning.includes("Automatic duplicate repair is disabled"))).toBe(true);
+      const writtenContent = await readFile(path.join(root, selectedPath), "utf8");
+      expect((writtenContent.match(/## Write Result 3/g) || [])).toHaveLength(3);
     } finally {
       await server.close();
+      restoreExperimentalAIWrite();
     }
   });
 
   it("does not repair duplicate blocks that already existed before the current run", async () => {
+    const restoreExperimentalAIWrite = enableExperimentalAIWrite();
     const root = await mkdtemp(path.join(tmpdir(), "reader-wiki-existing-duplicate-ai-"));
     const selectedPath = "existing-duplicate.md";
     await writeFile(path.join(root, selectedPath), [
@@ -820,10 +800,12 @@ describe("api", () => {
       expect((content.match(/## Keep Me/g) || [])).toHaveLength(3);
     } finally {
       await server.close();
+      restoreExperimentalAIWrite();
     }
   });
 
-  it("removes leaked Local AI tool-call markup before returning the final answer", async () => {
+  it("removes leaked CLI tool-call markup before returning the final answer", async () => {
+    const restoreExperimentalAIWrite = enableExperimentalAIWrite();
     const root = await mkdtemp(path.join(tmpdir(), "reader-wiki-tool-markup-ai-"));
     await writeFile(path.join(root, "README.md"), "# Tool Markup\n\nVisible content\n");
     const configPath = path.join(root, "repositories.yaml");
@@ -831,6 +813,7 @@ describe("api", () => {
     const runner: AICommandRunner = async (binary, args, options) => {
       if (binary !== "codex") throw new Error("Unexpected command");
       if (args.includes("--version")) return { stdout: "codex-cli 0.143.0\n", stderr: "" };
+      if (args.includes("login")) return { stdout: "Logged in using ChatGPT\n", stderr: "" };
       if (args.includes("--help")) return { stdout: "--sandbox workspace-write --ephemeral --json --oss --local-provider --model\n", stderr: "" };
       if (options.input) {
         await writeFile(path.join(options.cwd, "README.md"), "# Tool Markup\n\nVisible content\n\nAI result.\n");
@@ -838,22 +821,14 @@ describe("api", () => {
       }
       throw new Error("Unexpected command");
     };
-    const provider = {
-      entry: "localAi" as const,
-      runtime: "ollama" as const,
-      model: "gpt-oss-20b",
-      baseUrl: "http://127.0.0.1:11434/v1",
-      apiFormat: "openaiCompatible" as const,
-      credential: "",
-    };
     const app = express();
     app.use("/api", createApiRouter(configPath, undefined, { aiCommandRunner: runner }));
     const server = await listen(app);
     try {
-      const readinessResponse = await postJson(`${server.url}/api/ai/entry-readiness`, { entry: "localAi", provider, repoId: "docs" });
+      const readinessResponse = await postJson(`${server.url}/api/ai/entry-readiness`, { entry: "codexCli", repoId: "docs" });
       const readiness = await readinessResponse.json() as { status?: { state?: string; code?: string } };
       const chatResponse = await postJson(`${server.url}/api/ai/chat`, {
-        target: { kind: "codexBackedLocal", provider, status: readiness.status },
+        target: { kind: "codexCli", entry: "codexCli", status: readiness.status },
         messages: [{ role: "user", content: "Append a result." }],
         context: { repoId: "docs", path: "README.md", includeContent: true },
       });
@@ -864,6 +839,7 @@ describe("api", () => {
       expect(chat.run?.warnings?.some((warning) => warning.includes("tool-call markup"))).toBe(true);
     } finally {
       await server.close();
+      restoreExperimentalAIWrite();
     }
   });
 
@@ -883,6 +859,13 @@ describe("api", () => {
         apiFormat: "openaiCompatible" as const,
         credential: "test-key",
       };
+      const localBase = {
+        entry: "localAi" as const,
+        runtime: "lmStudio" as const,
+        model: "wanted-model",
+        apiFormat: "openaiCompatible" as const,
+        credential: "",
+      };
 
       await expect(testAIConnection({ ...base, baseUrl: "not a url" })).resolves.toMatchObject({
         state: "failed",
@@ -892,23 +875,28 @@ describe("api", () => {
       });
       await expect(testAIConnection({ ...base, baseUrl: "http://127.0.0.1:9/v1" })).resolves.toMatchObject({
         state: "failed",
-        code: "endpoint_unreachable",
+        code: "invalid_endpoint",
         severity: "error",
-        message: "Endpoint is unreachable.",
       });
-      await expect(testAIConnection({ ...base, baseUrl: `${server.url}/v1/auth-required` })).resolves.toMatchObject({
+      await expect(testAIConnection({ ...base, baseUrl: "https://127.0.0.1:443/v1" })).resolves.toMatchObject({
+        state: "failed",
+        code: "invalid_endpoint",
+        severity: "error",
+        message: expect.stringContaining("private"),
+      });
+      await expect(testAIConnection({ ...localBase, baseUrl: `${server.url}/v1/auth-required` })).resolves.toMatchObject({
         state: "failed",
         code: "credential_required",
         severity: "warning",
         message: "Provider rejected the credential.",
       });
-      await expect(testAIConnection({ ...base, baseUrl: `${server.url}/v1/model-missing` })).resolves.toMatchObject({
+      await expect(testAIConnection({ ...localBase, baseUrl: `${server.url}/v1/model-missing` })).resolves.toMatchObject({
         state: "failed",
         code: "model_missing",
         severity: "warning",
         message: "Model is not visible at this endpoint.",
       });
-      await expect(testAIConnection({ ...base, baseUrl: `${server.url}/v1/http-error` })).resolves.toMatchObject({
+      await expect(testAIConnection({ ...localBase, baseUrl: `${server.url}/v1/http-error` })).resolves.toMatchObject({
         state: "failed",
         code: "provider_http_error",
         severity: "error",
@@ -917,7 +905,7 @@ describe("api", () => {
 
       const controller = new AbortController();
       controller.abort();
-      await expect(testAIConnection({ ...base, baseUrl: `${server.url}/v1/model-missing` }, controller.signal)).resolves.toMatchObject({
+      await expect(testAIConnection({ ...localBase, baseUrl: `${server.url}/v1/model-missing` }, controller.signal)).resolves.toMatchObject({
         state: "failed",
         code: "timeout_or_abort",
         severity: "warning",
@@ -928,6 +916,7 @@ describe("api", () => {
   });
 
   it("checks CLI readiness and answers with guarded repo-scoped write context through fixed adapters", async () => {
+    const restoreExperimentalAIWrite = enableExperimentalAIWrite();
     const root = await mkdtemp(path.join(tmpdir(), "reader-wiki-cli-api-"));
     await mkdir(path.join(root, "private"));
     await writeFile(path.join(root, "README.md"), "# CLI Context\n\nVisible content\n");
@@ -963,6 +952,7 @@ describe("api", () => {
       expect(codexReadiness.status).toBe(200);
       const codexReadinessBody = await codexReadiness.json() as { ready?: boolean; status?: { state?: string; code?: string }; settings?: { entry?: string; authState?: string; readOnlyWrapperState?: string; executionMode?: string } };
       expect(codexReadinessBody).toMatchObject({ ready: true, status: { state: "ready", code: "success" }, settings: { entry: "codexCli", authState: "configured", readOnlyWrapperState: "ready", executionMode: "repoWrite" } });
+      expect(calls.some((call) => call.input.includes("Reader-Wiki CLI readiness"))).toBe(false);
 
       const claudeReadiness = await postJson(`${server.url}/api/ai/entry-readiness`, { entry: "claudeCli", repoId: "docs" });
       expect(claudeReadiness.status).toBe(200);
@@ -1008,6 +998,7 @@ describe("api", () => {
       expect(claudeChatCall?.input).toContain("After writing, re-read each changed file");
     } finally {
       await server.close();
+      restoreExperimentalAIWrite();
     }
   });
 
@@ -1066,15 +1057,16 @@ describe("api", () => {
       });
       expect(response.status).toBe(409);
       const body = await response.json() as { error?: string };
-      expect(body.error).toContain("readiness execution failed");
+      expect(body.error).toContain("attestation");
       expect(calls.some((call) => call.input.includes("CLI Not Ready"))).toBe(false);
-      expect(calls.some((call) => call.input.includes("Reader-Wiki CLI readiness"))).toBe(true);
+      expect(calls).toEqual([]);
     } finally {
       await server.close();
     }
   });
 
   it("sanitizes CLI adapter failures before returning API errors", async () => {
+    const restoreExperimentalAIWrite = enableExperimentalAIWrite();
     const root = await mkdtemp(path.join(tmpdir(), "reader-wiki-cli-error-api-"));
     await writeFile(path.join(root, "README.md"), "# CLI Error\n");
     const configPath = path.join(root, "repositories.yaml");
@@ -1096,8 +1088,12 @@ describe("api", () => {
     app.use("/api", createApiRouter(configPath, undefined, { aiCommandRunner: runner }));
     const server = await listen(app);
     try {
+      const readinessResponse = await postJson(`${server.url}/api/ai/entry-readiness`, { entry: "codexCli", repoId: "docs" });
+      expect(readinessResponse.status).toBe(200);
+      const readiness = await readinessResponse.json() as { ready?: boolean; status?: { state?: string; code?: string } };
+      expect(readiness.ready).toBe(true);
       const response = await postJson(`${server.url}/api/ai/chat`, {
-        target: { kind: "codexCli", entry: "codexCli", status: { state: "ready", code: "success", severity: "success", message: "ready", checkedAt: "2026-07-05T00:00:00.000Z" } },
+        target: { kind: "codexCli", entry: "codexCli", status: readiness.status },
         messages: [{ role: "user", content: "Summarize." }],
         context: { repoId: "docs", path: "README.md", includeContent: true },
       });
@@ -1108,6 +1104,197 @@ describe("api", () => {
       expect(body.error).not.toContain("user@example.test");
       expect(body.error).not.toContain("abc-123");
       expect(body.error).not.toContain("def-456");
+    } finally {
+      await server.close();
+      restoreExperimentalAIWrite();
+    }
+  });
+
+  it("keeps a large unedited selected file byte-identical when duplicate text exists after the context limit", async () => {
+    const restoreExperimentalAIWrite = enableExperimentalAIWrite();
+    const root = await mkdtemp(path.join(tmpdir(), "reader-wiki-large-no-edit-"));
+    const selectedPath = "large.md";
+    const duplicate = "This paragraph intentionally appears twice and must never be removed.";
+    const original = `# Large\n\n${"a".repeat(17_000)}\n\n${duplicate}\n\n${duplicate}\n`;
+    await writeFile(path.join(root, selectedPath), original);
+    const configPath = path.join(root, "repositories.yaml");
+    await writeFile(configPath, `repositories:\n  - id: docs\n    label: Docs\n    root: ${root}\n    defaultPath: ${selectedPath}\n`);
+    const runner: AICommandRunner = async (_binary, args, options) => {
+      if (args.includes("--version")) return { stdout: "codex-cli 0.143.0\n", stderr: "" };
+      if (args.includes("login")) return { stdout: "Logged in using ChatGPT\n", stderr: "" };
+      if (args.includes("--help")) return { stdout: "--sandbox workspace-write --ephemeral --skip-git-repo-check --json\n", stderr: "" };
+      if (options.input) return { stdout: '{"type":"item.completed","item":{"type":"agent_message","text":"No edit required."}}\n', stderr: "" };
+      throw new Error("Unexpected command");
+    };
+    const app = express();
+    app.use("/api", createApiRouter(configPath, undefined, { aiCommandRunner: runner }));
+    const server = await listen(app);
+    try {
+      const readinessResponse = await postJson(`${server.url}/api/ai/entry-readiness`, { entry: "codexCli", repoId: "docs" });
+      const readiness = await readinessResponse.json() as { status?: { state?: string; code?: string } };
+      const before = await readFile(path.join(root, selectedPath));
+      const response = await postJson(`${server.url}/api/ai/chat`, {
+        target: { kind: "codexCli", entry: "codexCli", status: readiness.status },
+        messages: [{ role: "user", content: "Inspect only; make no edits." }],
+        context: { repoId: "docs", path: selectedPath, includeContent: true },
+      });
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toMatchObject({ run: { changedPaths: [], repairs: [] } });
+      expect(await readFile(path.join(root, selectedPath))).toEqual(before);
+    } finally {
+      await server.close();
+      restoreExperimentalAIWrite();
+    }
+  });
+
+  it("cancels by run ID, returns failure postflight changes, and releases the repo lock after verified termination", async () => {
+    const restoreExperimentalAIWrite = enableExperimentalAIWrite();
+    const root = await mkdtemp(path.join(tmpdir(), "reader-wiki-cancel-audit-"));
+    await writeFile(path.join(root, "README.md"), "# Cancel audit\n");
+    await writeFile(path.join(root, "dirty.md"), "tracked baseline\n");
+    await writeFile(path.join(root, ".gitignore"), "ignored.md\n");
+    const configPath = path.join(root, "repositories.yaml");
+    await writeFile(configPath, `repositories:\n  - id: docs\n    label: Docs\n    root: ${root}\n    defaultPath: README.md\n`);
+    await initGitRepo(root);
+    await writeFile(path.join(root, "dirty.md"), "preexisting dirty state\n");
+    await writeFile(path.join(root, "ignored.md"), "ignored before run\n");
+    let executionCount = 0;
+    const runner: AICommandRunner = async (_binary, args, options) => {
+      if (args.includes("--version")) return { stdout: "codex-cli 0.143.0\n", stderr: "" };
+      if (args.includes("login")) return { stdout: "Logged in using ChatGPT\n", stderr: "" };
+      if (args.includes("--help")) return { stdout: "--sandbox workspace-write --ephemeral --skip-git-repo-check --json\n", stderr: "" };
+      if (!options.input) throw new Error("Unexpected command");
+      executionCount += 1;
+      if (executionCount > 1) return { stdout: '{"type":"item.completed","item":{"type":"agent_message","text":"Second run completed."}}\n', stderr: "" };
+      await writeFile(path.join(options.cwd, "dirty.md"), "changed again during canceled run\n");
+      await writeFile(path.join(options.cwd, "ignored.md"), "ignored changed during canceled run\n");
+      await writeFile(path.join(options.cwd, "partial.md"), "partial new file\n");
+      return new Promise((_resolve, reject) => {
+        const cancel = () => reject(new HttpError(499, "CLI request was canceled."));
+        if (options.signal?.aborted) cancel();
+        else options.signal?.addEventListener("abort", cancel, { once: true });
+      });
+    };
+    const app = express();
+    app.use("/api", createApiRouter(configPath, undefined, { aiCommandRunner: runner }));
+    const server = await listen(app);
+    try {
+      const readinessResponse = await postJson(`${server.url}/api/ai/entry-readiness`, { entry: "codexCli", repoId: "docs" });
+      const readiness = await readinessResponse.json() as { status?: { state?: string; code?: string } };
+      const streamResponse = await postJson(`${server.url}/api/ai/chat/stream`, {
+        target: { kind: "codexCli", entry: "codexCli", status: readiness.status },
+        messages: [{ role: "user", content: "Start a cancelable edit." }],
+        context: { repoId: "docs", path: "README.md", includeContent: true },
+      });
+      expect(streamResponse.status).toBe(200);
+      const reader = streamResponse.body?.getReader();
+      expect(reader).toBeTruthy();
+      const decoder = new TextDecoder();
+      let streamed = "";
+      while (!streamed.includes("\n")) {
+        const chunk = await reader!.read();
+        streamed += decoder.decode(chunk.value || new Uint8Array(), { stream: !chunk.done });
+      }
+      const firstBreak = streamed.indexOf("\n");
+      const meta = JSON.parse(streamed.slice(0, firstBreak)) as { type?: string; runId?: string };
+      expect(meta).toMatchObject({ type: "meta", runId: expect.any(String) });
+      const cancelResponse = await postJson(`${server.url}/api/ai/cancel`, { runId: meta.runId });
+      expect(cancelResponse.status).toBe(202);
+      let remainder = streamed.slice(firstBreak + 1);
+      while (true) {
+        const chunk = await reader!.read();
+        remainder += decoder.decode(chunk.value || new Uint8Array(), { stream: !chunk.done });
+        if (chunk.done) break;
+      }
+      const events = remainder.split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line) as {
+        type?: string;
+        details?: { run?: { changedPaths?: Array<{ path?: string; status?: string }> } };
+      });
+      const errorEvent = events.find((event) => event.type === "error");
+      expect(errorEvent?.details?.run?.changedPaths).toEqual(expect.arrayContaining([
+        expect.objectContaining({ path: "dirty.md", status: "changed" }),
+        expect.objectContaining({ path: "ignored.md", status: "changed" }),
+        expect.objectContaining({ path: "partial.md", status: "new" }),
+      ]));
+
+      const second = await postJson(`${server.url}/api/ai/chat`, {
+        target: { kind: "codexCli", entry: "codexCli", status: readiness.status },
+        messages: [{ role: "user", content: "Confirm the lock was released." }],
+        context: { repoId: "docs", path: "README.md", includeContent: true },
+      });
+      expect(second.status).toBe(200);
+    } finally {
+      await server.close();
+      restoreExperimentalAIWrite();
+    }
+  });
+
+  it("rejects stale repository revisions and expires Delivery capabilities after a hand-edited root change", async () => {
+    const firstRoot = await mkdtemp(path.join(tmpdir(), "reader-wiki-revision-first-"));
+    const secondRoot = await mkdtemp(path.join(tmpdir(), "reader-wiki-revision-second-"));
+    await writeFile(path.join(firstRoot, "README.md"), "# First root\n");
+    await writeFile(path.join(secondRoot, "README.md"), "# Second root private marker\n");
+    const configPath = path.join(firstRoot, "repositories.yaml");
+    await writeFile(configPath, `repositories:\n  - id: docs\n    label: Docs\n    root: ${firstRoot}\n    defaultPath: README.md\n`);
+    const registry = createRepositoryRegistry({ configPath });
+    const delivery = createHttpDeliveryService(registry);
+    const app = express();
+    app.use("/api", createApiRouter(registry, delivery));
+    app.use("/delivery", delivery.router);
+    const server = await listen(app);
+    try {
+      const reposResponse = await fetch(`${server.url}/api/repos`);
+      const repos = await reposResponse.json() as { repositories?: Array<{ id?: string; revision?: string }> };
+      const staleRevision = repos.repositories?.[0]?.revision || "";
+      const deliveryStart = await postJson(`${server.url}/api/http-delivery/start`, { repoId: "docs", path: "README.md" });
+      const deliveryState = await deliveryStart.json() as { items?: Array<{ url?: string }> };
+      const deliveryUrl = deliveryState.items?.[0]?.url || "";
+
+      await writeFile(configPath, `repositories:\n  - id: docs\n    label: Docs\n    root: ${secondRoot}\n    defaultPath: README.md\n`);
+      const staleOpen = await fetch(`${server.url}/api/repo-open`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ repoId: "docs", expectedRevision: staleRevision }),
+      });
+      expect(staleOpen.status).toBe(409);
+      await expect(staleOpen.json()).resolves.toMatchObject({ details: { currentRevision: expect.not.stringMatching(staleRevision) } });
+      const expiredDelivery = await fetch(deliveryUrl);
+      expect(expiredDelivery.status).toBe(409);
+      expect(await expiredDelivery.text()).not.toContain("Second root private marker");
+    } finally {
+      await server.close();
+    }
+  });
+
+  it.skipIf(process.platform === "win32")("disables repository-controlled Git fsmonitor, external diff, and textconv executables", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "reader-wiki-git-policy-"));
+    const fsmonitorMarker = path.join(tmpdir(), `reader-wiki-fsmonitor-${path.basename(root)}`);
+    const diffMarker = path.join(tmpdir(), `reader-wiki-diff-${path.basename(root)}`);
+    const fsmonitorProbe = path.join(root, "fsmonitor-probe.js");
+    const diffProbe = path.join(root, "diff-probe.js");
+    await writeFile(path.join(root, "README.md"), "# Safe Git metadata\n");
+    await writeFile(path.join(root, ".gitattributes"), "README.md diff=reader\n");
+    await writeFile(fsmonitorProbe, `#!/usr/bin/env node\nrequire("node:fs").writeFileSync(${JSON.stringify(fsmonitorMarker)}, "executed");\n`);
+    await writeFile(diffProbe, `#!/usr/bin/env node\nrequire("node:fs").writeFileSync(${JSON.stringify(diffMarker)}, "executed");\n`);
+    await chmod(fsmonitorProbe, 0o755);
+    await chmod(diffProbe, 0o755);
+    const configPath = path.join(root, "repositories.yaml");
+    await writeFile(configPath, `repositories:\n  - id: docs\n    label: Docs\n    root: ${root}\n    defaultPath: README.md\n`);
+    await initGitRepo(root);
+    await git(root, "config", "diff.external", diffProbe);
+    await git(root, "config", "diff.reader.textconv", diffProbe);
+    await git(root, "config", "core.fsmonitor", fsmonitorProbe);
+    await writeFile(path.join(root, "README.md"), "# Safe Git metadata\n\nchanged\n");
+    const app = express();
+    app.use("/api", createApiRouter(configPath));
+    const server = await listen(app);
+    try {
+      expect((await fetch(`${server.url}/api/tree?repo=docs&path=`)).status).toBe(200);
+      const fileResponse = await fetch(`${server.url}/api/file?repo=docs&path=README.md`);
+      expect(fileResponse.status).toBe(200);
+      await expect(fileResponse.json()).resolves.toMatchObject({ gitDiff: { status: "changed" } });
+      await expect(readFile(fsmonitorMarker)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(readFile(diffMarker)).rejects.toMatchObject({ code: "ENOENT" });
     } finally {
       await server.close();
     }
@@ -1127,12 +1314,42 @@ async function initGitRepo(cwd: string): Promise<void> {
   await git(cwd, "commit", "-m", "initial");
 }
 
-function postJson(url: string, payload: unknown): Promise<Response> {
+async function postJson(url: string, payload: unknown): Promise<Response> {
+  const parsedUrl = new URL(url);
+  let nextPayload = payload;
+  if (payload && typeof payload === "object") {
+    const source = payload as Record<string, unknown>;
+    const context = source.context && typeof source.context === "object" ? source.context as Record<string, unknown> : null;
+    const repoId = String(source.repoId || context?.repoId || "");
+    const needsRepoRevision = ["/api/repo-open", "/api/http-delivery/start", "/api/ai/entry-readiness", "/api/ai/chat", "/api/ai/chat/stream"].includes(parsedUrl.pathname) && repoId;
+    if (needsRepoRevision) {
+      const reposResponse = await fetch(`${parsedUrl.origin}/api/repos`);
+      const repos = await reposResponse.json() as { repositories?: Array<{ id?: string; revision?: string }> };
+      const revision = repos.repositories?.find((repo) => repo.id === repoId)?.revision || "";
+      nextPayload = context
+        ? { ...source, context: { ...context, expectedRevision: revision } }
+        : { ...source, expectedRevision: revision };
+    }
+    if (parsedUrl.pathname === "/api/repository-config/save") {
+      const configResponse = await fetch(`${parsedUrl.origin}/api/repository-config`);
+      const config = await configResponse.json() as { configRevision?: string };
+      nextPayload = { ...source, expectedConfigRevision: config.configRevision || "" };
+    }
+  }
   return fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
+    body: JSON.stringify(nextPayload),
   });
+}
+
+function enableExperimentalAIWrite(): () => void {
+  const previous = process.env.READER_WIKI_EXPERIMENTAL_AI_WRITE;
+  process.env.READER_WIKI_EXPERIMENTAL_AI_WRITE = "1";
+  return () => {
+    if (previous === undefined) delete process.env.READER_WIKI_EXPERIMENTAL_AI_WRITE;
+    else process.env.READER_WIKI_EXPERIMENTAL_AI_WRITE = previous;
+  };
 }
 
 async function readJsonLines(response: Response): Promise<Array<{ type?: string; content?: string; message?: { content?: string } }>> {

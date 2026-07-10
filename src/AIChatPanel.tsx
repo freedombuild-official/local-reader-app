@@ -1,8 +1,8 @@
 import { useMemo, useRef, useState, type ChangeEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent } from "react";
+import DOMPurify from "dompurify";
 import MarkdownIt from "markdown-it";
-import sanitizeHtml from "sanitize-html";
 import { Check, Copy, Mic, Plus, RotateCcw, Send, Square, X } from "lucide-react";
-import { streamAIChatMessage } from "./api";
+import { cancelAIChatRun, streamAIChatMessage } from "./api";
 import { activeAIChatTarget, activeAIEntry, activeAIRuleFileName, aiVerifiedReady, type AISettingsState } from "./settingsState";
 import type { AIChatAttachment, AIChatContextChip, AIChatContextPathRequest, AIChatMessage, AIChatSessionState, AIModelBehavior, FileResponse, TreeNode } from "./types";
 import { injectMarkdownCodeToolbarButtons, installCodeBlockRule } from "../shared/markdownCodeBlocks";
@@ -15,6 +15,7 @@ type AIChatPanelProps = {
   onSessionChange: (updater: (session: AIChatSessionState) => AIChatSessionState) => void;
   modelBehavior: AIModelBehavior;
   activeRepoId: string;
+  activeRepoRevision: string;
   activeFile: FileResponse | null;
   rootTreeNodes: TreeNode[];
   onOpenSettings: () => void;
@@ -42,10 +43,13 @@ installTableScrollRule(aiMarkdown);
 installCodeBlockRule(aiMarkdown);
 installTaskListRule(aiMarkdown);
 
-export function AIChatPanel({ aiSettings, session, onSessionChange, modelBehavior, activeRepoId, rootTreeNodes, onOpenSettings, onMarkdownClick }: AIChatPanelProps) {
+export function AIChatPanel({ aiSettings, session, onSessionChange, modelBehavior, activeRepoId, activeRepoRevision, rootTreeNodes, onOpenSettings, onMarkdownClick }: AIChatPanelProps) {
   const [copyStateById, setCopyStateById] = useState<Record<string, CopyState>>({});
   const [voiceActive, setVoiceActive] = useState(false);
+  const [canceling, setCanceling] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
+  const activeRunIdRef = useRef("");
+  const cancelRequestedRef = useRef(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const transcriptRef = useRef<HTMLDivElement | null>(null);
   const transcriptBottomRef = useRef<HTMLDivElement | null>(null);
@@ -108,6 +112,9 @@ export function AIChatPanel({ aiSettings, session, onSessionChange, modelBehavio
 
     const controller = new AbortController();
     abortRef.current = controller;
+    activeRunIdRef.current = "";
+    cancelRequestedRef.current = false;
+    setCanceling(false);
     try {
       await streamAIChatMessage(
         {
@@ -115,6 +122,7 @@ export function AIChatPanel({ aiSettings, session, onSessionChange, modelBehavio
           messages: [...session.messages, userMessage],
           context: {
             repoId: activeRepoId,
+            expectedRevision: activeRepoRevision,
             primaryPaths: requestContextChips.filter((chip) => chip.role === "primary").map(chipToContextPathRequest),
             rulePaths: requestContextChips.filter((chip) => chip.role === "rule").map(chipToContextPathRequest),
           },
@@ -122,6 +130,12 @@ export function AIChatPanel({ aiSettings, session, onSessionChange, modelBehavio
           modelBehavior,
         },
         (event) => {
+          if (abortRef.current !== controller) return;
+          if (event.type === "meta") {
+            activeRunIdRef.current = event.runId || "";
+            if (cancelRequestedRef.current && event.runId) void requestServerCancellation(event.runId, controller);
+            return;
+          }
           if (event.type === "delta") {
             updateSessionAndFollow((current) => appendAssistantDelta(current, event.content));
             return;
@@ -131,22 +145,54 @@ export function AIChatPanel({ aiSettings, session, onSessionChange, modelBehavio
             return;
           }
           if (event.type === "error") {
-            updateSessionAndFollow((current) => ({ ...current, error: event.error }));
+            updateSessionAndFollow((current) => ({
+              ...(event.details?.run
+                ? replaceLastAssistant(current, appendRunSummary("", event.details.run))
+                : replaceLastAssistant(current, "Request failed before a run summary was available.")),
+              error: event.error,
+            }));
           }
         },
         controller.signal,
       );
     } catch (nextError) {
-      updateSession((current) => ({ ...current, error: nextError instanceof Error ? nextError.message : String(nextError) }));
+      if (abortRef.current === controller) {
+        const message = controller.signal.aborted ? "AI Chat request canceled." : nextError instanceof Error ? nextError.message : String(nextError);
+        updateSession((current) => ({
+          ...replaceLastAssistant(current, "Request failed before a run summary was available."),
+          error: message,
+        }));
+      }
     } finally {
-      updateSession((current) => ({ ...current, pending: false }));
-      abortRef.current = null;
+      if (abortRef.current === controller) {
+        updateSession((current) => ({ ...current, pending: false }));
+        abortRef.current = null;
+        activeRunIdRef.current = "";
+        cancelRequestedRef.current = false;
+        setCanceling(false);
+      }
     }
   }
 
-  function cancelRequest() {
-    abortRef.current?.abort();
-    updateSession((current) => ({ ...current, pending: false }));
+  async function cancelRequest() {
+    if (!abortRef.current || abortRef.current.signal.aborted) return;
+    setCanceling(true);
+    cancelRequestedRef.current = true;
+    updateSession((current) => ({ ...current, error: "Canceling AI Chat request..." }));
+    const runId = activeRunIdRef.current;
+    if (!runId) return;
+    await requestServerCancellation(runId, abortRef.current);
+  }
+
+  async function requestServerCancellation(runId: string, controller: AbortController) {
+    try {
+      await cancelAIChatRun(runId);
+    } catch (error) {
+      if (abortRef.current !== controller) return;
+      setCanceling(false);
+      cancelRequestedRef.current = false;
+      updateSession((current) => ({ ...current, error: error instanceof Error ? error.message : String(error) }));
+    }
   }
 
   async function uploadFiles(event: ChangeEvent<HTMLInputElement>) {
@@ -254,7 +300,7 @@ export function AIChatPanel({ aiSettings, session, onSessionChange, modelBehavio
         </div>
       ) : null}
 
-      <div ref={transcriptRef} className="ai-chat-messages" aria-label="AI Chat transcript" aria-live="polite" onScroll={updateTranscriptPinning}>
+      <div ref={transcriptRef} className="ai-chat-messages" role="log" aria-label="AI Chat transcript" aria-live="polite" onScroll={updateTranscriptPinning}>
         {renderedMessages.map((message) => (
           <article key={message.id} className={`ai-message ${message.role}`} aria-label={message.role === "user" ? "User message" : "AI message"}>
             <header className="ai-message-header">
@@ -350,7 +396,7 @@ export function AIChatPanel({ aiSettings, session, onSessionChange, modelBehavio
               <Mic aria-hidden="true" focusable="false" />
             </button>
             {session.pending ? (
-              <button type="button" className="icon-button" aria-label="Cancel AI Chat request" title="Cancel AI Chat request" onClick={cancelRequest}>
+              <button type="button" className="icon-button" aria-label={canceling ? "Canceling AI Chat request" : "Cancel AI Chat request"} title={canceling ? "Canceling AI Chat request" : "Cancel AI Chat request"} disabled={canceling} onClick={() => void cancelRequest()}>
                 <Square aria-hidden="true" focusable="false" />
               </button>
             ) : (
@@ -415,33 +461,29 @@ function replaceLastAssistant(session: AIChatSessionState, content: string): AIC
   };
 }
 
-function appendRunSummary(content: string, run: { changedPaths: Array<{ path: string; status: string }>; repairs?: string[]; warnings: string[] }): string {
+function appendRunSummary(content: string, run: { auditState: "verified" | "unverified"; changedPaths: Array<{ path: string; status: string }>; repairs?: string[]; warnings: string[] }): string {
   const changed = run.changedPaths.length
     ? ["Changed paths:", ...run.changedPaths.map((item) => `- ${item.status}: ${item.path}`)].join("\n")
-    : "No repository changes.";
+    : run.auditState === "verified"
+      ? "No repository changes."
+      : "Repository changes unverified.";
   const repairs = run.repairs?.length ? ["Repairs:", ...run.repairs.map((repair) => `- ${repair}`)].join("\n") : "";
   const warnings = run.warnings.length ? ["Warnings:", ...run.warnings.map((warning) => `- ${warning}`)].join("\n") : "";
   return [content, changed, repairs, warnings].filter(Boolean).join("\n\n");
 }
 
 function renderAIMessage(content: string): string {
-  return sanitizeHtml(injectMarkdownCodeToolbarButtons(aiMarkdown.render(content)), {
-    allowedTags: [...sanitizeHtml.defaults.allowedTags, "div", "span", "button", "svg", "path", "rect", "input"],
-    allowedAttributes: {
-      ...sanitizeHtml.defaults.allowedAttributes,
-      a: ["href", "name", "target", "rel"],
-      code: ["class"],
-      input: ["aria-label", "checked", "class", "disabled", "type"],
-      li: ["class"],
-      pre: ["class"],
-      div: ["class", "data-reader-wiki-code-block"],
-      span: ["class", "aria-hidden"],
-      button: ["type", "class", "data-copy-state", "data-wrap-state", "aria-label", "title", "aria-pressed"],
-      svg: ["viewBox", "focusable", "aria-hidden"],
-      path: ["d"],
-      rect: ["width", "height", "x", "y", "rx", "ry"],
-    },
-    allowedSchemes: ["http", "https", "mailto"],
+  return DOMPurify.sanitize(injectMarkdownCodeToolbarButtons(aiMarkdown.render(content)), {
+    ADD_TAGS: ["button", "svg", "path", "rect"],
+    ADD_ATTR: [
+      "aria-hidden", "aria-label", "aria-pressed", "checked", "class", "d", "data-copy-state", "data-reader-wiki-code-block",
+      "data-wrap-state", "disabled", "focusable", "height", "href", "name", "rel", "rx", "ry", "target", "title", "type", "viewBox", "width", "x", "y",
+    ],
+    FORBID_TAGS: ["form", "iframe", "object", "script", "style", "template"],
+    FORBID_ATTR: ["srcdoc"],
+    ALLOW_DATA_ATTR: true,
+    SANITIZE_DOM: true,
+    SANITIZE_NAMED_PROPS: true,
   });
 }
 

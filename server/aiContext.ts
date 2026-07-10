@@ -4,20 +4,37 @@ import { HttpError, isHttpError } from "./errors.js";
 import { loadAIChatSystemPrompt } from "./aiPromptPolicy.js";
 import { normalizeRelativePath, resolveRepoPath } from "./pathGuard.js";
 import type { RepositoryRegistry } from "./repositoryRegistry.js";
+import { assertRepositoryRevision } from "./repositoryRevision.js";
 import { readRepoFile, readTree } from "./repoFiles.js";
 import type { AIChatContext, AIChatContextItem, AIChatContextPathRequest, AIChatContextRequest, AIChatContextRole, AIChatContextSource, RepositoryConfig, TreeNode } from "./types.js";
 
 const TEXT_CONTEXT_KINDS = new Set(["markdown", "code", "text", "html"]);
 const MAX_CONTEXT_CHARS = 16000;
+const MAX_PRIMARY_CONTEXT_ITEMS = 12;
+const MAX_RULE_CONTEXT_ITEMS = 2;
+const MAX_CONTEXT_TOTAL_BYTES = 64 * 1024;
 const ROOT_RULE_PATHS = new Set(["AGENTS.md", "CLAUDE.md"]);
 
 export async function buildAIChatContext(registry: RepositoryRegistry, request: AIChatContextRequest): Promise<AIChatContext> {
   const repo = await registry.findRepository(String(request.repoId || ""));
+  return buildAIChatContextForRepository(repo, request);
+}
+
+export async function buildAIChatContextForRepository(repo: RepositoryConfig, request: AIChatContextRequest): Promise<AIChatContext> {
+  const revision = await assertRepositoryRevision(repo, request.expectedRevision);
   const normalized = normalizeContextRequest(request);
+  if (normalized.primaryPaths.length > MAX_PRIMARY_CONTEXT_ITEMS || normalized.rulePaths.length > MAX_RULE_CONTEXT_ITEMS) {
+    throw new HttpError(413, `AI Chat context supports up to ${MAX_PRIMARY_CONTEXT_ITEMS} primary items and ${MAX_RULE_CONTEXT_ITEMS} rule items.`);
+  }
   const primaryItems = await materializeContextItems(repo, normalized.primaryPaths, "primary");
   const ruleItems = await materializeContextItems(repo, normalized.rulePaths, "rule");
+  const totalBytes = [...primaryItems, ...ruleItems].reduce((sum, item) => sum + Buffer.byteLength(item.content || "", "utf8"), 0);
+  if (totalBytes > MAX_CONTEXT_TOTAL_BYTES) {
+    throw new HttpError(413, `AI Chat context exceeds the ${MAX_CONTEXT_TOTAL_BYTES}-byte aggregate limit.`);
+  }
   return {
     repoId: repo.id,
+    revision,
     systemPromptVersion: loadAIChatSystemPrompt().version,
     primaryItems,
     ruleItems,

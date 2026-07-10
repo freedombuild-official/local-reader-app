@@ -1,11 +1,13 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import axe from "axe-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App, buildSandboxedHtmlSrcDoc } from "../src/App";
 
 const fetchMock = vi.fn<typeof fetch>();
 const stylesCss = readFileSync(path.join(process.cwd(), "src/styles.css"), "utf8");
+const repoRevisions = { docs: "revision-docs-v1", alt: "revision-alt-v1" } as const;
 
 const treeNodes = [
   { name: "docs", path: "docs", type: "directory", extension: "", gitStatus: "changed" },
@@ -93,8 +95,11 @@ beforeEach(() => {
     const repoId = String(body.repoId || "docs");
     return json({
       repoId,
+      revision: repoId === "alt" ? repoRevisions.alt : repoRevisions.docs,
       sync: { state: "disabled", message: "Git remote fetch disabled.", fetched: false },
       tree: repoId === "alt" ? altTreeSnapshot : treeSnapshot,
+      treeTruncated: false,
+      treeWarnings: [],
     });
   };
   Object.defineProperty(window, "open", { value: windowOpenMock, configurable: true, writable: true });
@@ -103,8 +108,8 @@ beforeEach(() => {
     if (url === "/api/repos") {
       return json({
         repositories: [
-          { id: "docs", label: "Docs", root: "/tmp/docs", defaultPath: "README.md", exists: true },
-          { id: "alt", label: "Alt", root: "/tmp/alt", defaultPath: "ALT.md", exists: true },
+          { id: "docs", label: "Docs", root: "/tmp/docs", defaultPath: "README.md", exists: true, revision: repoRevisions.docs },
+          { id: "alt", label: "Alt", root: "/tmp/alt", defaultPath: "ALT.md", exists: true, revision: repoRevisions.alt },
         ],
       });
     }
@@ -131,15 +136,21 @@ beforeEach(() => {
       const body = parseJsonBody(init?.body) as { target?: { kind?: string; entry?: string; provider?: { entry?: string } }; provider?: { entry?: string }; messages?: Array<{ content?: string }> };
       const target = body.target?.entry || body.target?.provider?.entry || body.provider?.entry || body.target?.kind || "provider";
       const hasDuplicateCheck = (body.messages || []).some((message) => (message.content || "").toLowerCase().includes("duplicate"));
+      const hasUnverifiedAudit = (body.messages || []).some((message) => (message.content || "").toLowerCase().includes("unverified audit"));
       const codeBlock = "```ts\nconst ok = true;\n```";
       const content = `${target} says the active file says hello.\n\n- [x] Render task item\n\n${codeBlock}`;
       const run = {
         accessMode: "repoWrite",
         entry: target,
         substrate: target === "claudeCli" ? "claudeCli" : "codexCli",
-        changedPaths: [{ path: "README.md", status: "changed" }],
+        auditState: hasUnverifiedAudit ? "unverified" : "verified",
+        changedPaths: hasUnverifiedAudit ? [] : [{ path: "README.md", status: "changed" }],
         repairs: [],
-        warnings: hasDuplicateCheck ? ["Duplicate edit detected in README.md: repeated block \"## Write Result 2\"."] : [],
+        warnings: hasUnverifiedAudit
+          ? ["Repository changes are unverified because the bounded workspace audit was incomplete."]
+          : hasDuplicateCheck
+            ? ["Duplicate edit detected in README.md: repeated block \"## Write Result 2\"."]
+            : [],
       };
       const payload = {
         message: { role: "assistant", content },
@@ -149,7 +160,7 @@ beforeEach(() => {
       };
       if (url === "/api/ai/chat/stream") {
         return streamJsonLines([
-          { type: "meta", context: payload.context },
+          { type: "meta", runId: "test-run-id", context: payload.context },
           { type: "delta", content: `${target} says ` },
           { type: "delta", content: "the active file says hello." },
           { type: "delta", content: `\n\n- [x] Render task item\n\n${codeBlock}` },
@@ -165,14 +176,14 @@ beforeEach(() => {
       const query = new URL(`http://local${url}`).searchParams;
       const repoId = query.get("repo") || "docs";
       const path = query.get("path") || "";
-      if (repoId === "alt") return json({ nodes: path ? [] : altTreeNodes });
-      return json({ nodes: path === "docs" ? docsTreeNodes : treeNodes });
+      if (repoId === "alt") return json({ revision: repoRevisions.alt, nodes: path ? [] : altTreeNodes });
+      return json({ revision: repoRevisions.docs, nodes: path === "docs" ? docsTreeNodes : treeNodes });
     }
     if (url.startsWith("/api/file")) {
       const query = new URL(`http://local${url}`).searchParams;
       const repoId = query.get("repo") || "docs";
       const path = query.get("path") || "README.md";
-      return json(fileForPath(path, repoId));
+      return json({ ...fileForPath(path, repoId), revision: repoId === "alt" ? repoRevisions.alt : repoRevisions.docs });
     }
     if (url === "/api/http-delivery/status") {
       return json({ state: httpDeliverySessions.length ? "running" : "idle", items: httpDeliverySessions });
@@ -205,6 +216,24 @@ afterEach(() => {
 });
 
 describe("App", () => {
+  it("has no serious or critical axe violations on the main viewer", async () => {
+    const { container } = render(<App />);
+    expect(await screen.findByRole("heading", { name: "Hello" })).toBeTruthy();
+    await expectNoSeriousAxeViolations(container);
+
+    fireEvent.click(openSettingsButton());
+    expect(await screen.findByRole("heading", { name: "Settings" })).toBeTruthy();
+    await expectNoSeriousAxeViolations(container);
+    fireEvent.click(screen.getByRole("tab", { name: "AI Chat" }));
+    expect(await screen.findByRole("heading", { name: "AI Chat Settings" })).toBeTruthy();
+    await expectNoSeriousAxeViolations(container);
+
+    fireEvent.click(screen.getByRole("button", { name: "Back to viewer" }));
+    fireEvent.click(await screen.findByRole("tab", { name: "AI Chat" }));
+    expect(await screen.findByText("AI Entry is required.")).toBeTruthy();
+    await expectNoSeriousAxeViolations(container);
+  });
+
   it("loads repositories, tree, default markdown, and the outline panel", async () => {
     render(<App />);
     expect(await screen.findByRole("heading", { name: "Reader-Wiki" })).toBeTruthy();
@@ -419,6 +448,7 @@ describe("App", () => {
       const repoId = String(body.repoId || "docs");
       return json({
         repoId,
+        revision: repoId === "alt" ? repoRevisions.alt : repoRevisions.docs,
         sync: { state: "synced", message: "Git remote metadata fetched.", fetched: true },
         tree: {
           "": [
@@ -427,6 +457,8 @@ describe("App", () => {
           ],
           docs: docsTreeNodes,
         },
+        treeTruncated: false,
+        treeWarnings: [],
       });
     };
 
@@ -458,8 +490,11 @@ describe("App", () => {
       }
       return json({
         repoId,
+        revision: repoRevisions.alt,
         sync: { state: "synced", message: "Alt metadata fetched.", fetched: true },
         tree: altTreeSnapshot,
+        treeTruncated: false,
+        treeWarnings: [],
       });
     };
 
@@ -471,6 +506,7 @@ describe("App", () => {
     await act(async () => {
       resolveReload?.(json({
         repoId: "docs",
+        revision: repoRevisions.docs,
         sync: { state: "synced", message: "Docs metadata fetched late.", fetched: true },
         tree: {
           "": [
@@ -479,6 +515,8 @@ describe("App", () => {
           ],
           docs: docsTreeNodes,
         },
+        treeTruncated: false,
+        treeWarnings: [],
       }));
     });
 
@@ -498,8 +536,11 @@ describe("App", () => {
       }
       return json({
         repoId: "alt",
+        revision: repoRevisions.alt,
         sync: { state: "skipped", message: "Git sync skipped: no remote is configured.", fetched: false },
         tree: altTreeSnapshot,
+        treeTruncated: false,
+        treeWarnings: [],
       });
     };
 
@@ -511,8 +552,11 @@ describe("App", () => {
     expect(resolveDocsOpen).toBeTruthy();
     (resolveDocsOpen as unknown as (response: Response) => void)(json({
       repoId: "docs",
+      revision: repoRevisions.docs,
       sync: { state: "synced", message: "Git remote metadata fetched.", fetched: true },
       tree: treeSnapshot,
+      treeTruncated: false,
+      treeWarnings: [],
     }));
 
     await waitFor(() => expect(screen.getByRole("button", { name: "ALT.md" })).toBeTruthy());
@@ -531,6 +575,107 @@ describe("App", () => {
     fireEvent.click(screen.getByRole("button", { name: "Collapse all folders" }));
     await waitFor(() => expect(screen.queryByRole("button", { name: "inside.md" })).toBeNull());
     expect(screen.getByRole("heading", { name: "Hello" })).toBeTruthy();
+  });
+
+  it("exposes directory and Git state and supports keyboard path-menu navigation with focus restore", async () => {
+    render(<App />);
+    expect(await screen.findByRole("heading", { name: "Hello" })).toBeTruthy();
+
+    const docsRow = screen.getByRole("button", { name: "docs" });
+    expect(docsRow.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(docsRow);
+    expect(await screen.findByRole("button", { name: "inside.md" })).toBeTruthy();
+    expect(docsRow.getAttribute("aria-expanded")).toBe("true");
+
+    const readmeRow = screen.getByRole("button", { name: "README.md" });
+    const gitDescriptionId = readmeRow.getAttribute("aria-describedby");
+    expect(gitDescriptionId).toBeTruthy();
+    expect(document.getElementById(gitDescriptionId || "")?.textContent).toContain("Git status: changed");
+
+    readmeRow.focus();
+    fireEvent.contextMenu(readmeRow, { clientX: 32, clientY: 36 });
+    const menu = screen.getByRole("menu", { name: "README.md path actions" });
+    const copyAbsolute = within(menu).getByRole("menuitem", { name: "Copy Absolute Path" });
+    const copyRelative = within(menu).getByRole("menuitem", { name: "Copy Relative Path" });
+    const openInNewTab = within(menu).getByRole("menuitem", { name: "Open in New Tab" });
+    expect(document.activeElement).toBe(copyAbsolute);
+
+    fireEvent.keyDown(copyAbsolute, { key: "ArrowDown" });
+    expect(document.activeElement).toBe(copyRelative);
+    fireEvent.keyDown(copyRelative, { key: "End" });
+    expect(document.activeElement).toBe(openInNewTab);
+    fireEvent.keyDown(openInNewTab, { key: "Home" });
+    expect(document.activeElement).toBe(copyAbsolute);
+    fireEvent.keyDown(copyAbsolute, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("menu", { name: "README.md path actions" })).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(readmeRow));
+  });
+
+  it("uses roving file tabs with tabpanel relations and keyboard tab-menu focus management", async () => {
+    render(<App />);
+    expect(await screen.findByRole("heading", { name: "Hello" })).toBeTruthy();
+    fireEvent.doubleClick(screen.getByRole("tab", { name: "README.md" }));
+    fireEvent.click(screen.getByRole("button", { name: "guide.md" }));
+    expect(await screen.findByRole("heading", { name: "Guide" })).toBeTruthy();
+
+    const readmeTab = screen.getByRole("tab", { name: "README.md" });
+    const guideTab = screen.getByRole("tab", { name: "guide.md" });
+    expect(readmeTab.tabIndex).toBe(-1);
+    expect(guideTab.tabIndex).toBe(0);
+    expect(guideTab.getAttribute("aria-controls")).toBe("reader-file-tabpanel");
+    const filePanel = screen.getByRole("tabpanel", { name: "guide.md" });
+    expect(filePanel.getAttribute("aria-labelledby")).toBe(guideTab.id);
+
+    guideTab.focus();
+    fireEvent.keyDown(guideTab, { key: "ArrowLeft" });
+    expect(document.activeElement).toBe(readmeTab);
+    expect(readmeTab.getAttribute("aria-selected")).toBe("true");
+    expect(readmeTab.tabIndex).toBe(0);
+    expect(guideTab.tabIndex).toBe(-1);
+    fireEvent.keyDown(readmeTab, { key: "End" });
+    expect(document.activeElement).toBe(guideTab);
+    expect(guideTab.getAttribute("aria-selected")).toBe("true");
+
+    fireEvent.keyDown(guideTab, { key: "ContextMenu" });
+    const tabMenu = screen.getByRole("menu", { name: "guide.md tab actions" });
+    const firstAction = within(tabMenu).getByRole("menuitem", { name: "Fix Tab" });
+    const pinAction = within(tabMenu).getByRole("menuitem", { name: "Pin" });
+    expect(document.activeElement).toBe(firstAction);
+    fireEvent.keyDown(firstAction, { key: "ArrowDown" });
+    expect(document.activeElement).toBe(pinAction);
+    fireEvent.keyDown(pinAction, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("menu", { name: "guide.md tab actions" })).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(guideTab));
+    fireEvent.keyDown(guideTab, { key: "Delete" });
+    await waitFor(() => expect(screen.queryByRole("tab", { name: "guide.md" })).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(readmeTab));
+  });
+
+  it("connects side-panel tabs and panels with roving Arrow/Home/End keyboard behavior", async () => {
+    render(<App />);
+    expect(await screen.findByRole("heading", { name: "Hello" })).toBeTruthy();
+
+    const outlineTab = screen.getByRole("tab", { name: "Outline" });
+    const memoTab = screen.getByRole("tab", { name: "Memo" });
+    const aiChatTab = screen.getByRole("tab", { name: "AI Chat" });
+    expect(outlineTab.tabIndex).toBe(0);
+    expect(memoTab.tabIndex).toBe(-1);
+    expect(aiChatTab.tabIndex).toBe(-1);
+    expect(screen.getByRole("tabpanel", { name: "Outline" }).getAttribute("aria-labelledby")).toBe(outlineTab.id);
+
+    outlineTab.focus();
+    fireEvent.keyDown(outlineTab, { key: "End" });
+    expect(document.activeElement).toBe(aiChatTab);
+    expect(aiChatTab.getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByRole("tabpanel", { name: "AI Chat" }).getAttribute("aria-labelledby")).toBe(aiChatTab.id);
+    fireEvent.keyDown(aiChatTab, { key: "Home" });
+    expect(document.activeElement).toBe(outlineTab);
+    expect(outlineTab.getAttribute("aria-selected")).toBe("true");
+    fireEvent.keyDown(outlineTab, { key: "ArrowRight" });
+    expect(document.activeElement).toBe(memoTab);
+    expect(memoTab.getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByRole("tabpanel", { name: "Memo" }).getAttribute("aria-labelledby")).toBe(memoTab.id);
+    expect(cssRule(".memo-textarea:focus-visible")).toContain("outline: 2px solid #287888;");
   });
 
   it("fixes with active double click and pins only through the file tab context menu", async () => {
@@ -557,7 +702,7 @@ describe("App", () => {
     fireEvent.contextMenu(screen.getByRole("tab", { name: "guide.md" }), { clientX: 80, clientY: 40 });
     fireEvent.click(screen.getByRole("menuitem", { name: "Unpin" }));
     expect(fileTab("guide.md").className).not.toContain("pinned");
-    fireEvent.click(screen.getByRole("button", { name: "Close guide.md" }));
+    fireEvent.click(fileTab("guide.md").querySelector(".file-tab-close") as HTMLElement);
     await waitFor(() => expect(fileTabTitles()).toEqual(["README.md"]));
   });
 
@@ -1105,6 +1250,8 @@ describe("App", () => {
     const aiApiDetails = screen.getByLabelText("AI API readiness details") as HTMLDetailsElement;
     expect(aiApiDetails.open).toBe(false);
     expect(within(aiApiDetails).getByLabelText("Readiness checklist").textContent).toContain("Next action");
+    expect(within(aiApiDetails).getByText("Endpoint / model check")).toBeTruthy();
+    expect(within(aiApiDetails).getByText("Context-only execution")).toBeTruthy();
     expect((await waitForScopedButton(nextAiApiAuth, "Check readiness") as HTMLButtonElement).disabled).toBe(true);
 
     fireEvent.change(within(nextAiApiAuth).getByLabelText("API key"), { target: { value: "local-test-key" } });
@@ -1168,6 +1315,17 @@ describe("App", () => {
     expect(await screen.findByText("aiApi says the active file says hello.")).toBeTruthy();
     expect(await screen.findByText("Warnings:")).toBeTruthy();
     await waitFor(() => expect(document.body.textContent || "").toContain("Duplicate edit detected in README.md"));
+
+    fireEvent.change(screen.getByLabelText("AI Chat message"), { target: { value: "Check unverified audit." } });
+    fireEvent.click(screen.getByRole("button", { name: "Send AI Chat message" }));
+    expect(await screen.findByText("Repository changes unverified.")).toBeTruthy();
+    expect(screen.queryByText("No repository changes.")).toBeNull();
+
+    fireEvent.change(screen.getByLabelText("Repository"), { target: { value: "alt" } });
+    expect(await screen.findByRole("heading", { name: "Alt" })).toBeTruthy();
+    expect(screen.getByText("AI Entry is not ready.")).toBeTruthy();
+    expect(screen.queryByLabelText("AI Chat message")).toBeNull();
+    expect(screen.queryByText("aiApi says the active file says hello.")).toBeNull();
   });
 
   it("sends an explicit tree path to AI Chat without auto-including the active file", async () => {
@@ -1277,6 +1435,8 @@ describe("App", () => {
     fireEvent.change(screen.getByLabelText("AI Chat message"), { target: { value: "Summarize selected path." } });
     fireEvent.click(screen.getByRole("button", { name: "Send AI Chat message" }));
     await waitFor(() => expect(screen.getByText("planned stream failure")).toBeTruthy());
+    expect(screen.getByText("Request failed before a run summary was available.")).toBeTruthy();
+    expect(screen.queryByText("Streaming...")).toBeNull();
     await waitFor(() => expect(screen.queryByLabelText("AI Chat selected paths")).toBeNull());
     const failedBody = parseJsonBody(fetchCallsTo("/api/ai/chat/stream").at(-1)?.[1]?.body);
     expect(failedBody).toMatchObject({
@@ -1319,10 +1479,17 @@ describe("App", () => {
 
     const originalFetch = fetchMock.getMockImplementation();
     let holdNextStream = true;
+    let finishCanceledStream = () => {};
     fetchMock.mockImplementation(async (input, init) => {
       if (String(input) === "/api/ai/chat/stream" && holdNextStream) {
         holdNextStream = false;
-        return abortableStreamResponse(init?.signal);
+        const held = serverCancelableStreamResponse();
+        finishCanceledStream = held.finish;
+        return held.response;
+      }
+      if (String(input) === "/api/ai/cancel") {
+        finishCanceledStream();
+        return json({ runId: "cancel-test-run", state: "canceling" }, 202);
       }
       return originalFetch ? originalFetch(input, init) : json({ error: "missing fetch" }, 500);
     });
@@ -1339,7 +1506,7 @@ describe("App", () => {
     });
 
     fireEvent.click(screen.getByRole("button", { name: "Cancel AI Chat request" }));
-    await waitFor(() => expect(screen.queryByRole("button", { name: "Cancel AI Chat request" })).toBeNull());
+    await waitFor(() => expect(screen.getByRole("button", { name: "Send AI Chat message" })).toBeTruthy());
     fireEvent.change(screen.getByLabelText("AI Chat message"), { target: { value: "Follow-up after cancel." } });
     fireEvent.click(screen.getByRole("button", { name: "Send AI Chat message" }));
     await waitFor(() => expect(fetchCallsTo("/api/ai/chat/stream").length).toBeGreaterThan(1));
@@ -1377,7 +1544,8 @@ describe("App", () => {
     fireEvent.click(screen.getByRole("button", { name: "Back to viewer" }));
     fireEvent.click(await screen.findByRole("tab", { name: "AI Chat" }));
     const messageInput = screen.getByLabelText("AI Chat message") as HTMLTextAreaElement;
-    const aiChatPanel = screen.getByLabelText("AI Chat");
+    const aiChatPanel = document.querySelector(".ai-chat-panel") as HTMLElement;
+    expect(aiChatPanel).toBeTruthy();
     expect(aiChatPanel.querySelector(".ai-chat-status")).toBeNull();
     expect(within(aiChatPanel).queryByText("Codex CLI")).toBeNull();
     expect(within(aiChatPanel).queryByText("codex / medium")).toBeNull();
@@ -1705,6 +1873,7 @@ function repositoryConfigState() {
     exists: true,
     readable: true,
     writable: true,
+    configRevision: "config-revision-v1",
     entries: [
       { id: "docs", label: "Docs", root: "/tmp/docs", defaultPath: "README.md", excludes: [".git", "node_modules"], fetchRemote: false },
     ],
@@ -1855,4 +2024,48 @@ function abortableStreamResponse(signal?: AbortSignal | null): Response {
     }),
     { status: 200, headers: { "Content-Type": "application/x-ndjson" } },
   );
+}
+
+function serverCancelableStreamResponse(): { response: Response; finish: () => void } {
+  const encoder = new TextEncoder();
+  let streamController: ReadableStreamDefaultController<Uint8Array> | null = null;
+  const response = new Response(
+    new ReadableStream<Uint8Array>({
+      start(controller) {
+        streamController = controller;
+        controller.enqueue(encoder.encode(`${JSON.stringify({
+          type: "meta",
+          runId: "cancel-test-run",
+          context: { repoId: "docs", revision: repoRevisions.docs, systemPromptVersion: "1.0.0", primaryItems: [], ruleItems: [] },
+        })}\n`));
+      },
+    }),
+    { status: 200, headers: { "Content-Type": "application/x-ndjson" } },
+  );
+  return {
+    response,
+    finish: () => {
+      streamController?.enqueue(encoder.encode(`${JSON.stringify({
+        type: "error",
+        error: "AI Chat request canceled.",
+        details: {
+          run: {
+            accessMode: "repoWrite",
+            entry: "aiApi",
+            substrate: "codexCli",
+            auditState: "verified",
+            changedPaths: [],
+            repairs: [],
+            warnings: ["Postflight audit completed after cancellation."],
+          },
+        },
+      })}\n`));
+      streamController?.close();
+    },
+  };
+}
+
+async function expectNoSeriousAxeViolations(container: HTMLElement): Promise<void> {
+  const results = await axe.run(container, { rules: { "color-contrast": { enabled: false } } });
+  expect(results.violations.filter((violation) => violation.impact === "serious" || violation.impact === "critical")).toEqual([]);
 }

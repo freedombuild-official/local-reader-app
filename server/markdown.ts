@@ -15,6 +15,8 @@ export type MarkdownRenderContext = {
   repoId: string;
   currentPath: string;
   repoRoot?: string;
+  revision?: string;
+  localAssetBaseUrl?: string;
 };
 
 export function renderMarkdown(content: string, context?: MarkdownRenderContext): { frontmatter: string; body: string; html: string } {
@@ -95,7 +97,12 @@ function resolveMarkdownImageSrc(src: string | undefined, context?: MarkdownRend
   const pathInput = normalized.startsWith("/") ? normalized.slice(1) : path.posix.join(parentPath(context.currentPath), normalized);
   const repoRelativePath = normalizeRepoRelativePath(pathInput);
   if (!repoRelativePath) return null;
-  const query = new URLSearchParams({ repo: context.repoId, path: repoRelativePath });
+  if (context.localAssetBaseUrl) {
+    const query = new URLSearchParams({ asset: repoRelativePath });
+    return `${context.localAssetBaseUrl}?${query.toString()}`;
+  }
+  if (!context.revision) return null;
+  const query = new URLSearchParams({ repo: context.repoId, path: repoRelativePath, revision: context.revision });
   return `/api/image?${query.toString()}`;
 }
 
