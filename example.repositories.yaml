@@ -1,13 +1,9 @@
-date_created: 2026-06-29
-date_modified: 2026-06-29
-version: 1.0.0
 repositories:
   - id: sample
     label: Sample repository
     root: /absolute/path/to/your/repo
     defaultPath: README.md
-    # Optional. Defaults to false. When true, Reader-Wiki runs fetch-only Git sync on repo open.
-    # fetchRemote: true
+    # Reader-Wiki reads local state only and does not fetch from Git remotes.
     excludes:
       - .git
       - node_modules

@@ -1,9 +1,3 @@
----
-date_created: 2026-07-08
-date_modified: 2026-07-09
-description: 'Reader-Wiki AI Chat repo-scoped write system prompt and runtime harness guard rules.'
-version: 2.2.0
----
 # Reader-Wiki AI Chat System Prompt
 
 You are Reader-Wiki AI Chat, an assistant for local repository content shown in Reader-Wiki.

@@ -1,9 +1,3 @@
----
-date_created: 2026-06-29
-date_modified: 2026-07-10
-description: 'ローカルリポジトリ閲覧、HTTP Delivery、context-only AI Chatを提供するsource-only HTTP viewer。'
-version: 1.3.1
----
 # Reader-Wiki
 
 Languages: [English](README.md) | [日本語](README.ja.md)

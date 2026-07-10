@@ -1,9 +1,3 @@
----
-date_created: 2026-06-29
-date_modified: 2026-06-29
-description: 'README.md をアメリカ英語版の正本とし README.ja.md を同期対象にする翻訳運用ルール。'
-version: 1.0.0
----
 # README Localization
 
 ## Policy

@@ -1,9 +1,3 @@
----
-date_created: 2026-07-10
-date_modified: 2026-07-10
-description: '未公開の脆弱性報告導線、対応対象、公開前に人間が完了すべきsecurity gateを定義する。'
-version: 1.0.0
----
 # Security Policy
 
 ## Overview
