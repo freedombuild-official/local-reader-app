@@ -17,6 +17,18 @@ import type {
   TreeNode,
 } from "./types";
 
+export class AIChatRequestError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly code = "",
+    readonly entry?: AIEntryKind,
+  ) {
+    super(message);
+    this.name = "AIChatRequestError";
+  }
+}
+
 export async function fetchRepos(): Promise<RepoListItem[]> {
   const data = await requestJson<{ repositories: RepoListItem[] }>("/api/repos");
   return data.repositories;
@@ -130,8 +142,10 @@ export async function streamAIChatMessage(request: AIChatRequest, onEvent: (even
     cache: "no-store",
   });
   if (!response.ok) {
-    const data = (await response.json().catch(() => ({}))) as { error?: string };
-    throw new Error(data.error || `HTTP ${response.status}`);
+    const data = (await response.json().catch(() => ({}))) as { error?: string; details?: { code?: unknown; entry?: unknown } };
+    const code = typeof data.details?.code === "string" ? data.details.code : "";
+    const entry = isAIEntryKind(data.details?.entry) ? data.details.entry : undefined;
+    throw new AIChatRequestError(data.error || `HTTP ${response.status}`, response.status, code, entry);
   }
   if (!response.body) throw new Error("AI Chat stream is not available in this browser.");
 
@@ -150,6 +164,10 @@ export async function streamAIChatMessage(request: AIChatRequest, onEvent: (even
     if (done) break;
   }
   if (buffer.trim()) onEvent(JSON.parse(buffer) as AIChatStreamEvent);
+}
+
+function isAIEntryKind(value: unknown): value is AIEntryKind {
+  return value === "aiApi" || value === "localAi" || value === "codexCli" || value === "claudeCli";
 }
 
 export function imageFileUrl(repoId: string, path: string, revision: string, assetVersion = ""): string {

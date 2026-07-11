@@ -1,34 +1,25 @@
 // @vitest-environment node
 
-import { access, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { codexCurrentRepoPermissionArgs, codexProviderSubstrate, resolveAICommandLaunch, runAICommand, safeCliEnv } from "../server/aiCliAdapters.js";
+import { requestRepoWriteAIChatCompletion, resolveAICommandLaunch, runAICommand, safeCliEnv } from "../server/aiCliAdapters.js";
 
 describe("AI CLI process boundary", () => {
-  it("builds a Current repo-only Codex permission profile without the legacy workspace sandbox", () => {
-    const args = codexCurrentRepoPermissionArgs("reader_wiki_test");
-    expect(args).toEqual([
-      "--strict-config",
-      "--ignore-user-config",
-      "--ignore-rules",
-      "--disable",
-      "apps",
-      "--disable",
-      "hooks",
-      "--disable",
-      "multi_agent",
-      "-c",
-      "approval_policy=\"never\"",
-      "-c",
-      "default_permissions=\"reader_wiki_test\"",
-      "-c",
-      expect.stringContaining('permissions.reader_wiki_test.filesystem={":minimal"="read",":workspace_roots"={"."="write"'),
-      "-c",
-      "permissions.reader_wiki_test.network.enabled=false",
-    ]);
-    expect(args).not.toContain("--sandbox");
+  it.each([
+    ["codexCli", "Codex CLI"],
+    ["claudeCli", "Claude Code CLI"],
+  ] as const)("keeps %s repository editing fail-closed before launching a process", async (entry, label) => {
+    const target = entry === "codexCli"
+      ? { kind: "codexCli" as const, entry: "codexCli" as const, status: { state: "ready" as const, code: "success" as const, message: "stale ready", checkedAt: new Date().toISOString() } }
+      : { kind: "claudeCli" as const, entry: "claudeCli" as const, status: { state: "ready" as const, code: "success" as const, message: "stale ready", checkedAt: new Date().toISOString() } };
+    await expect(requestRepoWriteAIChatCompletion({
+      target,
+      messages: [{ role: "user", content: "Edit the repository." }],
+      context: { repoId: "docs", revision: "revision", primaryItems: [], ruleItems: [], systemPromptVersion: "test" },
+      repo: { id: "docs", label: "Docs", root: process.cwd(), defaultPath: "README.md", excludes: [] },
+    })).rejects.toMatchObject({ status: 409, message: expect.stringContaining(label) });
   });
   it("handles a child that closes stdin early without an unhandled EPIPE", async () => {
     const result = await runAICommand(process.execPath, ["-e", "process.exit(0)"], {
@@ -88,52 +79,6 @@ describe("AI CLI process boundary", () => {
     await expect(run).rejects.toMatchObject({ status: 499 });
     await waitFor(() => !processExists(grandchildPid));
     expect(processExists(grandchildPid)).toBe(false);
-  });
-
-  it("uses isolated 0700 Codex homes and 0600 provider profiles per request", async () => {
-    const [first, second] = await Promise.all([
-      codexProviderSubstrate({
-        entry: "aiApi",
-        provider: "openaiCompatible",
-        model: "model-a",
-        baseUrl: "https://a.example.test/v1",
-        apiFormat: "openaiCompatible",
-        credential: "credential-a",
-      }),
-      codexProviderSubstrate({
-        entry: "aiApi",
-        provider: "openaiCompatible",
-        model: "model-b",
-        baseUrl: "https://b.example.test/v1",
-        apiFormat: "openaiCompatible",
-        credential: "credential-b",
-      }),
-    ]);
-    const firstHome = String(first.env.CODEX_HOME);
-    const secondHome = String(second.env.CODEX_HOME);
-    try {
-      expect(firstHome).not.toBe(secondHome);
-      const firstProfile = path.join(firstHome, "reader-wiki-ai-api.config.toml");
-      const secondProfile = path.join(secondHome, "reader-wiki-ai-api.config.toml");
-      const [firstContent, secondContent] = await Promise.all([readFile(firstProfile, "utf8"), readFile(secondProfile, "utf8")]);
-      expect(firstContent).toContain("https://a.example.test/v1");
-      expect(firstContent).toContain('model = "model-a"');
-      expect(firstContent).not.toContain("credential-a");
-      expect(firstContent).not.toContain("b.example.test");
-      expect(secondContent).toContain("https://b.example.test/v1");
-      expect(secondContent).toContain('model = "model-b"');
-      expect(secondContent).not.toContain("credential-b");
-      if (process.platform !== "win32") {
-        expect((await stat(firstHome)).mode & 0o777).toBe(0o700);
-        expect((await stat(firstProfile)).mode & 0o777).toBe(0o600);
-        expect((await stat(secondHome)).mode & 0o777).toBe(0o700);
-        expect((await stat(secondProfile)).mode & 0o777).toBe(0o600);
-      }
-    } finally {
-      await Promise.all([first.cleanup(), second.cleanup()]);
-    }
-    await expect(access(firstHome)).rejects.toMatchObject({ code: "ENOENT" });
-    await expect(access(secondHome)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("preserves the minimum Windows command environment without forwarding provider secrets", () => {

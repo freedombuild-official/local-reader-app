@@ -3,7 +3,7 @@
 import express from "express";
 import { type Server } from "node:http";
 import { describe, expect, it } from "vitest";
-import { requestAIChatCompletionStream, testAIConnection } from "../server/aiProviders.js";
+import { requestAIChatCompletion, requestAIChatCompletionStream, testAIConnection } from "../server/aiProviders.js";
 import type { AIProviderSettings } from "../server/types.js";
 
 async function listen(app: express.Express): Promise<{ url: string; close: () => Promise<void> }> {
@@ -99,6 +99,44 @@ describe("AI provider network boundary", () => {
         state: "failed",
         code: "provider_http_error",
         message: expect.stringContaining("empty"),
+      });
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("sends a caller-supplied protocol instruction as an OpenAI-compatible system message", async () => {
+    const app = express();
+    let receivedMessages: Array<{ role?: string; content?: string }> = [];
+    let receivedTemperature: number | undefined;
+    let receivedResponseFormat: { type?: string; json_schema?: { strict?: boolean; schema?: { additionalProperties?: boolean } } } | undefined;
+    app.use(express.json());
+    app.post("/v1/chat/completions", (request, response) => {
+      const body = request.body as {
+        messages?: Array<{ role?: string; content?: string }>;
+        temperature?: number;
+        response_format?: typeof receivedResponseFormat;
+      };
+      receivedMessages = body.messages || [];
+      receivedTemperature = body.temperature;
+      receivedResponseFormat = body.response_format;
+      response.json({ choices: [{ message: { content: "ok" } }] });
+    });
+    const server = await listen(app);
+    try {
+      await expect(requestAIChatCompletion({
+        provider: localProvider(`${server.url}/v1`),
+        systemPrompt: "Return only the versioned protocol object.",
+        messages: [{ role: "user", content: "plan" }],
+      })).resolves.toMatchObject({ content: "ok" });
+      expect(receivedMessages).toEqual([
+        { role: "system", content: "Return only the versioned protocol object." },
+        { role: "user", content: "plan" },
+      ]);
+      expect(receivedTemperature).toBe(0);
+      expect(receivedResponseFormat).toMatchObject({
+        type: "json_schema",
+        json_schema: { strict: false, schema: { additionalProperties: false } },
       });
     } finally {
       await server.close();

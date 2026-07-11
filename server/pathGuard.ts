@@ -146,9 +146,9 @@ export function relativePathFromRoot(rootRealPath: string, candidateRealPath: st
 }
 
 function matchesPattern(pattern: string, relativePath: string): boolean {
-  const cleanPattern = pattern.trim().replace(/\/+$/, "");
+  const cleanPattern = pattern.trim().replaceAll("\\", "/").replace(/\/+$/, "").normalize("NFC");
   if (!cleanPattern) return false;
-  const normalized = relativePath.replaceAll("\\", "/");
+  const normalized = relativePath.replaceAll("\\", "/").normalize("NFC");
   const basename = path.posix.basename(normalized);
   const segments = normalized.split("/");
 

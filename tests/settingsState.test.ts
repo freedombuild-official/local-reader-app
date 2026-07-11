@@ -10,10 +10,13 @@ import {
   loadBasicSettings,
   normalizeAISettingsState,
   persistBasicSettings,
+  providerExecutionMode,
+  updateAIEntry,
+  updateCliEntryReadiness,
   updateAIModelBehavior,
   type AISettingsState,
 } from "../src/settingsState";
-import type { AIProviderSettings, CliAIEntrySettings } from "../src/types";
+import type { AIEntryReadiness, AIProviderSettings, CliAIEntrySettings } from "../src/types";
 
 describe("settings state", () => {
   afterEach(() => {
@@ -137,7 +140,64 @@ describe("settings state", () => {
     expect(effectiveAIStatus(migrated, "codexCli")).toMatchObject({ state: "ready", message: "old status" });
   });
 
-  it("selects provider and CLI chat targets only when the active entry is ready", () => {
+  it("defaults legacy provider access to context-only and invalidates readiness when the mode changes", () => {
+    const legacy = {
+      ...defaultAISettings,
+      entries: {
+        ...defaultAISettings.entries,
+        aiApi: { ...(defaultAISettings.entries.aiApi as AIProviderSettings), executionMode: undefined },
+        localAi: { ...(defaultAISettings.entries.localAi as AIProviderSettings), executionMode: "unknown" },
+      },
+    } as unknown as AISettingsState;
+    const normalized = normalizeAISettingsState(legacy);
+    expect(providerExecutionMode(normalized.entries.aiApi as AIProviderSettings)).toBe("readOnly");
+    expect(providerExecutionMode(normalized.entries.localAi as AIProviderSettings)).toBe("readOnly");
+
+    const ready = {
+      ...normalized,
+      statuses: {
+        ...normalized.statuses,
+        aiApi: { state: "ready", code: "success", message: "Ready.", checkedAt: "2026-07-11T00:00:00.000Z" },
+      },
+      lastCheckedAtByEntry: { ...normalized.lastCheckedAtByEntry, aiApi: "2026-07-11T00:00:00.000Z" },
+    } as AISettingsState;
+    const updated = updateAIEntry(ready, "aiApi", { executionMode: "repoWrite" });
+    expect(providerExecutionMode(updated.entries.aiApi as AIProviderSettings)).toBe("repoWrite");
+    expect(updated.statuses.aiApi).toBeNull();
+    expect(updated.lastCheckedAtByEntry.aiApi).toBe("");
+  });
+
+  it("keeps the browser-held provider credential when readiness returns only public settings", () => {
+    const currentProvider = {
+      ...(defaultAISettings.entries.aiApi as AIProviderSettings),
+      credential: "browser-only-secret",
+      executionMode: "repoWrite" as const,
+    };
+    const readiness: AIEntryReadiness = {
+      entry: "aiApi",
+      settings: {
+        ...currentProvider,
+        credential: undefined,
+      },
+      status: {
+        state: "ready",
+        code: "success",
+        message: "Ready.",
+        checkedAt: "2026-07-11T00:00:00.000Z",
+      },
+      ready: true,
+      checks: [],
+    };
+
+    const updated = updateCliEntryReadiness({
+      ...defaultAISettings,
+      entries: { ...defaultAISettings.entries, aiApi: currentProvider },
+    }, readiness);
+    expect((updated.entries.aiApi as AIProviderSettings).credential).toBe("browser-only-secret");
+    expect(updated.statuses.aiApi).toMatchObject({ state: "ready", code: "success" });
+  });
+
+  it("selects ready provider chat targets while keeping CLI entries fail-closed", () => {
     const localAiReady: AIProviderSettings = { ...(defaultAISettings.entries.localAi as AIProviderSettings), model: "local-model" };
     const aiApiReady: AIProviderSettings = { ...(defaultAISettings.entries.aiApi as AIProviderSettings), credential: "local-test-key" };
     const codexReady: CliAIEntrySettings = {
@@ -176,19 +236,25 @@ describe("settings state", () => {
       provider: aiApiReady,
       status: { state: "ready", code: "success" },
     });
-    expect(activeAIChatTarget({ ...defaultAISettings, activeEntry: "codexCli", entries: { ...defaultAISettings.entries, codexCli: codexReady } })).toMatchObject({
-      kind: "codexCli",
-      entry: "codexCli",
-      status: { state: "ready" },
-    });
+    expect(activeAIChatTarget({ ...defaultAISettings, activeEntry: "codexCli", entries: { ...defaultAISettings.entries, codexCli: codexReady } })).toBeNull();
     expect(activeAIChatTarget({ ...defaultAISettings, activeEntry: "codexCli", entries: { ...defaultAISettings.entries, codexCli: codexReadOnly } })).toBeNull();
   });
 
   it("normalizes AI model behavior by active entry and model capability", () => {
     const codexSettings = { ...defaultAISettings, activeEntry: "codexCli" as const };
-    expect(aiModelBehaviorCapability(codexSettings, "codexCli")).toMatchObject({ kind: "intelligence", levels: ["low", "medium", "high", "xhigh"] });
-    expect(activeAIModelBehavior(codexSettings)).toEqual({ kind: "intelligence", level: "medium" });
-    expect(activeAIModelBehavior(updateAIModelBehavior(codexSettings, "codexCli", { kind: "intelligence", level: "xhigh" }))).toEqual({ kind: "intelligence", level: "xhigh" });
+    expect(aiModelBehaviorCapability(codexSettings, "codexCli")).toMatchObject({ kind: "none", label: "CLI diagnostics only" });
+    expect(activeAIModelBehavior(codexSettings)).toEqual({ kind: "none" });
+    expect(activeAIModelBehavior(updateAIModelBehavior(codexSettings, "codexCli", { kind: "intelligence", level: "xhigh" }))).toEqual({ kind: "none" });
+
+    const gptApi: AIProviderSettings = { ...(defaultAISettings.entries.aiApi as AIProviderSettings), provider: "openai", model: "gpt-5" };
+    const gptSettings = {
+      ...defaultAISettings,
+      activeEntry: "aiApi" as const,
+      entries: { ...defaultAISettings.entries, aiApi: gptApi },
+    };
+    expect(aiModelBehaviorCapability(gptSettings, "aiApi")).toMatchObject({ kind: "intelligence", levels: ["low", "medium", "high"] });
+    expect(activeAIModelBehavior(gptSettings)).toEqual({ kind: "intelligence", level: "medium" });
+    expect(activeAIModelBehavior(updateAIModelBehavior(gptSettings, "aiApi", { kind: "intelligence", level: "high" }))).toEqual({ kind: "intelligence", level: "high" });
 
     const qwenLocal: AIProviderSettings = { ...(defaultAISettings.entries.localAi as AIProviderSettings), model: "qwen3:latest" };
     const qwenSettings = {

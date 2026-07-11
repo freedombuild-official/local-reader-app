@@ -126,44 +126,57 @@ beforeEach(() => {
       return json(repositoryConfigState());
     }
     if (url === "/api/ai/test-connection") {
-      return json({ state: "ready", code: "success", severity: "success", message: "Connected.", nextAction: "Run AI Entry readiness to confirm Codex-backed write mode.", checkedAt: "2026-07-03T00:00:00.000Z" });
+      return json({ state: "ready", code: "success", severity: "success", message: "Connected.", nextAction: "Run AI Entry readiness to confirm the selected access policy.", checkedAt: "2026-07-03T00:00:00.000Z" });
     }
     if (url === "/api/ai/entry-readiness") {
       const body = parseJsonBody(init?.body) as { entry?: string; provider?: Record<string, unknown> };
       return json(aiEntryReadiness(String(body.entry || "codexCli"), body.provider));
     }
     if (url === "/api/ai/chat" || url === "/api/ai/chat/stream") {
-      const body = parseJsonBody(init?.body) as { target?: { kind?: string; entry?: string; provider?: { entry?: string } }; provider?: { entry?: string }; messages?: Array<{ content?: string }> };
+      const body = parseJsonBody(init?.body) as {
+        target?: { kind?: string; entry?: string; provider?: { entry?: string; executionMode?: string } };
+        provider?: { entry?: string };
+        messages?: Array<{ content?: string }>;
+        context?: { repoId?: string; expectedRevision?: string; primaryPaths?: Array<{ path?: string }> };
+      };
       const target = body.target?.entry || body.target?.provider?.entry || body.provider?.entry || body.target?.kind || "provider";
+      const providerRepoWriteMode = body.target?.provider?.executionMode === "repoWrite";
+      const providerTarget = target === "aiApi" || target === "localAi";
       const hasDuplicateCheck = (body.messages || []).some((message) => (message.content || "").toLowerCase().includes("duplicate"));
       const hasUnverifiedAudit = (body.messages || []).some((message) => (message.content || "").toLowerCase().includes("unverified audit"));
       const codeBlock = "```ts\nconst ok = true;\n```";
       const content = `${target} says the active file says hello.\n\n- [x] Render task item\n\n${codeBlock}`;
       const run = {
-        accessMode: "repoWrite",
+        accessMode: providerRepoWriteMode || !providerTarget ? "repoWrite" : "readOnly",
         entry: target,
-        substrate: target === "claudeCli" ? "claudeCli" : "codexCli",
+        substrate: providerRepoWriteMode ? "serverEditProtocol" : providerTarget ? "directProvider" : target === "claudeCli" ? "claudeCli" : "codexCli",
         auditState: hasUnverifiedAudit ? "unverified" : "verified",
-        changedPaths: hasUnverifiedAudit ? [] : [{ path: "README.md", status: "changed" }],
+        changedPaths: hasUnverifiedAudit ? [] : providerRepoWriteMode
+          ? [{ path: "guide.md", status: "changed" }, { path: "docs/generated.md", status: "new" }]
+          : providerTarget ? [] : [{ path: "README.md", status: "changed" }],
         repairs: [],
         warnings: hasUnverifiedAudit
           ? ["Repository changes are unverified because the bounded workspace audit was incomplete."]
           : hasDuplicateCheck
             ? ["Duplicate edit detected in README.md: repeated block \"## Write Result 2\"."]
-            : [],
+            : providerTarget && !providerRepoWriteMode
+              ? ["Context-only execution: Reader-Wiki did not grant repository write tools."]
+              : [],
       };
       const payload = {
-        message: { role: "assistant", content },
+        message: { role: "assistant", content: providerRepoWriteMode ? "Repo-wide Current repo run completed." : content },
         context: { repoId: "docs", systemPromptVersion: "1.0.0", primaryItems: [{ repoId: "docs", role: "primary", source: "manual", path: "README.md", name: "README.md", kind: "file", fileKind: "markdown", viewerStatus: "displayable", lineCount: 12, byteLength: 120, contentIncluded: true, content: "# Hello" }], ruleItems: [] },
         status: { state: "ready", message: "Response received.", checkedAt: "2026-07-03T00:00:00.000Z" },
         run,
       };
       if (url === "/api/ai/chat/stream") {
         return streamJsonLines([
-          { type: "meta", runId: "test-run-id", context: payload.context },
-          { type: "delta", content: `${target} says ` },
-          { type: "delta", content: "the active file says hello." },
-          { type: "delta", content: `\n\n- [x] Render task item\n\n${codeBlock}` },
+          { type: "meta", runId: providerRepoWriteMode ? "test-repo-write-run-id" : "test-run-id", context: payload.context },
+          { type: "delta", content: providerRepoWriteMode ? payload.message.content : `${target} says ` },
+          ...(!providerRepoWriteMode ? [
+            { type: "delta", content: "the active file says hello." },
+            { type: "delta", content: `\n\n- [x] Render task item\n\n${codeBlock}` },
+          ] : []),
           { type: "done", ...payload },
         ]);
       }
@@ -432,10 +445,14 @@ describe("App", () => {
     fireEvent.click(openSettingsButton());
     expect(await screen.findByRole("heading", { name: "Settings" })).toBeTruthy();
     fireEvent.click(screen.getByRole("tab", { name: "AI Chat" }));
-    const codexCliEntry = screen.getByLabelText(["Co", "dex CLI entry"].join(""));
-    fireEvent.click(within(codexCliEntry).getByRole("button", { name: "Set active" }));
-    const codexCliReadiness = screen.getByLabelText(["Co", "dex CLI readiness"].join(""));
-    await waitFor(() => expect(within(codexCliReadiness).getByRole("button", { name: "Check again" })).toBeTruthy());
+    const aiApiEntry = screen.getByLabelText("AI API entry");
+    fireEvent.click(within(aiApiEntry).getByRole("button", { name: "Set active" }));
+    const aiApiAuth = screen.getByLabelText("AI API connection");
+    fireEvent.change(within(aiApiAuth).getByLabelText("API key"), { target: { value: "local-test-key" } });
+    fireEvent.change(within(aiApiAuth).getByLabelText("Provider"), { target: { value: "openai" } });
+    fireEvent.change(within(aiApiAuth).getByLabelText("Model"), { target: { value: "gpt-5" } });
+    fireEvent.click(await waitForScopedButton(aiApiAuth, "Check readiness"));
+    expect((await screen.findAllByText("Connected")).length).toBeGreaterThan(0);
     fireEvent.click(screen.getByRole("button", { name: "Back to viewer" }));
     fireEvent.click(screen.getByRole("tab", { name: "AI Chat" }));
     const chatInput = await screen.findByLabelText("AI Chat message");
@@ -1204,7 +1221,7 @@ describe("App", () => {
     const aiEntryHeading = screen.getByRole("heading", { name: "AI Entry" });
     const accessHeading = screen.getByRole("heading", { name: "Access policy" });
     expect(aiEntryHeading.compareDocumentPosition(accessHeading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(screen.getByText("CLI Current repo write")).toBeTruthy();
+    expect(screen.getByText("Current repo write")).toBeTruthy();
     expect(screen.getByText("Context-only or Current repo write")).toBeTruthy();
     expect(screen.queryByRole("heading", { name: "Connection / Credentials" })).toBeNull();
     expect(screen.queryByRole("heading", { name: "Readiness diagnostics" })).toBeNull();
@@ -1253,7 +1270,7 @@ describe("App", () => {
     expect(aiApiDetails.open).toBe(false);
     expect(within(aiApiDetails).getByLabelText("Readiness checklist").textContent).toContain("Next action");
     expect(within(aiApiDetails).getByText("Endpoint / model check")).toBeTruthy();
-    expect(within(aiApiDetails).getByText("Context-only execution")).toBeTruthy();
+    expect(within(aiApiDetails).getByText("Provider access policy")).toBeTruthy();
     expect((await waitForScopedButton(nextAiApiAuth, "Check readiness") as HTMLButtonElement).disabled).toBe(true);
 
     fireEvent.change(within(nextAiApiAuth).getByLabelText("API key"), { target: { value: "local-test-key" } });
@@ -1321,7 +1338,9 @@ describe("App", () => {
     fireEvent.change(screen.getByLabelText("AI Chat message"), { target: { value: "Check unverified audit." } });
     fireEvent.click(screen.getByRole("button", { name: "Send AI Chat message" }));
     expect(await screen.findByText("Repository changes unverified.")).toBeTruthy();
-    expect(screen.queryByText("No repository changes.")).toBeNull();
+    const latestAssistant = Array.from(document.querySelectorAll(".ai-message.assistant")).at(-1) as HTMLElement;
+    expect(latestAssistant.textContent).toContain("Repository changes unverified.");
+    expect(latestAssistant.textContent).not.toContain("No repository changes.");
 
     fireEvent.change(screen.getByLabelText("Repository"), { target: { value: "alt" } });
     expect(await screen.findByRole("heading", { name: "Alt" })).toBeTruthy();
@@ -1404,6 +1423,241 @@ describe("App", () => {
     expect(JSON.stringify(followUpBody)).not.toContain("guide.md");
   });
 
+  it("allows provider Current repo writes with no path and with directory or multiple-path context", async () => {
+    render(<App />);
+    expect(await screen.findByRole("heading", { name: "Hello" })).toBeTruthy();
+    fireEvent.click(openSettingsButton());
+    fireEvent.click(await screen.findByRole("tab", { name: "AI Chat" }));
+    const aiApiEntry = screen.getByLabelText("AI API entry");
+    fireEvent.click(within(aiApiEntry).getByRole("button", { name: "Set active" }));
+    const aiApiAuth = screen.getByLabelText("AI API connection");
+    const accessMode = within(aiApiAuth).getByRole("group", { name: "AI API repository access" });
+    expect(within(accessMode).getByRole("button", { name: "Context-only" }).getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(within(accessMode).getByRole("button", { name: "Current repo write" }));
+    expect(within(accessMode).getByRole("button", { name: "Current repo write" }).getAttribute("aria-pressed")).toBe("true");
+
+    fireEvent.change(within(aiApiAuth).getByLabelText("API key"), { target: { value: "local-test-key" } });
+    fireEvent.change(within(aiApiAuth).getByLabelText("Provider"), { target: { value: "openai" } });
+    fireEvent.change(within(aiApiAuth).getByLabelText("Model"), { target: { value: "edit-model" } });
+    fireEvent.click(await waitForScopedButton(aiApiAuth, "Check readiness"));
+    expect((await screen.findAllByText("Connected")).length).toBeGreaterThan(0);
+    expect(parseJsonBody(fetchCallsTo("/api/ai/entry-readiness").at(-1)?.[1]?.body)).toMatchObject({ provider: { executionMode: "repoWrite" } });
+
+    fireEvent.click(screen.getByRole("button", { name: "Back to viewer" }));
+    fireEvent.click(await screen.findByRole("tab", { name: "AI Chat" }));
+    expect(screen.queryByText("AI Entry is not ready.")).toBeNull();
+    expect(screen.queryByText("AI Entry is required.")).toBeNull();
+    const messageInput = await screen.findByLabelText("AI Chat message");
+    fireEvent.change(messageInput, { target: { value: "Update the Current repo without selected context." } });
+    expect((screen.getByRole("button", { name: "Send AI Chat message" }) as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "Send AI Chat message" }));
+    expect(await screen.findByText("Repo-wide Current repo run completed.")).toBeTruthy();
+    const noPathBody = parseJsonBody(fetchCallsTo("/api/ai/chat/stream").at(-1)?.[1]?.body);
+    expect(noPathBody).toMatchObject({ target: { provider: { executionMode: "repoWrite" } }, context: { primaryPaths: [] } });
+    await waitFor(() => {
+      const transcript = screen.getByLabelText("AI Chat transcript").textContent || "";
+      expect(transcript).toContain("changed: guide.md");
+      expect(transcript).toContain("new: docs/generated.md");
+    });
+
+    fireEvent.contextMenu(await screen.findByRole("button", { name: "docs" }), { clientX: 120, clientY: 120 });
+    fireEvent.click(screen.getByRole("menuitem", { name: "Send a path to AI Chat" }));
+    fireEvent.contextMenu(await screen.findByRole("button", { name: "guide.md" }), { clientX: 120, clientY: 120 });
+    fireEvent.click(screen.getByRole("menuitem", { name: "Send a path to AI Chat" }));
+    expect(within(screen.getByLabelText("AI Chat selected paths")).getByText("docs")).toBeTruthy();
+    expect(within(screen.getByLabelText("AI Chat selected paths")).getByText("guide.md")).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("AI Chat message"), { target: { value: "Use both context hints and update the repo." } });
+    expect((screen.getByRole("button", { name: "Send AI Chat message" }) as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "Send AI Chat message" }));
+    await waitFor(() => expect(fetchCallsTo("/api/ai/chat/stream")).toHaveLength(2));
+    const multiPathBody = parseJsonBody(fetchCallsTo("/api/ai/chat/stream").at(-1)?.[1]?.body);
+    expect(multiPathBody).toMatchObject({ context: { primaryPaths: expect.arrayContaining([
+      expect.objectContaining({ path: "docs", kind: "directory" }),
+      expect.objectContaining({ path: "guide.md", kind: "file" }),
+    ]) } });
+  });
+
+  it("aborts and ignores a delayed repo-wide response after the Current repo changes", async () => {
+    render(<App />);
+    expect(await screen.findByRole("heading", { name: "Hello" })).toBeTruthy();
+    fireEvent.click(openSettingsButton());
+    fireEvent.click(await screen.findByRole("tab", { name: "AI Chat" }));
+    const aiApiEntry = screen.getByLabelText("AI API entry");
+    fireEvent.click(within(aiApiEntry).getByRole("button", { name: "Set active" }));
+    const aiApiAuth = screen.getByLabelText("AI API connection");
+    fireEvent.click(within(within(aiApiAuth).getByRole("group", { name: "AI API repository access" })).getByRole("button", { name: "Current repo write" }));
+    fireEvent.change(within(aiApiAuth).getByLabelText("API key"), { target: { value: "local-test-key" } });
+    fireEvent.change(within(aiApiAuth).getByLabelText("Provider"), { target: { value: "openai" } });
+    fireEvent.change(within(aiApiAuth).getByLabelText("Model"), { target: { value: "edit-model" } });
+    fireEvent.click(await waitForScopedButton(aiApiAuth, "Check readiness"));
+    expect((await screen.findAllByText("Connected")).length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getByRole("button", { name: "Back to viewer" }));
+    fireEvent.contextMenu(await screen.findByRole("button", { name: "guide.md" }), { clientX: 120, clientY: 120 });
+    fireEvent.click(screen.getByRole("menuitem", { name: "Send a path to AI Chat" }));
+
+    const originalFetch = fetchMock.getMockImplementation();
+    let delayedController: ReadableStreamDefaultController<Uint8Array> | null = null;
+    let requestSignal: AbortSignal | undefined;
+    const encoder = new TextEncoder();
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input) === "/api/ai/chat/stream") {
+        requestSignal = init?.signal || undefined;
+        return new Response(new ReadableStream<Uint8Array>({
+          start(controller) {
+            delayedController = controller;
+            controller.enqueue(encoder.encode(`${JSON.stringify({ type: "meta", runId: "delayed-run", context: { repoId: "docs", revision: repoRevisions.docs, primaryItems: [], ruleItems: [], systemPromptVersion: "2.2.0" } })}\n`));
+          },
+        }), { status: 200, headers: { "Content-Type": "application/x-ndjson" } });
+      }
+      return originalFetch ? originalFetch(input, init) : json({ error: "missing fetch" }, 500);
+    });
+
+    fireEvent.change(screen.getByLabelText("AI Chat message"), { target: { value: "Start a delayed repo-wide run." } });
+    fireEvent.click(screen.getByRole("button", { name: "Send AI Chat message" }));
+    await waitFor(() => expect(delayedController).toBeTruthy());
+    fireEvent.change(screen.getByLabelText("Repository"), { target: { value: "alt" } });
+    expect(await screen.findByRole("heading", { name: "Alt" })).toBeTruthy();
+    await waitFor(() => expect(requestSignal?.aborted).toBe(true));
+
+    await act(async () => {
+      delayedController?.enqueue(encoder.encode(`${JSON.stringify({
+        type: "done",
+        message: { role: "assistant", content: "Old repository response." },
+        context: { repoId: "docs", revision: repoRevisions.docs, primaryItems: [], ruleItems: [], systemPromptVersion: "2.2.0" },
+        status: { state: "ready", message: "Ready", checkedAt: "2026-07-11T00:00:00.000Z" },
+        run: { accessMode: "repoWrite", entry: "aiApi", substrate: "serverEditProtocol", auditState: "verified", changedPaths: [], repairs: [], warnings: [] },
+      })}\n`));
+      delayedController?.close();
+    });
+    expect(screen.queryByText("Old repository response.")).toBeNull();
+  });
+
+  it("keeps an in-flight repo-wide request alive when another file opens in the same repo", async () => {
+    render(<App />);
+    expect(await screen.findByRole("heading", { name: "Hello" })).toBeTruthy();
+    fireEvent.click(openSettingsButton());
+    fireEvent.click(await screen.findByRole("tab", { name: "AI Chat" }));
+    const aiApiEntry = screen.getByLabelText("AI API entry");
+    fireEvent.click(within(aiApiEntry).getByRole("button", { name: "Set active" }));
+    const aiApiAuth = screen.getByLabelText("AI API connection");
+    fireEvent.click(within(within(aiApiAuth).getByRole("group", { name: "AI API repository access" })).getByRole("button", { name: "Current repo write" }));
+    fireEvent.change(within(aiApiAuth).getByLabelText("API key"), { target: { value: "local-test-key" } });
+    fireEvent.change(within(aiApiAuth).getByLabelText("Provider"), { target: { value: "openai" } });
+    fireEvent.change(within(aiApiAuth).getByLabelText("Model"), { target: { value: "edit-model" } });
+    fireEvent.click(await waitForScopedButton(aiApiAuth, "Check readiness"));
+    expect((await screen.findAllByText("Connected")).length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getByRole("button", { name: "Back to viewer" }));
+    fireEvent.contextMenu(await screen.findByRole("button", { name: "guide.md" }), { clientX: 120, clientY: 120 });
+    fireEvent.click(screen.getByRole("menuitem", { name: "Send a path to AI Chat" }));
+
+    const originalFetch = fetchMock.getMockImplementation();
+    let delayedController: ReadableStreamDefaultController<Uint8Array> | null = null;
+    let requestSignal: AbortSignal | undefined;
+    const encoder = new TextEncoder();
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input) === "/api/ai/chat/stream") {
+        requestSignal = init?.signal || undefined;
+        return new Response(new ReadableStream<Uint8Array>({
+          start(controller) {
+            delayedController = controller;
+            controller.enqueue(encoder.encode(`${JSON.stringify({ type: "meta", runId: "same-repo-run", context: { repoId: "docs", revision: repoRevisions.docs, primaryItems: [], ruleItems: [], systemPromptVersion: "2.2.0" } })}\n`));
+          },
+        }), { status: 200, headers: { "Content-Type": "application/x-ndjson" } });
+      }
+      return originalFetch ? originalFetch(input, init) : json({ error: "missing fetch" }, 500);
+    });
+
+    fireEvent.change(screen.getByLabelText("AI Chat message"), { target: { value: "Run a delayed repo-wide request while I inspect another file." } });
+    fireEvent.click(screen.getByRole("button", { name: "Send AI Chat message" }));
+    await waitFor(() => expect(delayedController).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "api.ts" }));
+    expect(await screen.findByLabelText("Raw")).toBeTruthy();
+    expect(requestSignal?.aborted).toBe(false);
+
+    await act(async () => {
+      delayedController?.enqueue(encoder.encode(`${JSON.stringify({
+        type: "done",
+        message: { role: "assistant", content: "Same repository response." },
+        context: { repoId: "docs", revision: repoRevisions.docs, primaryItems: [], ruleItems: [], systemPromptVersion: "2.2.0" },
+        status: { state: "ready", message: "Ready", checkedAt: "2026-07-11T00:00:00.000Z" },
+        run: { accessMode: "repoWrite", entry: "aiApi", substrate: "serverEditProtocol", auditState: "verified", changedPaths: [], repairs: [], warnings: [] },
+      })}\n`));
+      delayedController?.close();
+    });
+
+    expect(await screen.findByText("Same repository response.")).toBeTruthy();
+    expect(requestSignal?.aborted).toBe(false);
+    expect(fetchCallsTo("/api/ai/cancel")).toHaveLength(0);
+  });
+
+  it("aborts and ignores a delayed repoWrite response after Settings downgrades the provider mode", async () => {
+    render(<App />);
+    expect(await screen.findByRole("heading", { name: "Hello" })).toBeTruthy();
+    fireEvent.click(openSettingsButton());
+    fireEvent.click(await screen.findByRole("tab", { name: "AI Chat" }));
+    const aiApiEntry = screen.getByLabelText("AI API entry");
+    fireEvent.click(within(aiApiEntry).getByRole("button", { name: "Set active" }));
+    const aiApiAuth = screen.getByLabelText("AI API connection");
+    fireEvent.click(within(within(aiApiAuth).getByRole("group", { name: "AI API repository access" })).getByRole("button", { name: "Current repo write" }));
+    fireEvent.change(within(aiApiAuth).getByLabelText("API key"), { target: { value: "local-test-key" } });
+    fireEvent.change(within(aiApiAuth).getByLabelText("Provider"), { target: { value: "openai" } });
+    fireEvent.change(within(aiApiAuth).getByLabelText("Model"), { target: { value: "edit-model" } });
+    fireEvent.click(await waitForScopedButton(aiApiAuth, "Check readiness"));
+    expect((await screen.findAllByText("Connected")).length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole("button", { name: "Back to viewer" }));
+    fireEvent.contextMenu(await screen.findByRole("button", { name: "guide.md" }), { clientX: 120, clientY: 120 });
+    fireEvent.click(screen.getByRole("menuitem", { name: "Send a path to AI Chat" }));
+
+    const originalFetch = fetchMock.getMockImplementation();
+    let delayedController: ReadableStreamDefaultController<Uint8Array> | null = null;
+    let requestSignal: AbortSignal | undefined;
+    const encoder = new TextEncoder();
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input) === "/api/ai/chat/stream") {
+        requestSignal = init?.signal || undefined;
+        return new Response(new ReadableStream<Uint8Array>({
+          start(controller) {
+            delayedController = controller;
+            controller.enqueue(encoder.encode(`${JSON.stringify({ type: "meta", runId: "mode-change-run", context: { repoId: "docs", revision: repoRevisions.docs, primaryItems: [], ruleItems: [], systemPromptVersion: "2.2.0" } })}\n`));
+          },
+        }), { status: 200, headers: { "Content-Type": "application/x-ndjson" } });
+      }
+      return originalFetch ? originalFetch(input, init) : json({ error: "missing fetch" }, 500);
+    });
+
+    fireEvent.change(screen.getByLabelText("AI Chat message"), { target: { value: "Start a delayed repo-wide run before mode change." } });
+    fireEvent.click(screen.getByRole("button", { name: "Send AI Chat message" }));
+    await waitFor(() => expect(delayedController).toBeTruthy());
+    fireEvent.click(openSettingsButton());
+    await waitFor(() => expect(requestSignal?.aborted).toBe(true));
+    fireEvent.click(await screen.findByRole("button", { name: "Back to viewer" }));
+    fireEvent.click(await screen.findByRole("tab", { name: "AI Chat" }));
+    expect(screen.queryByRole("button", { name: "Cancel AI Chat request" })).toBeNull();
+    expect((screen.getByLabelText("AI Chat message") as HTMLTextAreaElement).disabled).toBe(false);
+    expect((screen.getByRole("button", { name: "Send AI Chat message" }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(openSettingsButton());
+    fireEvent.click(await screen.findByRole("tab", { name: "AI Chat" }));
+    const modeChangedAuth = screen.getByLabelText("AI API connection");
+    const modeControl = within(modeChangedAuth).getByRole("group", { name: "AI API repository access" });
+    fireEvent.click(within(modeControl).getByRole("button", { name: "Context-only" }));
+
+    await act(async () => {
+      delayedController?.enqueue(encoder.encode(`${JSON.stringify({
+        type: "done",
+        message: { role: "assistant", content: "Old mode response." },
+        context: { repoId: "docs", revision: repoRevisions.docs, primaryItems: [], ruleItems: [], systemPromptVersion: "2.2.0" },
+        status: { state: "ready", message: "Ready", checkedAt: "2026-07-11T00:00:00.000Z" },
+        run: { accessMode: "repoWrite", entry: "aiApi", substrate: "serverEditProtocol", auditState: "verified", changedPaths: [], repairs: [], warnings: [] },
+      })}\n`));
+      delayedController?.close();
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Back to viewer" }));
+    fireEvent.click(await screen.findByRole("tab", { name: "AI Chat" }));
+    expect(screen.queryByText("Old mode response.")).toBeNull();
+  });
+
   it("does not restore one-shot selected paths when retrying after a stream error", async () => {
     render(<App />);
     expect(await screen.findByRole("heading", { name: "Hello" })).toBeTruthy();
@@ -1436,8 +1690,8 @@ describe("App", () => {
 
     fireEvent.change(screen.getByLabelText("AI Chat message"), { target: { value: "Summarize selected path." } });
     fireEvent.click(screen.getByRole("button", { name: "Send AI Chat message" }));
-    await waitFor(() => expect(screen.getByText("planned stream failure")).toBeTruthy());
-    expect(screen.getByText("Request failed before a run summary was available.")).toBeTruthy();
+    await waitFor(() => expect(screen.getAllByText("planned stream failure")).toHaveLength(2));
+    expect(screen.queryByText("Request failed before a run summary was available.")).toBeNull();
     expect(screen.queryByText("Streaming...")).toBeNull();
     await waitFor(() => expect(screen.queryByLabelText("AI Chat selected paths")).toBeNull());
     const failedBody = parseJsonBody(fetchCallsTo("/api/ai/chat/stream").at(-1)?.[1]?.body);
@@ -1457,6 +1711,41 @@ describe("App", () => {
       },
     });
     expect(JSON.stringify(retryBody)).not.toContain("guide.md");
+  });
+
+  it("invalidates stale UI readiness when the server cannot renew it before a stream starts", async () => {
+    render(<App />);
+    expect(await screen.findByRole("heading", { name: "Hello" })).toBeTruthy();
+    fireEvent.click(openSettingsButton());
+    fireEvent.click(await screen.findByRole("tab", { name: "AI Chat" }));
+    const aiApiEntry = screen.getByLabelText("AI API entry");
+    fireEvent.click(within(aiApiEntry).getByRole("button", { name: "Set active" }));
+    const aiApiAuth = screen.getByLabelText("AI API connection");
+    fireEvent.change(within(aiApiAuth).getByLabelText("API key"), { target: { value: "local-test-key" } });
+    fireEvent.change(within(aiApiAuth).getByLabelText("Provider"), { target: { value: "openaiCompatible" } });
+    fireEvent.change(within(aiApiAuth).getByLabelText("Model"), { target: { value: "model-a" } });
+    fireEvent.change(within(aiApiAuth).getByLabelText("Base URL"), { target: { value: "http://127.0.0.1:7777/v1" } });
+    fireEvent.click(await waitForScopedButton(aiApiAuth, "Check readiness"));
+    expect((await screen.findAllByText("Connected")).length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getByRole("button", { name: "Back to viewer" }));
+    fireEvent.click(await screen.findByRole("tab", { name: "AI Chat" }));
+    const originalFetch = fetchMock.getMockImplementation();
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input) === "/api/ai/chat/stream") {
+        return json({
+          error: "The configured provider did not confirm guarded protocol during readiness renewal.",
+          details: { code: "readiness_renewal_failed", entry: "aiApi" },
+        }, 409);
+      }
+      return originalFetch ? originalFetch(input, init) : json({ error: "missing fetch" }, 500);
+    });
+
+    fireEvent.change(await screen.findByLabelText("AI Chat message"), { target: { value: "Send after the old readiness lease." } });
+    fireEvent.click(screen.getByRole("button", { name: "Send AI Chat message" }));
+    expect(await screen.findByText("AI Entry is not ready.")).toBeTruthy();
+    expect(screen.getByLabelText("AI Chat transcript").textContent).toContain("The configured provider did not confirm guarded protocol during readiness renewal.");
+    expect(screen.queryByRole("button", { name: "Send AI Chat message" })).toBeNull();
   });
 
   it("does not restore one-shot selected paths after cancelling a stream", async () => {
@@ -1522,6 +1811,44 @@ describe("App", () => {
     expect(JSON.stringify(followUpBody)).not.toContain("guide.md");
   });
 
+  it("aborts locally when cancellation happens before the stream run id arrives", async () => {
+    render(<App />);
+    expect(await screen.findByRole("heading", { name: "Hello" })).toBeTruthy();
+    fireEvent.click(openSettingsButton());
+    fireEvent.click(await screen.findByRole("tab", { name: "AI Chat" }));
+    const aiApiEntry = screen.getByLabelText("AI API entry");
+    fireEvent.click(within(aiApiEntry).getByRole("button", { name: "Set active" }));
+    const aiApiAuth = screen.getByLabelText("AI API connection");
+    fireEvent.change(within(aiApiAuth).getByLabelText("API key"), { target: { value: "local-test-key" } });
+    fireEvent.change(within(aiApiAuth).getByLabelText("Provider"), { target: { value: "openaiCompatible" } });
+    fireEvent.change(within(aiApiAuth).getByLabelText("Model"), { target: { value: "model-a" } });
+    fireEvent.change(within(aiApiAuth).getByLabelText("Base URL"), { target: { value: "http://127.0.0.1:7777/v1" } });
+    fireEvent.click(await waitForScopedButton(aiApiAuth, "Check readiness"));
+    expect((await screen.findAllByText("Connected")).length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getByRole("button", { name: "Back to viewer" }));
+    fireEvent.click(await screen.findByRole("tab", { name: "AI Chat" }));
+    const originalFetch = fetchMock.getMockImplementation();
+    let streamSignal: AbortSignal | null | undefined;
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input) === "/api/ai/chat/stream") {
+        streamSignal = init?.signal;
+        return abortableStreamResponse(init?.signal);
+      }
+      return originalFetch ? originalFetch(input, init) : json({ error: "missing fetch" }, 500);
+    });
+
+    fireEvent.change(screen.getByLabelText("AI Chat message"), { target: { value: "Wait for readiness before the stream starts." } });
+    fireEvent.click(screen.getByRole("button", { name: "Send AI Chat message" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Cancel AI Chat request" })).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "Cancel AI Chat request" }));
+    expect(screen.queryByRole("button", { name: "Retry AI Chat request" })).toBeNull();
+    await waitFor(() => expect(streamSignal?.aborted).toBe(true));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Send AI Chat message" })).toBeTruthy());
+    expect(fetchCallsTo("/api/ai/cancel")).toHaveLength(0);
+    expect(screen.getByLabelText("AI Chat transcript").textContent).toContain("AI Chat request canceled.");
+  });
+
   it("keeps AI Chat session across side panel modes and supports streaming composer actions", async () => {
     const clipboardWrite = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
     const scrollIntoView = vi.fn();
@@ -1536,12 +1863,14 @@ describe("App", () => {
     fireEvent.click(openSettingsButton());
     expect(await screen.findByRole("heading", { name: "Settings" })).toBeTruthy();
     fireEvent.click(screen.getByRole("tab", { name: "AI Chat" }));
-    const codexEntry = screen.getByLabelText(["Co", "dex CLI entry"].join(""));
-    fireEvent.click(within(codexEntry).getByRole("button", { name: "Set active" }));
-    const codexAuth = screen.getByLabelText(["Co", "dex CLI readiness"].join(""));
-    expect(fetchCallsTo("/api/ai/entry-readiness")).toHaveLength(1);
-    await waitFor(() => expect(within(codexAuth).getByRole("button", { name: "Check again" })).toBeTruthy());
-    expect(within(codexAuth).getByText("Ready to use for AI Chat.")).toBeTruthy();
+    const aiApiEntry = screen.getByLabelText("AI API entry");
+    fireEvent.click(within(aiApiEntry).getByRole("button", { name: "Set active" }));
+    const aiApiAuth = screen.getByLabelText("AI API connection");
+    fireEvent.change(within(aiApiAuth).getByLabelText("API key"), { target: { value: "local-test-key" } });
+    fireEvent.change(within(aiApiAuth).getByLabelText("Provider"), { target: { value: "openai" } });
+    fireEvent.change(within(aiApiAuth).getByLabelText("Model"), { target: { value: "gpt-5" } });
+    fireEvent.click(await waitForScopedButton(aiApiAuth, "Check readiness"));
+    expect((await screen.findAllByText("Connected")).length).toBeGreaterThan(0);
 
     fireEvent.click(screen.getByRole("button", { name: "Back to viewer" }));
     fireEvent.click(await screen.findByRole("tab", { name: "AI Chat" }));
@@ -1579,7 +1908,7 @@ describe("App", () => {
 
     fireEvent.change(screen.getByLabelText("AI Chat message"), { target: { value: "Summarize with attachment." } });
     fireEvent.keyDown(screen.getByLabelText("AI Chat message"), { key: "Enter" });
-    expect(await screen.findByText("codexCli says the active file says hello.")).toBeTruthy();
+    expect(await screen.findByText("aiApi says the active file says hello.")).toBeTruthy();
     expect(scrollIntoView).not.toHaveBeenCalled();
 
     Object.defineProperty(transcript, "scrollTop", { value: 900, configurable: true });
@@ -1600,7 +1929,7 @@ describe("App", () => {
 
     fireEvent.click(screen.getByRole("tab", { name: "Outline" }));
     fireEvent.click(screen.getByRole("tab", { name: "AI Chat" }));
-    expect(screen.getAllByText("codexCli says the active file says hello.").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("aiApi says the active file says hello.").length).toBeGreaterThan(0);
     const userMessage = document.querySelector(".ai-message.user") as HTMLElement;
     const aiMessage = document.querySelector(".ai-message.assistant") as HTMLElement;
     expect(within(userMessage).getByText("You").className).toContain("ai-message-role-chip");
@@ -1620,7 +1949,7 @@ describe("App", () => {
     await waitFor(() => expect(aiCodeCopyButton.dataset.copyState).toBe("copied"));
     expect(clipboardWrite).toHaveBeenCalledWith(expect.stringContaining("const ok = true;"));
     fireEvent.click(within(aiMessage).getByRole("button", { name: "Copy AI message" }));
-    expect(clipboardWrite).toHaveBeenCalledWith("codexCli says the active file says hello.\n\n- [x] Render task item\n\n```ts\nconst ok = true;\n```\n\nChanged paths:\n- changed: README.md");
+    expect(clipboardWrite).toHaveBeenCalledWith("aiApi says the active file says hello.\n\n- [x] Render task item\n\n```ts\nconst ok = true;\n```\n\nNo repository changes.\n\nWarnings:\n- Context-only execution: Reader-Wiki did not grant repository write tools.");
     await act(async () => {
       await new Promise((resolve) => window.setTimeout(resolve, 1900));
     });
@@ -1665,63 +1994,44 @@ describe("App", () => {
     expect(within(screen.getByLabelText("AI API entry")).getAllByText("Needs test").length).toBeGreaterThan(0);
   });
 
-  it("enables CLI AI Chat after entry readiness succeeds", async () => {
+  it("keeps Codex CLI and Claude Code CLI diagnostics-only and fail-closed", async () => {
     render(<App />);
     expect(await screen.findByRole("heading", { name: "Hello" })).toBeTruthy();
     fireEvent.click(openSettingsButton());
     expect(await screen.findByRole("heading", { name: "Settings" })).toBeTruthy();
     fireEvent.click(screen.getByRole("tab", { name: "AI Chat" }));
 
-    const codexEntryLabel = ["Co", "dex CLI entry"].join("");
-    const codexAuthLabel = ["Co", "dex CLI readiness"].join("");
-    const codexEntry = screen.getByLabelText(codexEntryLabel);
+    const codexEntry = screen.getByLabelText(["Co", "dex CLI entry"].join(""));
     fireEvent.click(within(codexEntry).getByRole("button", { name: "Set active" }));
-    const codexAuth = screen.getByLabelText(codexAuthLabel);
-    expect(fetchCallsTo("/api/ai/entry-readiness")).toHaveLength(1);
+    const codexAuth = screen.getByLabelText(["Co", "dex CLI readiness"].join(""));
     expect(screen.getByRole("heading", { name: "CLI Readiness" })).toBeTruthy();
-    expect(screen.queryByRole("heading", { name: "Connection / Credentials" })).toBeNull();
-    expect(within(codexAuth).getAllByText("Not checked").length).toBeGreaterThan(0);
-    expect(within(codexAuth).getByText("Check the installed CLI and existing sign-in state.")).toBeTruthy();
-    const codexDetailsBefore = screen.getByLabelText(["Co", "dex CLI readiness details"].join("")) as HTMLDetailsElement;
-    expect(codexDetailsBefore.open).toBe(false);
-    expect(within(codexDetailsBefore).getByLabelText("Readiness checklist").textContent).toContain("Binary");
-    expect(within(codexDetailsBefore).getByLabelText("Readiness checklist").textContent).toContain("Version");
-    expect(within(codexDetailsBefore).getByLabelText("Readiness checklist").textContent).toContain("Existing sign-in");
-    expect(within(codexDetailsBefore).getByLabelText("Readiness checklist").textContent).toContain("Current repo write wrapper");
-    expect(within(codexDetailsBefore).getByLabelText("Readiness checklist").textContent).toContain("Execution mode");
-    expect(within(codexDetailsBefore).getByLabelText("Readiness checklist").textContent).toContain("Last check");
-    await waitFor(() => expect(within(codexAuth).getByRole("button", { name: "Check again" })).toBeTruthy());
-    expect(within(codexAuth).getAllByText("Success").length).toBeGreaterThan(0);
-    expect(within(codexAuth).getByText("Ready to use for AI Chat.")).toBeTruthy();
-    expect(within(codexAuth).getByRole("button", { name: "Check again" })).toBeTruthy();
+    const codexDetails = screen.getByLabelText(["Co", "dex CLI readiness details"].join("")) as HTMLDetailsElement;
+    expect(codexDetails.open).toBe(false);
+    expect(within(codexDetails).getByLabelText("Readiness checklist").textContent).toContain("Current repo-only boundary");
+    await waitFor(() => expect(within(codexAuth).getByRole("button", { name: "Check readiness" })).toBeTruthy());
+    expect(within(codexAuth).getAllByText("Check failed").length).toBeGreaterThan(0);
+    expect(within(codexAuth).getAllByText(/shared system temp read\/write access/).length).toBeGreaterThan(0);
+    expect(fetchCallsTo("/api/ai/entry-readiness")).toHaveLength(1);
 
     fireEvent.click(screen.getByRole("button", { name: "Back to viewer" }));
     fireEvent.click(await screen.findByRole("tab", { name: "AI Chat" }));
-    fireEvent.change(screen.getByLabelText("AI Chat message"), { target: { value: "Summarize through CLI." } });
-    expect((screen.getByRole("button", { name: "Send AI Chat message" }) as HTMLButtonElement).disabled).toBe(false);
-    fireEvent.click(screen.getByRole("button", { name: "Send AI Chat message" }));
-    expect(await screen.findByText("codexCli says the active file says hello.")).toBeTruthy();
+    expect(await screen.findByText("AI Entry is not ready.")).toBeTruthy();
+    expect(screen.queryByLabelText("AI Chat message")).toBeNull();
 
     fireEvent.click(openSettingsButton());
     fireEvent.click(await screen.findByRole("tab", { name: "AI Chat" }));
     const claudeEntry = screen.getByLabelText("Claude Code CLI entry");
     fireEvent.click(within(claudeEntry).getByRole("button", { name: "Set active" }));
-    let claudeAuth = screen.getByLabelText("Claude Code CLI readiness");
-    expect(screen.queryByText("Authenticate")).toBeNull();
-    expect(screen.queryByRole("heading", { name: "Readiness diagnostics" })).toBeNull();
-    expect(screen.getByRole("heading", { name: "CLI Readiness" })).toBeTruthy();
-    expect(screen.queryByRole("heading", { name: "Connection / Credentials" })).toBeNull();
-    expect(screen.queryByText("Test active entry")).toBeNull();
-    expect((screen.getByLabelText("Claude Code CLI readiness details") as HTMLDetailsElement).open).toBe(false);
+    const claudeAuth = screen.getByLabelText("Claude Code CLI readiness");
+    await waitFor(() => expect(within(claudeAuth).getByRole("button", { name: "Check readiness" })).toBeTruthy());
+    expect(within(claudeAuth).getAllByText("Check failed").length).toBeGreaterThan(0);
+    expect(within(claudeAuth).getAllByText(/cannot yet prove repo-outside read and protected-path write confinement/).length).toBeGreaterThan(0);
     expect(fetchCallsTo("/api/ai/entry-readiness")).toHaveLength(2);
-    await waitFor(() => expect(within(claudeAuth).getByRole("button", { name: "Check again" })).toBeTruthy());
-    expect(within(claudeAuth).getByText("Ready to use for AI Chat.")).toBeTruthy();
+
     fireEvent.click(screen.getByRole("button", { name: "Back to viewer" }));
     fireEvent.click(await screen.findByRole("tab", { name: "AI Chat" }));
-    fireEvent.change(screen.getByLabelText("AI Chat message"), { target: { value: "Summarize through other CLI." } });
-    expect((screen.getByRole("button", { name: "Send AI Chat message" }) as HTMLButtonElement).disabled).toBe(false);
-    fireEvent.click(screen.getByRole("button", { name: "Send AI Chat message" }));
-    expect(await screen.findByText("claudeCli says the active file says hello.")).toBeTruthy();
+    expect(await screen.findByText("AI Entry is not ready.")).toBeTruthy();
+    expect(screen.queryByLabelText("AI Chat message")).toBeNull();
   });
 
 });
@@ -1908,7 +2218,11 @@ function aiEntryReadiness(entry: string, provider?: Record<string, unknown>) {
     const model = String(provider?.model || "");
     const baseUrl = String(provider?.baseUrl || "");
     const credential = String(provider?.credential || "");
-    const configured = entry === "aiApi" ? Boolean(model && baseUrl && credential) : Boolean(model && baseUrl);
+    const configured = entry === "aiApi"
+      ? Boolean(model && credential && (provider?.provider === "openai" || baseUrl))
+      : Boolean(model && baseUrl);
+    const repoWrite = provider?.executionMode === "repoWrite";
+    const { credential: _credential, ...publicProvider } = provider || {};
     return {
       entry,
       ready: configured,
@@ -1916,49 +2230,51 @@ function aiEntryReadiness(entry: string, provider?: Record<string, unknown>) {
         state: configured ? "ready" : "notConfigured",
         code: configured ? "success" : "not_configured",
         severity: configured ? "success" : "warning",
-        message: configured ? `${label} Codex-backed repo-scoped write is ready.` : "Connection settings are incomplete.",
-        nextAction: configured ? "Use this entry for repo-scoped AI Chat or check again." : "Complete the entry settings, then run readiness again.",
+        message: configured ? `${label} ${repoWrite ? "guarded Current repo write" : "context-only execution"} is ready.` : "Connection settings are incomplete.",
+        nextAction: configured ? "Use this entry for AI Chat or check again." : "Complete the entry settings, then run readiness again.",
         checkedAt: "2026-07-03T00:00:00.000Z",
       },
-      settings: {
-        entry,
-        ...(provider || {}),
-      },
+      settings: { entry, ...publicProvider },
       checks: [
         { id: "provider", label: entry === "aiApi" ? "Provider settings" : "Local settings", status: configured ? "ready" : "error", message: configured ? "Ready" : "Settings are incomplete." },
-        { id: "binary", label: "Codex CLI binary", status: "ready", message: "Ready" },
-        { id: "wrapper", label: "Codex repo-scoped write wrapper", status: "ready", message: "Ready" },
-        { id: "workspace", label: "Workspace", status: "ready", message: "Ready" },
-        { id: "auth-isolation", label: "Isolated auth", status: configured ? "ready" : "error", message: configured ? "Ready" : "Pending settings." },
+        { id: "endpoint", label: "Endpoint reachable", status: configured ? "ready" : "error", message: configured ? "Ready" : "Pending settings." },
+        ...(repoWrite ? [
+          { id: "protocol", label: "Guarded edit protocol", status: configured ? "ready" : "error", message: configured ? "Ready" : "Pending settings." },
+          { id: "workspace", label: "Workspace", status: "ready", message: "Ready" },
+        ] : []),
+        { id: "execution-policy", label: "Execution policy", status: "ready", message: "Ready" },
       ],
     };
   }
   const codex = entry === "codexCli";
+  const message = codex
+    ? "Codex CLI Current repo write is fail-closed because the tested macOS runtime also grants shared system temp read/write access."
+    : "Claude Code CLI Current repo write remains unavailable because Reader-Wiki cannot yet prove repo-outside read and protected-path write confinement.";
   return {
     entry,
-    ready: true,
+    ready: false,
     status: {
-      state: "ready",
-      code: "success",
-      severity: "success",
-      message: codex ? ["Co", "dex CLI repo-scoped write wrapper is ready."].join("") : "Claude Code CLI repo-scoped write wrapper is ready.",
-      nextAction: "Use this entry for repo-scoped AI Chat or check again.",
+      state: "failed",
+      code: "wrapper_not_ready",
+      severity: "warning",
+      message,
+      nextAction: message,
       checkedAt: "2026-07-03T00:00:00.000Z",
     },
     settings: {
       entry,
       binaryName: codex ? "codex" : "claude",
-      version: codex ? "codex-cli 0.142.5" : "2.1.199",
+      version: codex ? "codex-cli 0.144.1" : "2.1.199",
       authState: "configured",
-      readOnlyWrapperState: "ready",
-      executionMode: "repoWrite",
+      readOnlyWrapperState: "notReady",
+      executionMode: "unknown",
       lastCheckedAt: "2026-07-03T00:00:00.000Z",
-      readinessMessage: codex ? ["Co", "dex CLI repo-scoped write wrapper is ready."].join("") : "Claude Code CLI repo-scoped write wrapper is ready.",
+      readinessMessage: message,
     },
     checks: [
       { id: "binary", label: "Binary", status: "ready", message: "Ready" },
       { id: "auth", label: "Existing CLI auth", status: "ready", message: "Ready" },
-      { id: "wrapper", label: "Repo-scoped write wrapper", status: "ready", message: "Ready" },
+      { id: "wrapper", label: codex ? "Current repo-only write boundary" : "Repo-scoped write wrapper", status: "error", message },
       { id: "workspace", label: "Workspace", status: "ready", message: "Ready" },
     ],
   };
@@ -2054,11 +2370,11 @@ function serverCancelableStreamResponse(): { response: Response; finish: () => v
           run: {
             accessMode: "repoWrite",
             entry: "aiApi",
-            substrate: "codexCli",
+            substrate: "serverEditProtocol",
             auditState: "verified",
             changedPaths: [],
             repairs: [],
-            warnings: ["Postflight audit completed after cancellation."],
+            warnings: [],
           },
         },
       })}\n`));

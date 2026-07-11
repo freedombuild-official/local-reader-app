@@ -5,27 +5,37 @@ import { HttpError, isHttpError } from "./errors.js";
 import { buildAIChatContextForRepository } from "./aiContext.js";
 import { requestRepoWriteAIChatCompletion, type AICommandRunner } from "./aiCliAdapters.js";
 import { probeAIEntryReadiness } from "./aiEntries.js";
+import { aiChatSystemPromptPath } from "./aiPromptPolicy.js";
+import { assertGuardedRepoContextPaths, buildGuardedRepoPathPolicy, requestGuardedRepoWriteAIChatCompletion, sanitizeGuardedAIChatContext, type GuardedProviderRequester } from "./guardedRepoEdits.js";
 import { providerReadiness, requestAIChatCompletion, requestAIChatCompletionStream, testAIConnection } from "./aiProviders.js";
 import type { HttpDeliveryService } from "./httpDelivery.js";
 import { createRepositoryRegistry, type RepositoryRegistry } from "./repositoryRegistry.js";
 import { loadRepositoryConfigState, previewRepositoryConfig, saveRepositoryConfigDraft, validateRepositoryConfigDraft } from "./repositoryConfig.js";
 import { assertRepositoryRevision, repositoryRevision } from "./repositoryRevision.js";
 import { readGitStatusEntries, readRepoFile, readTree, readTreeSnapshot, resolveRepoImage, resolveRepoPdf, syncRepository } from "./repoFiles.js";
-import type { AIChatExecutionTarget, AIChatRequest, AIChatRunSummary, AIEntryKind, AIProviderSettings, RepositoryConfigDraft } from "./types.js";
+import type { AIChatExecutionTarget, AIChatRequest, AIChatRunSummary, AIEntryKind, AIProviderSettings, RepositoryConfig, RepositoryConfigDraft } from "./types.js";
 
-const READINESS_ATTESTATION_TTL_MS = 60_000;
+const READINESS_ATTESTATION_TTL_MS = 5 * 60_000;
+const READINESS_ATTESTATION_MAX_ENTRIES = 128;
 const AI_GLOBAL_CONCURRENCY_LIMIT = 4;
 
 type ApiRouterOptions = {
   configPath?: string;
   packageRoot?: string;
   aiCommandRunner?: AICommandRunner;
+  aiProviderRequester?: GuardedProviderRequester;
+  readinessAttestationTtlMs?: number;
+  readinessAttestationMaxEntries?: number;
+  readinessAttestationNow?: () => number;
 };
 
 export function createApiRouter(registryOrConfigPath: RepositoryRegistry | string, httpDelivery?: HttpDeliveryService, options: ApiRouterOptions = {}): Router {
   const router = Router();
   const registry = typeof registryOrConfigPath === "string" ? createRepositoryRegistry({ configPath: registryOrConfigPath }) : registryOrConfigPath;
   const configPath = path.resolve(options.configPath || (typeof registryOrConfigPath === "string" ? registryOrConfigPath : registry.configPath || path.join(process.cwd(), "repositories.yaml")));
+  const readinessAttestationTtlMs = positiveInteger(options.readinessAttestationTtlMs, READINESS_ATTESTATION_TTL_MS);
+  const readinessAttestationMaxEntries = positiveInteger(options.readinessAttestationMaxEntries, READINESS_ATTESTATION_MAX_ENTRIES);
+  const readinessAttestationNow = options.readinessAttestationNow || Date.now;
   const readinessAttestations = new Map<string, number>();
   const activeAIRuns = new Map<string, { abort: () => void }>();
   const activeAIRepos = new Set<string>();
@@ -33,13 +43,56 @@ export function createApiRouter(registryOrConfigPath: RepositoryRegistry | strin
   let configSaveActive = false;
 
   function storeReadinessAttestation(entry: AIEntryKind, repoId: string, revision: string, provider: AIProviderSettings | undefined): void {
-    readinessAttestations.set(readinessAttestationKey(entry, repoId, revision, provider), Date.now() + READINESS_ATTESTATION_TTL_MS);
+    const now = readinessAttestationNow();
+    cleanupExpiredReadinessAttestations(now);
+    const key = readinessAttestationKey(entry, repoId, revision, provider);
+    readinessAttestations.delete(key);
+    readinessAttestations.set(key, now + readinessAttestationTtlMs);
+    while (readinessAttestations.size > readinessAttestationMaxEntries) {
+      const oldestKey = readinessAttestations.keys().next().value as string | undefined;
+      if (!oldestKey) break;
+      readinessAttestations.delete(oldestKey);
+    }
   }
 
-  function assertReadinessAttestation(target: AIChatExecutionTarget, repoId: string, revision: string): void {
+  function refreshReadinessAttestation(target: AIChatExecutionTarget, repoId: string, revision: string): boolean {
     const provider = "provider" in target ? target.provider : undefined;
-    const expiresAt = readinessAttestations.get(readinessAttestationKey(targetEntry(target), repoId, revision, provider)) || 0;
-    if (expiresAt < Date.now()) throw new HttpError(409, "AI Entry readiness attestation is missing or expired.");
+    const now = readinessAttestationNow();
+    cleanupExpiredReadinessAttestations(now);
+    const key = readinessAttestationKey(targetEntry(target), repoId, revision, provider);
+    if (!readinessAttestations.has(key)) return false;
+    readinessAttestations.delete(key);
+    readinessAttestations.set(key, now + readinessAttestationTtlMs);
+    return true;
+  }
+
+  function cleanupExpiredReadinessAttestations(now: number): void {
+    for (const [key, expiresAt] of readinessAttestations) {
+      if (expiresAt <= now) readinessAttestations.delete(key);
+    }
+  }
+
+  async function ensureReadinessAttestation(target: AIChatExecutionTarget, repo: RepositoryConfig, revision: string, signal: AbortSignal): Promise<void> {
+    if (refreshReadinessAttestation(target, repo.id, revision)) return;
+    const provider = "provider" in target ? target.provider : undefined;
+    const entry = targetEntry(target);
+    const readiness = await probeAIEntryReadiness(entry, {
+      provider,
+      repo,
+      runner: options.aiCommandRunner,
+      providerRequester: options.aiProviderRequester,
+      signal,
+    });
+    if (signal.aborted) throw new HttpError(499, "AI Chat request was canceled.");
+    if (!readiness.ready) {
+      throw new HttpError(409, readiness.status.message || "AI Entry readiness could not be renewed.", {
+        code: "readiness_renewal_failed",
+        entry,
+      });
+    }
+    const currentRepo = await registry.findRepository(repo.id);
+    await assertRepositoryRevision(currentRepo, revision);
+    storeReadinessAttestation(entry, repo.id, revision, provider);
   }
 
   async function withRepoAILock<T>(repoId: string, work: () => Promise<T>): Promise<T> {
@@ -66,6 +119,7 @@ export function createApiRouter(registryOrConfigPath: RepositoryRegistry | strin
       activeAIRequests -= 1;
     }
   }
+
   router.use("/http-delivery", expressJson({ limit: "20kb" }));
   router.use("/repo-open", expressJson({ limit: "20kb" }));
   router.use("/repository-config", expressJson({ limit: "100kb" }));
@@ -198,6 +252,7 @@ export function createApiRouter(registryOrConfigPath: RepositoryRegistry | strin
           provider,
           repo,
           runner: options.aiCommandRunner,
+          providerRequester: options.aiProviderRequester,
           signal: abortScope.signal,
         }));
       if (repo) {
@@ -223,10 +278,16 @@ export function createApiRouter(registryOrConfigPath: RepositoryRegistry | strin
       const repoId = String(body.context?.repoId || "");
       const execution = await withRepoAILock(repoId, async () => {
         const repo = await registry.findRepository(repoId);
-        const context = await buildAIChatContextForRepository(repo, body.context);
-        assertReadinessAttestation(target, context.repoId, context.revision);
+        const guardedPathPolicy = usesGuardedRepoContext(target)
+          ? await buildGuardedRepoPathPolicy(repo, [configPath, aiChatSystemPromptPath()])
+          : undefined;
+        const effectiveRepo = guardedPathPolicy ? { ...repo, root: guardedPathPolicy.rootRealPath } : repo;
+        if (guardedPathPolicy) await assertGuardedRepoContextPaths(effectiveRepo, body.context, guardedPathPolicy);
+        const builtContext = await buildAIChatContextForRepository(effectiveRepo, body.context);
+        const context = guardedPathPolicy ? sanitizeGuardedAIChatContext(effectiveRepo, builtContext, guardedPathPolicy) : builtContext;
+        await ensureReadinessAttestation(target, effectiveRepo, context.revision, abortScope.signal);
         const result = await (async () => {
-        if (isDirectProviderTarget(target)) {
+        if (isDirectProviderTarget(target) && providerExecutionMode(target.provider) === "readOnly") {
           const direct = await requestAIChatCompletion({
             provider: target.provider,
             messages: body.messages,
@@ -237,7 +298,20 @@ export function createApiRouter(registryOrConfigPath: RepositoryRegistry | strin
           });
           return { ...direct, run: contextOnlyRunSummary(target) };
         }
-        return requestRepoWriteAIChatCompletion({ target, messages: body.messages, context, repo, attachments: body.attachments, modelBehavior: body.modelBehavior, runner: options.aiCommandRunner, signal: abortScope.signal });
+        if (isDirectProviderTarget(target)) {
+          return requestGuardedRepoWriteAIChatCompletion({
+            provider: target.provider,
+            messages: body.messages,
+            context,
+            repo: effectiveRepo,
+            attachments: body.attachments,
+            modelBehavior: body.modelBehavior,
+            signal: abortScope.signal,
+            requester: options.aiProviderRequester,
+            pathPolicy: guardedPathPolicy,
+          });
+        }
+        return requestRepoWriteAIChatCompletion({ target, messages: body.messages, context, repo: effectiveRepo, attachments: body.attachments, modelBehavior: body.modelBehavior, runner: options.aiCommandRunner, signal: abortScope.signal });
         })();
         return { context, result };
       });
@@ -260,15 +334,21 @@ export function createApiRouter(registryOrConfigPath: RepositoryRegistry | strin
       const repoId = String(body.context?.repoId || "");
       const execution = await withRepoAILock(repoId, async () => {
         const repo = await registry.findRepository(repoId);
-        const context = await buildAIChatContextForRepository(repo, body.context);
-        assertReadinessAttestation(target, context.repoId, context.revision);
+        const guardedPathPolicy = usesGuardedRepoContext(target)
+          ? await buildGuardedRepoPathPolicy(repo, [configPath, aiChatSystemPromptPath()])
+          : undefined;
+        const effectiveRepo = guardedPathPolicy ? { ...repo, root: guardedPathPolicy.rootRealPath } : repo;
+        if (guardedPathPolicy) await assertGuardedRepoContextPaths(effectiveRepo, body.context, guardedPathPolicy);
+        const builtContext = await buildAIChatContextForRepository(effectiveRepo, body.context);
+        const context = guardedPathPolicy ? sanitizeGuardedAIChatContext(effectiveRepo, builtContext, guardedPathPolicy) : builtContext;
+        await ensureReadinessAttestation(target, effectiveRepo, context.revision, abortScope.signal);
         setNoStore(response);
         response.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
         response.setHeader("X-Content-Type-Options", "nosniff");
         if (!canWriteResponse(response)) throw new HttpError(499, "AI Chat request was canceled.");
         response.write(`${JSON.stringify({ type: "meta", runId, context })}\n`);
         const result = await (async () => {
-        if (isDirectProviderTarget(target)) {
+        if (isDirectProviderTarget(target) && providerExecutionMode(target.provider) === "readOnly") {
           const direct = await requestAIChatCompletionStream({
             provider: target.provider,
             messages: body.messages,
@@ -281,7 +361,22 @@ export function createApiRouter(registryOrConfigPath: RepositoryRegistry | strin
           });
           return { ...direct, run: contextOnlyRunSummary(target) };
         }
-        const cli = await requestRepoWriteAIChatCompletion({ target, messages: body.messages, context, repo, attachments: body.attachments, modelBehavior: body.modelBehavior, runner: options.aiCommandRunner, signal: abortScope.signal });
+        if (isDirectProviderTarget(target)) {
+          const guarded = await requestGuardedRepoWriteAIChatCompletion({
+            provider: target.provider,
+            messages: body.messages,
+            context,
+            repo: effectiveRepo,
+            attachments: body.attachments,
+            modelBehavior: body.modelBehavior,
+            signal: abortScope.signal,
+            requester: options.aiProviderRequester,
+            pathPolicy: guardedPathPolicy,
+          });
+          if (canWriteResponse(response)) response.write(`${JSON.stringify({ type: "delta", content: guarded.content })}\n`);
+          return guarded;
+        }
+        const cli = await requestRepoWriteAIChatCompletion({ target, messages: body.messages, context, repo: effectiveRepo, attachments: body.attachments, modelBehavior: body.modelBehavior, runner: options.aiCommandRunner, signal: abortScope.signal });
         if (canWriteResponse(response)) response.write(`${JSON.stringify({ type: "delta", content: cli.content })}\n`);
         return cli;
         })();
@@ -427,6 +522,10 @@ function isDirectProviderTarget(target: AIChatExecutionTarget): target is Extrac
   return target.kind === "codexBackedProvider" || target.kind === "codexBackedLocal";
 }
 
+function usesGuardedRepoContext(target: AIChatExecutionTarget): boolean {
+  return isDirectProviderTarget(target) ? providerExecutionMode(target.provider) === "repoWrite" : true;
+}
+
 function contextOnlyRunSummary(target: Extract<AIChatExecutionTarget, { kind: "codexBackedProvider" | "codexBackedLocal" }>): AIChatRunSummary {
   return {
     accessMode: "readOnly",
@@ -437,6 +536,10 @@ function contextOnlyRunSummary(target: Extract<AIChatExecutionTarget, { kind: "c
     repairs: [],
     warnings: ["Context-only execution: Reader-Wiki did not grant repository write tools."],
   };
+}
+
+function providerExecutionMode(provider: AIProviderSettings): "readOnly" | "repoWrite" {
+  return provider.executionMode === "repoWrite" ? "repoWrite" : "readOnly";
 }
 
 function requestAbortScope(request: Request, response: Response): { signal: AbortSignal; abort: () => void; cleanup: () => void } {
@@ -458,8 +561,26 @@ function requestAbortScope(request: Request, response: Response): { signal: Abor
 }
 
 function readinessAttestationKey(entry: AIEntryKind, repoId: string, revision: string, provider: AIProviderSettings | undefined): string {
-  const fingerprint = createHash("sha256").update(JSON.stringify(provider || {})).digest("hex");
+  const fingerprint = createHash("sha256").update(JSON.stringify(providerAttestationSnapshot(provider))).digest("hex");
   return `${entry}:${repoId}:${revision}:${fingerprint}`;
+}
+
+function providerAttestationSnapshot(provider: AIProviderSettings | undefined): Record<string, string> {
+  if (!provider) return {};
+  return {
+    entry: provider.entry,
+    provider: provider.provider || "",
+    runtime: provider.runtime || "",
+    model: provider.model,
+    baseUrl: provider.baseUrl,
+    apiFormat: provider.apiFormat,
+    credential: provider.credential || "",
+    executionMode: providerExecutionMode(provider),
+  };
+}
+
+function positiveInteger(value: number | undefined, fallback: number): number {
+  return Number.isSafeInteger(value) && Number(value) > 0 ? Number(value) : fallback;
 }
 
 function canWriteResponse(response: Response): boolean {

@@ -28,8 +28,8 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { fetchFile, fetchHttpDeliveryStatus, fetchRepos, fetchTree, imageFileUrl, openRepository, pdfFileUrl, startHttpDelivery, stopHttpDelivery } from "./api";
-import type { AIChatContextChip, AIChatSessionState, DiffStatus, FileResponse, HttpDeliveryItemStatus, HttpDeliveryStatus, RepoListItem, RepoSyncStatus, TreeNode, TreeSnapshot } from "./types";
-import { activeAIChatTarget, activeAIModelBehavior, defaultAISettings, defaultBasicSettings, invalidateAIReadiness, loadBasicSettings, normalizeReaderFontScale, persistBasicSettings, type AISettingsState, type BasicSettings, type ReaderFontScale } from "./settingsState";
+import type { AIChatContextChip, AIChatSessionState, AIEntryKind, DiffStatus, FileResponse, HttpDeliveryItemStatus, HttpDeliveryStatus, RepoListItem, RepoSyncStatus, TreeNode, TreeSnapshot } from "./types";
+import { activeAIChatTarget, activeAIModelBehavior, defaultAISettings, defaultBasicSettings, invalidateAIReadiness, loadBasicSettings, normalizeReaderFontScale, persistBasicSettings, updateAIEntryStatus, type AISettingsState, type BasicSettings, type ReaderFontScale } from "./settingsState";
 import { injectMarkdownCodeToolbarButtons, installCodeBlockRule } from "../shared/markdownCodeBlocks";
 import { installTableScrollRule } from "../shared/markdownTableScroll";
 import { installTaskListRule } from "../shared/markdownTaskLists";
@@ -97,6 +97,23 @@ const defaultAIChatSession: AIChatSessionState = {
   contextChips: [],
   dismissedRulePathKeys: [],
 };
+
+function aiSettingsSessionIdentity(settings: AISettingsState): string {
+  const activeEntry = settings.activeEntry;
+  if (!activeEntry) return "none";
+  const entry = settings.entries[activeEntry];
+  if (!("model" in entry)) return activeEntry;
+  return JSON.stringify({
+    entry: activeEntry,
+    provider: entry.provider || "",
+    runtime: entry.runtime || "",
+    model: entry.model,
+    baseUrl: entry.baseUrl,
+    apiFormat: entry.apiFormat,
+    credential: entry.credential || "",
+    executionMode: entry.executionMode === "repoWrite" ? "repoWrite" : "readOnly",
+  });
+}
 const memoMarkdown = new MarkdownIt({ html: false, linkify: true });
 installTableScrollRule(memoMarkdown);
 installCodeBlockRule(memoMarkdown);
@@ -135,6 +152,16 @@ export function App() {
   const [repositoryReloadingRepoId, setRepositoryReloadingRepoId] = useState("");
   const [treeScrollTop, setTreeScrollTop] = useState(0);
   const [treeHorizontalScrollLeft, setTreeHorizontalScrollLeft] = useState(0);
+  const handleAIReadinessFailure = useCallback((entry: AIEntryKind, message: string) => {
+    setAISettings((current) => updateAIEntryStatus(current, entry, {
+      state: "failed",
+      code: "readiness_renewal_failed",
+      severity: "error",
+      message,
+      nextAction: "Open Settings and run readiness again.",
+      checkedAt: new Date().toISOString(),
+    }));
+  }, []);
   const treeSectionRef = useRef<HTMLDivElement | null>(null);
   const treeHorizontalScrollRef = useRef<HTMLDivElement | null>(null);
   const pathMenuRef = useRef<HTMLDivElement | null>(null);
@@ -198,6 +225,16 @@ export function App() {
   const updateAIChatSession = useCallback((updater: (session: AIChatSessionState) => AIChatSessionState) => {
     setAIChatSession((current) => updater(current));
   }, []);
+
+  const resetAIChatSession = useCallback(() => {
+    setAIChatSession(defaultAIChatSession);
+  }, []);
+
+  const updateAISettingsFromSettings = useCallback((settings: AISettingsState) => {
+    const targetChanged = aiSettingsSessionIdentity(aiSettings) !== aiSettingsSessionIdentity(settings);
+    setAISettings(settings);
+    if (targetChanged) resetAIChatSession();
+  }, [aiSettings, resetAIChatSession]);
 
   const openSettings = useCallback((category: SettingsCategory = "basic") => {
     setSettingsCategory(category);
@@ -296,7 +333,7 @@ export function App() {
       setActiveRepoId(repo.id);
       if (identityChanged) {
         setAISettings((current) => invalidateAIReadiness(current));
-        setAIChatSession(defaultAIChatSession);
+        resetAIChatSession();
       }
       setTreeCache({});
       setExpanded(new Set([""]));
@@ -333,7 +370,7 @@ export function App() {
         setError(message);
       }
     },
-    [activeTabByRepo, openFile, refreshFileTab, tabsByRepo],
+    [activeTabByRepo, openFile, refreshFileTab, resetAIChatSession, tabsByRepo],
   );
 
   const reloadActiveRepositoryView = useCallback(async () => {
@@ -393,7 +430,7 @@ export function App() {
       setExpanded(new Set([""]));
       setTabsByRepo((current) => ({ ...current, [activeRepoId]: [] }));
       setActiveTabByRepo((current) => ({ ...current, [activeRepoId]: "" }));
-      setAIChatSession(defaultAIChatSession);
+      resetAIChatSession();
       setAISettings((current) => invalidateAIReadiness(current));
       await selectRepo(nextActiveRepo);
       return;
@@ -401,7 +438,7 @@ export function App() {
     if (!stillActive && nextRepos[0]) {
       await selectRepo(nextRepos[0]);
     }
-  }, [activeRepoId, repos, selectRepo]);
+  }, [activeRepoId, repos, resetAIChatSession, selectRepo]);
 
   useEffect(() => {
     let cancelled = false;
@@ -722,7 +759,7 @@ export function App() {
           basicSaveError={basicSaveError}
           onBack={() => setAppView("viewer")}
           onBasicSettingsChange={updateBasicSettings}
-          onAISettingsChange={setAISettings}
+          onAISettingsChange={updateAISettingsFromSettings}
           onRepositoriesChanged={reloadRepositoriesAfterSettingsSave}
         />
       </Suspense>
@@ -736,7 +773,7 @@ export function App() {
       <aside className="sidebar" aria-label="Repositories and files">
         <header className="sidebar-header">
           <h1>Reader-Wiki</h1>
-          <p>Local read-only repository viewer</p>
+          <p>Local repository reader with guarded AI edits</p>
         </header>
         {loading ? <p className="state-text">Loading repositories...</p> : null}
         <label className="repo-picker-label" htmlFor="repo-picker">
@@ -931,6 +968,7 @@ export function App() {
         aiSettings={aiSettings}
         aiChatSession={aiChatSession}
         onAIChatSessionChange={updateAIChatSession}
+        onAIReadinessFailure={handleAIReadinessFailure}
         aiModelBehavior={aiModelBehavior}
         activeRepoId={activeRepoId}
         activeRepoRevision={activeRepo?.revision || ""}
@@ -1623,7 +1661,7 @@ function HttpDeliveryPanel({ status, stoppingItemIds, error, onStop }: {
   );
 }
 
-function RightPanel({ mode, onModeChange, file, outline, onHeadingSelect, memoText, memoMode, onMemoTextChange, onMemoModeChange, aiSettings, aiChatSession, onAIChatSessionChange, aiModelBehavior, activeRepoId, activeRepoRevision, rootTreeNodes, onOpenSettings }: {
+function RightPanel({ mode, onModeChange, file, outline, onHeadingSelect, memoText, memoMode, onMemoTextChange, onMemoModeChange, aiSettings, aiChatSession, onAIChatSessionChange, onAIReadinessFailure, aiModelBehavior, activeRepoId, activeRepoRevision, rootTreeNodes, onOpenSettings }: {
   mode: RightPanelMode;
   onModeChange: (mode: RightPanelMode) => void;
   file: FileResponse | null;
@@ -1636,6 +1674,7 @@ function RightPanel({ mode, onModeChange, file, outline, onHeadingSelect, memoTe
   aiSettings: AISettingsState;
   aiChatSession: AIChatSessionState;
   onAIChatSessionChange: (updater: (session: AIChatSessionState) => AIChatSessionState) => void;
+  onAIReadinessFailure: (entry: AIEntryKind, message: string) => void;
   aiModelBehavior: ReturnType<typeof activeAIModelBehavior>;
   activeRepoId: string;
   activeRepoRevision: string;
@@ -1703,6 +1742,7 @@ function RightPanel({ mode, onModeChange, file, outline, onHeadingSelect, memoTe
               aiSettings={aiSettings}
               session={aiChatSession}
               onSessionChange={onAIChatSessionChange}
+              onReadinessFailure={onAIReadinessFailure}
               modelBehavior={aiModelBehavior}
               activeRepoId={activeRepoId}
               activeRepoRevision={activeRepoRevision}

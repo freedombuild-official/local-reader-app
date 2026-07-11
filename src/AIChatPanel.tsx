@@ -1,10 +1,10 @@
-import { useMemo, useRef, useState, type ChangeEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type ChangeEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent } from "react";
 import DOMPurify from "dompurify";
 import MarkdownIt from "markdown-it";
 import { Check, Copy, Mic, Plus, RotateCcw, Send, Square, X } from "lucide-react";
-import { cancelAIChatRun, streamAIChatMessage } from "./api";
+import { AIChatRequestError, cancelAIChatRun, streamAIChatMessage } from "./api";
 import { activeAIChatTarget, activeAIEntry, activeAIRuleFileName, aiVerifiedReady, type AISettingsState } from "./settingsState";
-import type { AIChatAttachment, AIChatContextChip, AIChatContextPathRequest, AIChatMessage, AIChatSessionState, AIModelBehavior, FileResponse, TreeNode } from "./types";
+import type { AIChatAttachment, AIChatContextChip, AIChatContextPathRequest, AIChatMessage, AIChatSessionState, AIEntryKind, AIModelBehavior, FileResponse, TreeNode } from "./types";
 import { injectMarkdownCodeToolbarButtons, installCodeBlockRule } from "../shared/markdownCodeBlocks";
 import { installTableScrollRule } from "../shared/markdownTableScroll";
 import { installTaskListRule } from "../shared/markdownTaskLists";
@@ -18,6 +18,7 @@ type AIChatPanelProps = {
   activeRepoRevision: string;
   activeFile: FileResponse | null;
   rootTreeNodes: TreeNode[];
+  onReadinessFailure: (entry: AIEntryKind, message: string) => void;
   onOpenSettings: () => void;
   onMarkdownClick: (event: ReactMouseEvent<HTMLElement>) => void;
 };
@@ -43,7 +44,7 @@ installTableScrollRule(aiMarkdown);
 installCodeBlockRule(aiMarkdown);
 installTaskListRule(aiMarkdown);
 
-export function AIChatPanel({ aiSettings, session, onSessionChange, modelBehavior, activeRepoId, activeRepoRevision, rootTreeNodes, onOpenSettings, onMarkdownClick }: AIChatPanelProps) {
+export function AIChatPanel({ aiSettings, session, onSessionChange, modelBehavior, activeRepoId, activeRepoRevision, rootTreeNodes, onReadinessFailure, onOpenSettings, onMarkdownClick }: AIChatPanelProps) {
   const [copyStateById, setCopyStateById] = useState<Record<string, CopyState>>({});
   const [voiceActive, setVoiceActive] = useState(false);
   const [canceling, setCanceling] = useState(false);
@@ -54,8 +55,22 @@ export function AIChatPanel({ aiSettings, session, onSessionChange, modelBehavio
   const transcriptRef = useRef<HTMLDivElement | null>(null);
   const transcriptBottomRef = useRef<HTMLDivElement | null>(null);
   const autoScrollPinnedRef = useRef(true);
+  const onSessionChangeRef = useRef(onSessionChange);
+  onSessionChangeRef.current = onSessionChange;
+  const activeRepoIdentity = `${activeRepoId}:${activeRepoRevision}`;
+  const activeRepoIdentityRef = useRef(activeRepoIdentity);
+  const effectRepoIdentityRef = useRef(activeRepoIdentity);
+  activeRepoIdentityRef.current = activeRepoIdentity;
   const activeEntry = activeAIEntry(aiSettings);
   const target = activeAIChatTarget(aiSettings);
+  const providerWriteMode = Boolean(target && "provider" in target && target.provider.executionMode === "repoWrite");
+  const targetIdentity = target
+    ? "provider" in target
+      ? [target.kind, target.provider.entry, target.provider.executionMode || "readOnly", target.provider.provider || "", target.provider.runtime || "", target.provider.model, target.provider.baseUrl, target.provider.apiFormat].join(":")
+      : `${target.kind}:${target.entry}`
+    : "none";
+  const targetIdentityRef = useRef(targetIdentity);
+  targetIdentityRef.current = targetIdentity;
   const ready = Boolean(target && activeEntry && aiVerifiedReady(aiSettings, activeEntry.entry));
   const defaultRuleChip = useMemo(() => buildDefaultRuleChip(aiSettings, activeRepoId, rootTreeNodes, session.dismissedRulePathKeys || []), [aiSettings, activeRepoId, rootTreeNodes, session.dismissedRulePathKeys]);
   const visibleContextChips = useMemo(() => visibleAIContextChips(session.contextChips || [], activeRepoId, defaultRuleChip), [session.contextChips, activeRepoId, defaultRuleChip]);
@@ -63,6 +78,44 @@ export function AIChatPanel({ aiSettings, session, onSessionChange, modelBehavio
   const ruleChips = useMemo(() => visibleContextChips.filter((chip) => chip.role === "rule"), [visibleContextChips]);
   const canSend = Boolean(ready && activeRepoId && session.draft.trim() && !session.pending);
   const voiceAvailable = Boolean(getSpeechRecognitionCtor());
+
+  useEffect(() => {
+    if (effectRepoIdentityRef.current === activeRepoIdentity) return;
+    effectRepoIdentityRef.current = activeRepoIdentity;
+    const controller = abortRef.current;
+    if (!controller) return;
+    const runId = activeRunIdRef.current;
+    abortRef.current = null;
+    activeRunIdRef.current = "";
+    cancelRequestedRef.current = false;
+    controller.abort();
+    if (runId) void cancelAIChatRun(runId).catch(() => undefined);
+    setCanceling(false);
+  }, [activeRepoIdentity]);
+
+  useEffect(() => {
+    return () => {
+      const controller = abortRef.current;
+      if (!controller) return;
+      const runId = activeRunIdRef.current;
+      abortRef.current = null;
+      activeRunIdRef.current = "";
+      cancelRequestedRef.current = false;
+      controller.abort();
+      if (runId) void cancelAIChatRun(runId).catch(() => undefined);
+      onSessionChangeRef.current((current) => {
+        const lastMessage = current.messages[current.messages.length - 1];
+        const next = current.pending && lastMessage?.role === "assistant" && !lastMessage.content
+          ? replaceLastAssistant(current, "AI Chat request canceled when the panel closed.")
+          : current;
+        return {
+          ...next,
+          pending: false,
+          error: "AI Chat request canceled when the panel closed.",
+        };
+      });
+    };
+  }, []);
 
   const renderedMessages = useMemo(
     () =>
@@ -84,6 +137,7 @@ export function AIChatPanel({ aiSettings, session, onSessionChange, modelBehavio
   }
 
   async function sendMessage(content: string) {
+    if (session.pending || abortRef.current) return;
     if (!target || !ready) {
       updateSession((current) => ({ ...current, error: "Open Settings to finish AI Chat setup." }));
       return;
@@ -94,6 +148,8 @@ export function AIChatPanel({ aiSettings, session, onSessionChange, modelBehavio
     }
 
     const requestAttachments = session.attachments;
+    const requestRepoIdentity = activeRepoIdentity;
+    const requestTargetIdentity = targetIdentity;
     const requestContextChips = visibleContextChips;
     const userMessage: AIChatMessage = { role: "user", content };
     const assistantMessage: AIChatMessage = { role: "assistant", content: "" };
@@ -130,7 +186,7 @@ export function AIChatPanel({ aiSettings, session, onSessionChange, modelBehavio
           modelBehavior,
         },
         (event) => {
-          if (abortRef.current !== controller) return;
+          if (abortRef.current !== controller || activeRepoIdentityRef.current !== requestRepoIdentity || targetIdentityRef.current !== requestTargetIdentity) return;
           if (event.type === "meta") {
             activeRunIdRef.current = event.runId || "";
             if (cancelRequestedRef.current && event.runId) void requestServerCancellation(event.runId, controller);
@@ -147,8 +203,8 @@ export function AIChatPanel({ aiSettings, session, onSessionChange, modelBehavio
           if (event.type === "error") {
             updateSessionAndFollow((current) => ({
               ...(event.details?.run
-                ? replaceLastAssistant(current, appendRunSummary("", event.details.run))
-                : replaceLastAssistant(current, "Request failed before a run summary was available.")),
+                ? replaceLastAssistant(current, appendRunSummary(event.error, event.details.run))
+                : replaceLastAssistant(current, event.error)),
               error: event.error,
             }));
           }
@@ -156,15 +212,18 @@ export function AIChatPanel({ aiSettings, session, onSessionChange, modelBehavio
         controller.signal,
       );
     } catch (nextError) {
-      if (abortRef.current === controller) {
+      if (abortRef.current === controller && activeRepoIdentityRef.current === requestRepoIdentity && targetIdentityRef.current === requestTargetIdentity) {
         const message = controller.signal.aborted ? "AI Chat request canceled." : nextError instanceof Error ? nextError.message : String(nextError);
+        if (nextError instanceof AIChatRequestError && nextError.code === "readiness_renewal_failed" && nextError.entry) {
+          onReadinessFailure(nextError.entry, message);
+        }
         updateSession((current) => ({
-          ...replaceLastAssistant(current, "Request failed before a run summary was available."),
+          ...replaceLastAssistant(current, message),
           error: message,
         }));
       }
     } finally {
-      if (abortRef.current === controller) {
+      if (abortRef.current === controller && activeRepoIdentityRef.current === requestRepoIdentity && targetIdentityRef.current === requestTargetIdentity) {
         updateSession((current) => ({ ...current, pending: false }));
         abortRef.current = null;
         activeRunIdRef.current = "";
@@ -175,13 +234,17 @@ export function AIChatPanel({ aiSettings, session, onSessionChange, modelBehavio
   }
 
   async function cancelRequest() {
-    if (!abortRef.current || abortRef.current.signal.aborted) return;
+    const controller = abortRef.current;
+    if (!controller || controller.signal.aborted) return;
     setCanceling(true);
     cancelRequestedRef.current = true;
     updateSession((current) => ({ ...current, error: "Canceling AI Chat request..." }));
     const runId = activeRunIdRef.current;
-    if (!runId) return;
-    await requestServerCancellation(runId, abortRef.current);
+    if (!runId) {
+      controller.abort();
+      return;
+    }
+    await requestServerCancellation(runId, controller);
   }
 
   async function requestServerCancellation(runId: string, controller: AbortController) {
@@ -284,7 +347,8 @@ export function AIChatPanel({ aiSettings, session, onSessionChange, modelBehavio
   function scrollTranscriptToBottomIfPinned() {
     if (!autoScrollPinnedRef.current) return;
     window.requestAnimationFrame(() => {
-      transcriptBottomRef.current?.scrollIntoView({ block: "end" });
+      const target = transcriptBottomRef.current;
+      if (typeof target?.scrollIntoView === "function") target.scrollIntoView({ block: "end" });
     });
   }
 
@@ -324,7 +388,7 @@ export function AIChatPanel({ aiSettings, session, onSessionChange, modelBehavio
       {session.error ? (
         <div className="ai-chat-error">
           <span>{session.error}</span>
-          {session.lastRequest ? (
+          {session.lastRequest && !session.pending ? (
             <button type="button" className="icon-button" aria-label="Retry AI Chat request" title="Retry AI Chat request" onClick={() => void sendMessage(session.lastRequest)}>
               <RotateCcw aria-hidden="true" focusable="false" />
             </button>
@@ -378,6 +442,11 @@ export function AIChatPanel({ aiSettings, session, onSessionChange, modelBehavio
                 </span>
               ))}
             </div>
+          ) : null}
+          {providerWriteMode ? (
+            <p className="ai-edit-target-hint ready" role="note">
+              Sending an explicit edit request authorizes one guarded run. Selected paths are hints; Reader-Wiki mediates bounded reads and validates every text operation inside the Current repo. To authorize deletion, add an exact <code>DELETE: relative/path</code> line for each file.
+            </p>
           ) : null}
           <textarea
             aria-label="AI Chat message"
@@ -461,7 +530,8 @@ function replaceLastAssistant(session: AIChatSessionState, content: string): AIC
   };
 }
 
-function appendRunSummary(content: string, run: { auditState: "verified" | "unverified"; changedPaths: Array<{ path: string; status: string }>; repairs?: string[]; warnings: string[] }): string {
+function appendRunSummary(content: string, run: { auditState: "verified" | "unverified"; readPaths?: string[]; changedPaths: Array<{ path: string; status: string }>; repairs?: string[]; warnings: string[] }): string {
+  const reads = run.readPaths?.length ? ["Provider-visible read paths:", ...run.readPaths.map((item) => `- ${item}`)].join("\n") : "";
   const changed = run.changedPaths.length
     ? ["Changed paths:", ...run.changedPaths.map((item) => `- ${item.status}: ${item.path}`)].join("\n")
     : run.auditState === "verified"
@@ -469,7 +539,7 @@ function appendRunSummary(content: string, run: { auditState: "verified" | "unve
       : "Repository changes unverified.";
   const repairs = run.repairs?.length ? ["Repairs:", ...run.repairs.map((repair) => `- ${repair}`)].join("\n") : "";
   const warnings = run.warnings.length ? ["Warnings:", ...run.warnings.map((warning) => `- ${warning}`)].join("\n") : "";
-  return [content, changed, repairs, warnings].filter(Boolean).join("\n\n");
+  return [content, reads, changed, repairs, warnings].filter(Boolean).join("\n\n");
 }
 
 function renderAIMessage(content: string): string {

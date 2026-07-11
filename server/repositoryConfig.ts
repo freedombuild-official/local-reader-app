@@ -160,7 +160,7 @@ export function normalizeDraftEntries(entries: RepositoryConfigEntryDraft[]): Re
     label: String(entry.label || "").trim(),
     root: String(entry.root || "").trim(),
     defaultPath: String(entry.defaultPath || "").trim(),
-    excludes: Array.isArray(entry.excludes) ? entry.excludes.map((item) => String(item || "").trim()).filter(Boolean) : [],
+    excludes: normalizeDraftExcludes(entry.excludes),
     fetchRemote: entry.fetchRemote === true,
   }));
 }
@@ -192,9 +192,40 @@ function normalizeRepositoryEntry(entry: unknown, index: number): RepositoryConf
     throw new HttpError(500, `${id}.root must be an absolute path.`);
   }
   const defaultPath = typeof source.defaultPath === "string" ? source.defaultPath.trim() : "";
-  const excludes = Array.isArray(source.excludes) ? source.excludes.filter((value): value is string => typeof value === "string") : [];
+  const excludes = normalizeLoadedExcludes(source.excludes, id);
   const fetchRemote = source.fetchRemote === true;
   return { id, label, root, defaultPath, excludes, fetchRemote };
+}
+
+function normalizeDraftExcludes(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return Array.from(new Set(value.map((item) => {
+    const trimmed = String(item || "").trim();
+    if (!trimmed) return "";
+    try {
+      return (normalizeRelativePath(trimmed) || trimmed).normalize("NFC");
+    } catch {
+      return trimmed;
+    }
+  }).filter(Boolean)));
+}
+
+function normalizeLoadedExcludes(value: unknown, repositoryId: string): string[] {
+  if (!Array.isArray(value)) return [];
+  try {
+    return Array.from(new Set(value
+      .filter((item): item is string => typeof item === "string")
+      .map((item) => {
+        const trimmed = item.trim();
+        if (!trimmed) return "";
+        const normalized = normalizeRelativePath(trimmed);
+        if (!normalized) throw new HttpError(500, `${repositoryId}.excludes cannot exclude the repository root.`);
+        return normalized.normalize("NFC");
+      })
+      .filter(Boolean)));
+  } catch (error) {
+    throw new HttpError(500, `${repositoryId}.excludes contains an invalid repository-relative pattern: ${error instanceof Error ? error.message : String(error)}`);
+  }
 }
 
 function toDraftEntry(entry: RepositoryConfig): RepositoryConfigEntryDraft {

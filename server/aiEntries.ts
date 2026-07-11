@@ -1,6 +1,5 @@
 import { HttpError } from "./errors.js";
 import {
-  codexCurrentRepoPermissionArgs,
   ensureSafeCwd,
   resolveAIWorkspace,
   type AICommandRunner,
@@ -8,6 +7,7 @@ import {
   safeCliEnv,
   sanitizeCliText,
 } from "./aiCliAdapters.js";
+import { probeGuardedRepoWriteCapability, type GuardedProviderRequester } from "./guardedRepoEdits.js";
 import { providerReadiness, testAIConnection } from "./aiProviders.js";
 import type { AIConnectionStatus, AIEntryKind, AIEntryReadiness, AIProviderSettings, AICliEntryKind, CliAIEntrySettings, RepositoryConfig } from "./types.js";
 
@@ -17,14 +17,15 @@ type ProbeOptions = {
   provider?: AIProviderSettings;
   repo?: RepositoryConfig;
   runner?: AICommandRunner;
+  providerRequester?: GuardedProviderRequester;
   signal?: AbortSignal;
 };
 
 export async function probeAIEntryReadiness(entry: AIEntryKind, options: ProbeOptions = {}): Promise<AIEntryReadiness> {
   if (entry === "codexCli") return probeCxReadiness(options.runner || runAICommand, options.repo, options.signal);
   if (entry === "claudeCli") return probeClaudeReadiness(options.runner || runAICommand, options.repo, options.signal);
-  if (entry === "aiApi") return probeCodexBackedProviderReadiness(options.provider, options.signal);
-  if (entry === "localAi") return probeCodexBackedLocalReadiness(options.provider, options.signal);
+  if (entry === "aiApi") return probeProviderReadiness(options.provider, options.repo, options.signal, options.providerRequester);
+  if (entry === "localAi") return probeLocalReadiness(options.provider, options.repo, options.signal, options.providerRequester);
   throw new HttpError(400, "Unknown AI entry.");
 }
 
@@ -37,18 +38,17 @@ async function probeCxReadiness(runner: AICommandRunner, repo?: RepositoryConfig
   const probeCwd = await ensureSafeCwd();
   const version = await runProbe(runner, "codex", ["--version"], probeCwd, "codexCli", signal);
   const login = await runProbe(runner, "codex", ["login", "status"], probeCwd, "codexCli", signal);
-  const help = await runProbe(runner, "codex", ["exec", ...codexCurrentRepoPermissionArgs(), "--help"], probeCwd, "codexCli", signal);
-  const helpText = probeText(help);
+  const help = await runProbe(runner, "codex", ["exec", "--help"], probeCwd, "codexCli", signal);
   const binaryReady = version.ok;
-  const authReady = login.ok && /logged in/i.test(probeText(login));
-  const wrapperReady = help.ok && cxHelpSupportsRepoWrite(helpText);
+  const authReady = login.ok && codexAuthConfigured(probeText(login));
+  const wrapperReady = false;
   const workspaceReady = workspace.ready;
   const checks = [
     check("binary", "Binary", binaryReady, binaryReady ? probeText(version).split(/\r?\n/)[0] || "Installed." : version.error),
     check("auth", "Existing CLI auth", authReady, authReady ? "Existing CLI auth is configured." : login.ok ? "Existing CLI auth was not confirmed." : login.error),
-    check("wrapper", "Repo-scoped write wrapper", wrapperReady, wrapperReady ? "Repo-scoped non-interactive flags are available." : help.ok ? "Repo-scoped non-interactive flags were not confirmed." : help.error),
+    check("wrapper", "Current repo-only write boundary", wrapperReady, help.ok ? "Codex CLI Current repo write is fail-closed. The tested macOS Codex 0.144.1 :minimal runtime grants shared system temp read/write access, and Reader-Wiki has not proven an equivalent Current repo-only boundary on every supported platform." : help.error),
     check("workspace", "Workspace", workspaceReady, workspace.message),
-    check("execution-policy", "Readiness execution policy", true, "Readiness inspects binary, auth, flags, and workspace without running an AI edit."),
+    check("execution-policy", "Readiness execution policy", true, "Readiness inspects binary, auth, flags, and workspace without running an AI edit. It does not enable CLI write while the Current repo-only boundary is unprovable."),
   ];
   return cliReadinessResult("codexCli", "codex", binaryReady ? probeText(version).split(/\r?\n/)[0] || "" : "", authReady, checks);
 }
@@ -62,42 +62,72 @@ async function probeClaudeReadiness(runner: AICommandRunner, repo?: RepositoryCo
   const helpText = probeText(help);
   const binaryReady = version.ok;
   const authReady = auth.ok && claudeAuthConfigured(probeText(auth));
-  const wrapperReady = help.ok && claudeHelpSupportsRepoWrite(helpText);
+  const capabilityPresent = help.ok && claudeHelpSupportsRepoWrite(helpText);
+  const wrapperReady = false;
   const workspaceReady = workspace.ready;
   const checks = [
     check("binary", "Binary", binaryReady, binaryReady ? probeText(version).split(/\r?\n/)[0] || "Installed." : version.error),
     check("auth", "Existing CLI auth", authReady, authReady ? "Existing CLI auth is configured." : auth.ok ? "Existing CLI auth was not confirmed." : auth.error),
-    check("wrapper", "Repo-scoped write wrapper", wrapperReady, wrapperReady ? "Tool-restricted print flags are available." : help.ok ? "Tool-restricted print flags were not confirmed." : help.error),
+    check("wrapper", "Repo-scoped write wrapper", wrapperReady, capabilityPresent ? "Claude Code CLI Current repo write remains unavailable because Reader-Wiki cannot prove repo-outside read and protected-path write confinement." : help.ok ? "Tool-restricted print flags were not confirmed." : help.error),
     check("workspace", "Workspace", workspaceReady, workspace.message),
-    check("execution-policy", "Readiness execution policy", true, "Readiness inspects binary, auth, flags, and workspace without running an AI edit."),
+    check("execution-policy", "Readiness execution policy", true, "Readiness does not run an AI edit and fails closed when Current repo confinement cannot be proven."),
   ];
   return cliReadinessResult("claudeCli", "claude", binaryReady ? probeText(version).split(/\r?\n/)[0] || "" : "", authReady, checks);
 }
 
-async function probeCodexBackedProviderReadiness(provider: AIProviderSettings | undefined, signal?: AbortSignal): Promise<AIEntryReadiness> {
+async function probeProviderReadiness(provider: AIProviderSettings | undefined, repo?: RepositoryConfig, signal?: AbortSignal, requester?: GuardedProviderRequester): Promise<AIEntryReadiness> {
   const providerCheck = provider ? providerReadiness(provider) : missingProviderStatus("AI API settings are required.");
-  const connection = provider && providerCheck.state === "ready"
-    ? await testAIConnection(provider, signal)
-    : providerCheck;
+  const mode = providerExecutionMode(provider);
+  const connection = provider && providerCheck.state === "ready" && mode === "readOnly" ? await testAIConnection(provider, signal) : providerCheck;
+  if (mode === "readOnly") {
+    return providerReadinessResult("aiApi", provider, [
+      check("provider", "Provider settings", providerCheck.state === "ready", providerCheck.message),
+      check("endpoint", "Endpoint reachable", connection.state === "ready" && connection.code === "success", connection.message),
+      check("execution-policy", "Execution policy", true, "Context-only provider execution is ready and cannot write repository files."),
+    ]);
+  }
+
+  const workspace = await readinessWorkspace(repo);
+  const capability = provider && providerCheck.state === "ready"
+    ? await probeGuardedRepoWriteCapability(provider, signal, requester)
+    : { ok: false, message: providerCheck.message, status: undefined };
+  const endpointReady = capability.status?.state === "ready" && capability.status.code === "success";
   const checks = [
     check("provider", "Provider settings", providerCheck.state === "ready", providerCheck.message),
-    check("endpoint", "Endpoint reachable", connection.state === "ready" && connection.code === "success", connection.message),
-    check("execution-policy", "Execution policy", true, "Context-only provider execution is ready and cannot write repository files."),
+    check("endpoint", "Endpoint reachable", endpointReady, endpointReady ? "The configured endpoint returned a model response." : capability.message),
+    check("protocol", "Guarded edit protocol", capability.ok, capability.message),
+    check("workspace", "Workspace", workspace.ready && workspace.repoScoped, workspace.repoScoped ? workspace.message : "Current repo write requires a selected repository workspace."),
+    check("execution-policy", "Execution policy", true, "The provider receives bounded repository-relative context but no filesystem or shell access. Reader-Wiki alone validates and applies text operations inside the Current repo."),
   ];
   return providerReadinessResult("aiApi", provider, checks);
 }
 
-async function probeCodexBackedLocalReadiness(provider: AIProviderSettings | undefined, signal?: AbortSignal): Promise<AIEntryReadiness> {
+async function probeLocalReadiness(provider: AIProviderSettings | undefined, repo?: RepositoryConfig, signal?: AbortSignal, requester?: GuardedProviderRequester): Promise<AIEntryReadiness> {
   const providerCheck = provider ? providerReadiness(provider) : missingProviderStatus("Local AI settings are required.");
-  const localSupported = provider?.runtime === "ollama" || provider?.runtime === "lmStudio";
-  const connection = provider && localSupported && providerCheck.state === "ready"
+  const mode = providerExecutionMode(provider);
+  const connection = provider && providerCheck.state === "ready" && mode === "readOnly"
     ? await testAIConnection(provider, signal)
     : providerCheck;
+  if (mode === "readOnly") {
+    return providerReadinessResult("localAi", provider, [
+      check("provider", "Local settings", providerCheck.state === "ready", providerCheck.message),
+      check("local-provider", "Local provider", providerCheck.state === "ready", providerCheck.state === "ready" ? "A direct loopback provider is configured for Context-only execution." : providerCheck.message),
+      check("endpoint", "Endpoint reachable", connection.state === "ready" && connection.code === "success", connection.message),
+      check("execution-policy", "Execution policy", true, "Context-only local execution is ready and cannot write repository files."),
+    ]);
+  }
+
+  const workspace = await readinessWorkspace(repo);
+  const capability = provider && providerCheck.state === "ready"
+    ? await probeGuardedRepoWriteCapability(provider, signal, requester)
+    : { ok: false, message: providerCheck.message, status: undefined };
+  const endpointReady = capability.status?.state === "ready" && capability.status.code === "success";
   const checks = [
     check("provider", "Local settings", providerCheck.state === "ready", providerCheck.message),
-    check("local-provider", "Local provider", Boolean(localSupported), localSupported ? "Local provider is explicitly configured." : "Choose Ollama or LM Studio for Local AI."),
-    check("endpoint", "Endpoint reachable", connection.state === "ready" && connection.code === "success", connection.message),
-    check("execution-policy", "Execution policy", true, "Context-only local execution is ready and cannot write repository files."),
+    check("endpoint", "Endpoint reachable", endpointReady, endpointReady ? "The loopback endpoint returned a model response." : capability.message),
+    check("protocol", "Guarded edit protocol", capability.ok, capability.message),
+    check("workspace", "Workspace", workspace.ready && workspace.repoScoped, workspace.repoScoped ? workspace.message : "Current repo write requires a selected repository workspace."),
+    check("execution-policy", "Execution policy", true, "The local model receives bounded repository-relative context but no filesystem or shell access. Reader-Wiki alone validates and applies text operations inside the Current repo."),
   ];
   return providerReadinessResult("localAi", provider, checks);
 }
@@ -135,16 +165,6 @@ function probeText(result: { stdout: string; stderr: string }): string {
   return sanitizeCliText([result.stdout, result.stderr].filter(Boolean).join("\n"));
 }
 
-function cxHelpSupportsRepoWrite(help: string): boolean {
-  return help.includes("--strict-config")
-    && help.includes("--ignore-user-config")
-    && help.includes("--ignore-rules")
-    && help.includes("--disable")
-    && help.includes("--config")
-    && help.includes("--ephemeral")
-    && help.includes("--json");
-}
-
 function claudeHelpSupportsRepoWrite(help: string): boolean {
   return help.includes("--print") && help.includes("--output-format") && help.includes("--tools") && help.includes("--permission-mode") && help.includes("--safe-mode") && help.includes("--no-session-persistence");
 }
@@ -158,16 +178,22 @@ function claudeAuthConfigured(stdout: string): boolean {
   }
 }
 
+function codexAuthConfigured(stdout: string): boolean {
+  const normalized = stdout.trim();
+  if (/\bnot\s+logged\s+in\b/i.test(normalized) || /\blogged\s+out\b/i.test(normalized)) return false;
+  return /\blogged\s+in\b/i.test(normalized);
+}
+
 function cliReadinessResult(entry: AICliEntryKind, binaryName: "codex" | "claude", version: string, authReady: boolean, checks: Check[]): AIEntryReadiness {
-  const ready = checks.every((item) => item.status === "ready");
-  const status = readinessStatus(ready, checks, ready ? `${entryLabel(entry)} repo-scoped write wrapper is ready.` : firstError(checks));
+  const ready = false;
+  const status = readinessStatus(false, checks, firstError(checks));
   const settings: CliAIEntrySettings = {
     entry,
     binaryName,
     version,
     authState: authReady ? "configured" : "notConfigured",
-    readOnlyWrapperState: ready ? "ready" : "notReady",
-    executionMode: ready ? "repoWrite" : "unknown",
+    readOnlyWrapperState: "notReady",
+    executionMode: "unknown",
     lastCheckedAt: status.checkedAt,
     readinessMessage: status.message,
   };
@@ -176,14 +202,27 @@ function cliReadinessResult(entry: AICliEntryKind, binaryName: "codex" | "claude
 
 function providerReadinessResult(entry: "aiApi" | "localAi", provider: AIProviderSettings | undefined, checks: Check[]): AIEntryReadiness {
   const ready = checks.every((item) => item.status === "ready");
-  const status = readinessStatus(ready, checks, ready ? `${entryLabel(entry)} context-only execution is ready.` : firstError(checks));
+  const mode = providerExecutionMode(provider);
+  const status = readinessStatus(ready, checks, ready ? `${entryLabel(entry)} ${mode === "repoWrite" ? "repo-wide Current repo write" : "context-only execution"} is ready.` : firstError(checks));
+  const publicProvider = provider
+    ? omitProviderCredential(provider)
+    : { entry, model: "", baseUrl: "", apiFormat: "openaiCompatible" as const };
   return {
     entry,
-    settings: { ...(provider || { entry, model: "", baseUrl: "", apiFormat: "openaiCompatible" }), entry } as AIProviderSettings,
+    settings: { ...publicProvider, entry, executionMode: mode } as AIProviderSettings,
     status,
     ready,
     checks,
   };
+}
+
+function omitProviderCredential(provider: AIProviderSettings): Omit<AIProviderSettings, "credential"> {
+  const { credential: _credential, ...publicProvider } = provider;
+  return publicProvider;
+}
+
+function providerExecutionMode(provider: AIProviderSettings | undefined): "readOnly" | "repoWrite" {
+  return provider?.executionMode === "repoWrite" ? "repoWrite" : "readOnly";
 }
 
 function check(id: string, label: string, ok: boolean, message: string): Check {
@@ -204,6 +243,12 @@ function readinessStatus(ready: boolean, checks: Check[], message: string): AICo
   const failed = checks.find((item) => item.status === "error");
   const code = failed?.id === "auth"
     ? "cli_auth_missing"
+    : failed?.id === "provider"
+      ? "not_configured"
+      : failed?.id === "endpoint"
+        ? "endpoint_unreachable"
+        : failed?.id === "protocol"
+          ? "unsupported_provider"
     : failed?.id === "workspace"
       ? "workspace_not_ready"
       : failed?.id === "provider-support" || failed?.id === "local-provider"
@@ -213,6 +258,8 @@ function readinessStatus(ready: boolean, checks: Check[], message: string): AICo
           : "wrapper_not_ready";
   const nextAction = failed?.id === "auth"
     ? "Complete persistent sign-in with the CLI outside Reader-Wiki, then check readiness again. Credential-like environment variables are not forwarded."
+    : failed?.id === "protocol"
+      ? "Choose a model that returns the strict versioned Reader-Wiki JSON protocol, then check readiness again."
     : failed?.id === "workspace"
       ? "Select a registered repository root before sending AI Chat."
       : "Check AI Entry settings and run readiness again.";

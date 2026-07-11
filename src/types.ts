@@ -151,6 +151,7 @@ export type LocalAIRuntime = "ollama" | "lmStudio" | "openaiLocal" | "custom";
 export type AICliAuthState = "unknown" | "configured" | "notConfigured";
 export type AICliWrapperState = "unknown" | "ready" | "notReady";
 export type AIExecutionMode = "unknown" | "readOnly" | "repoWrite";
+export type AIProviderExecutionMode = Exclude<AIExecutionMode, "unknown">;
 
 export type AIProviderSettings = {
   entry: AIProviderEntryKind;
@@ -160,6 +161,7 @@ export type AIProviderSettings = {
   baseUrl: string;
   apiFormat: AIFormat;
   credential?: string;
+  executionMode?: AIProviderExecutionMode;
 };
 
 export type CliAIEntrySettings = {
@@ -189,6 +191,7 @@ export type AIReadinessCode =
   | "substrate_missing"
   | "workspace_not_ready"
   | "unsupported_provider"
+  | "readiness_renewal_failed"
   | "success";
 
 export type AIReadinessSeverity = "info" | "success" | "warning" | "error";
@@ -302,8 +305,9 @@ export type AIChangedPath = {
 export type AIChatRunSummary = {
   accessMode: "readOnly" | "repoWrite";
   entry: AIEntryKind;
-  substrate: "codexCli" | "claudeCli" | "directProvider";
+  substrate: "codexCli" | "claudeCli" | "directProvider" | "serverEditProtocol";
   auditState: "verified" | "unverified";
+  readPaths?: string[];
   changedPaths: AIChangedPath[];
   repairs: string[];
   warnings: string[];

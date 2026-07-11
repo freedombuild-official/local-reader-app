@@ -53,6 +53,31 @@ describe("repository config safety", () => {
     });
   });
 
+  it("canonicalizes valid exclude patterns and rejects a non-empty root exclude", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "reader-wiki-config-excludes-"));
+    const configPath = path.join(root, "repositories.yaml");
+    await writeFile(configPath, `repositories:
+  - id: docs
+    label: Docs
+    root: ${root}
+    excludes:
+      - ./private
+      - docs/../secret
+      - 'nested\\cache'
+`);
+    await expect(loadConfigRepositories(configPath)).resolves.toEqual([
+      expect.objectContaining({ excludes: ["private", "secret", "nested/cache"] }),
+    ]);
+
+    const validation = await validateRepositoryConfigDraft({
+      entries: [{ id: "docs", label: "Docs", root, defaultPath: "", excludes: ["."], fetchRemote: false }],
+    }, configPath);
+    expect(validation).toMatchObject({ valid: false });
+    expect(validation.checks).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "entry:0:excludesRelative", status: "error" }),
+    ]));
+  });
+
   it("rejects stale and concurrent saves without overwriting the winning config", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "reader-wiki-config-cas-"));
     const configPath = path.join(root, "repositories.yaml");

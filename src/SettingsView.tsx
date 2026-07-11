@@ -21,6 +21,7 @@ import {
   READER_FONT_SCALE_OPTIONS,
   updateAIEntry,
   updateAIEntryStatus,
+  providerExecutionMode,
   updateAIModelBehavior,
   updateCliEntryReadiness,
   type AISettingsState,
@@ -670,7 +671,7 @@ function AIChatSettingsPanel({
               entry="codexCli"
               title={entryLabel("codexCli")}
               subtitle="Existing CLI readiness"
-              note="Checks installed CLI sign-in and the Current repo write wrapper. No login, browser launch, or Git remote operation is started here."
+              note="Checks installation and sign-in, then fails closed because the current macOS Codex runtime cannot exclude shared system temp from its minimal read/write policy. No login or browser flow is started here."
               configured={configured}
               lastCheckedAt={settings.lastCheckedAtByEntry.codexCli}
               status={effectiveAIStatus(settings, "codexCli")}
@@ -692,7 +693,7 @@ function AIChatSettingsPanel({
               entry="claudeCli"
               title={entryLabel("claudeCli")}
               subtitle="Existing CLI readiness"
-              note="Checks installed CLI sign-in and the tool-restricted Current repo write wrapper. No login, browser auth, or credential handling is started here."
+              note="Checks installation and sign-in, then fails closed because this build cannot prove a Current repo-only filesystem boundary for Claude Code CLI."
               configured={configured}
               lastCheckedAt={settings.lastCheckedAtByEntry.claudeCli}
               status={effectiveAIStatus(settings, "claudeCli")}
@@ -713,8 +714,8 @@ function AIChatSettingsPanel({
             <AuthenticationEntryCard
               entry="aiApi"
               title="AI API"
-              subtitle="Direct context-only provider / model / credential"
-              note="Reader-Wiki checks the HTTPS endpoint and model directly. Credentials stay in this browser run and are sent only with provider requests."
+              subtitle="Direct context or server-validated repo access"
+              note="Context-only calls the configured HTTPS provider directly. Current repo write gives the model no shell or filesystem access: Reader-Wiki mediates bounded reads and applies only strict, validated multi-file text operations."
               configured={configured}
               lastCheckedAt={settings.lastCheckedAtByEntry.aiApi}
               status={effectiveAIStatus(settings, "aiApi")}
@@ -734,8 +735,8 @@ function AIChatSettingsPanel({
             <AuthenticationEntryCard
               entry="localAi"
               title="Local AI"
-              subtitle="Direct context-only local runtime / model"
-              note="Use a loopback Ollama or LM Studio endpoint directly. Reader-Wiki does not start runtimes, load models, or launch auth flows."
+              subtitle="Direct context or server-validated local repo access"
+              note="Context-only calls the loopback endpoint directly. Current repo write uses the same strict Reader-Wiki read/edit protocol without starting runtimes, loading models, or giving the model shell access."
               configured={configured}
               lastCheckedAt={settings.lastCheckedAtByEntry.localAi}
               status={effectiveAIStatus(settings, "localAi")}
@@ -768,16 +769,16 @@ function AIChatSettingsPanel({
       <SettingsCard title="Access policy" eyebrow="AI Chat" status="Context-only or Current repo write">
         <div className="policy-grid">
           <div className="policy-item ready">
-            <strong>Read selected context</strong>
-            <small>AI Chat receives selected files, directories, attachments, and repository rule context with repository-relative paths.</small>
+            <strong>Bounded repository context</strong>
+            <small>Context-only receives selected context. Current repo write also receives a bounded path manifest and only the additional text files it requests through Reader-Wiki; provider-visible read paths are reported after the run.</small>
           </div>
           <div className="policy-item">
-            <strong>CLI Current repo write</strong>
-            <small>Codex CLI and Claude Code CLI may edit only the Current repo selected for this AI Chat run. Review changes and keep backups; CLI use and edit results are your responsibility.</small>
+            <strong>Current repo write</strong>
+            <small>Choosing this mode and sending an explicit edit request authorizes one guarded run. Deletion additionally requires one exact DELETE: relative/path line per file. The server validates hashes, paths, symlinks, excludes, protected metadata, limits, staging, rollback, and postflight before reporting changes.</small>
           </div>
           <div className="policy-item">
             <strong>Guarded execution</strong>
-            <small>No Git commit, push, pull, fetch, checkout, merge, reset, auth flow, model download, plugin run, or app terminal UI is started.</small>
+            <small>The provider receives no shell or filesystem tool. No Git commit, remote operation, auth flow, model download, plugin run, or app terminal UI is started.</small>
           </div>
         </div>
         <div className="subsection-title">Repository Access</div>
@@ -892,10 +893,10 @@ function AuthenticationEntryCard({
               <ReadinessRow label="Connection fields" status={configured ? "ready" : "warning"} value={configured ? "Configured" : "Incomplete"} />
               <ReadinessRow label="Endpoint / model check" status={readinessRowStatus(status)} value={statusLabelText || statusLabel(status)} detail={status.message} />
               <ReadinessRow
-                label="Context-only execution"
+                label="Provider access policy"
                 status={readinessRowStatus(status)}
                 value={status.state === "ready" ? "Ready" : "Not ready"}
-                detail={status.state === "ready" ? "Reader-Wiki will send selected context without repository write tools." : "Complete the endpoint and model check before context-only AI Chat is enabled."}
+                detail={status.state === "ready" ? "Reader-Wiki will enforce the access policy selected for this provider entry." : "Complete the endpoint, model, and access policy check before AI Chat is enabled."}
               />
               <ReadinessRow label="Next action" status={readinessRowStatus(status)} value={status.nextAction || "No action available"} />
               <ReadinessRow label="Last check" status={lastCheckedAt ? "ready" : "warning"} value={formatLastCheck(lastCheckedAt)} />
@@ -941,6 +942,7 @@ function AIAPIForm({
         <input type={concealedInputType} value={provider.credential || ""} autoComplete="off" onChange={(event) => onUpdate({ credential: event.target.value })} />
       </label>
       <Field label="Model" value={provider.model} onChange={(model) => onUpdate({ model })} />
+      <ProviderAccessModeControl provider={provider} onUpdate={onUpdate} />
       {provider.credential?.trim() ? (
         <div className="setting-row inline-row wide">
           <div>
@@ -1011,6 +1013,7 @@ function LocalAIForm({
           <option value="custom">Custom</option>
         </select>
       </label>
+      <ProviderAccessModeControl provider={provider} onUpdate={onUpdate} />
       <Field label="Local endpoint" value={provider.baseUrl} onChange={(baseUrl) => onUpdate({ baseUrl })} wide />
       <Field label="Model" value={provider.model} onChange={(model) => onUpdate({ model })} />
       <label className="settings-field">
@@ -1052,6 +1055,29 @@ function LocalAIForm({
   );
 }
 
+function ProviderAccessModeControl({ provider, onUpdate }: { provider: AIProviderSettings; onUpdate: (update: Partial<AIProviderSettings>) => void }) {
+  const mode = providerExecutionMode(provider);
+  return (
+    <div className="setting-row inline-row wide">
+      <div>
+        <span>Repository access</span>
+        <strong>{mode === "repoWrite" ? "Current repo write" : "Context-only"}</strong>
+        <small>
+          {mode === "repoWrite"
+            ? "The model returns a versioned JSON read/edit plan without filesystem access. Reader-Wiki validates and applies bounded UTF-8 text operations only inside the Current repo."
+            : "The provider receives selected context but has no repository write tools."}
+        </small>
+      </div>
+      <SegmentedControl
+        label={`${provider.entry === "aiApi" ? "AI API" : "Local AI"} repository access`}
+        value={mode}
+        options={[["readOnly", "Context-only"], ["repoWrite", "Current repo write"]]}
+        onChange={(value) => onUpdate({ executionMode: value === "repoWrite" ? "repoWrite" : "readOnly" })}
+      />
+    </div>
+  );
+}
+
 function CliAIForm({ entry, status, testing, onTest }: { entry: CliAIEntrySettings; status: AIConnectionStatus; testing: boolean; onTest: () => void }) {
   return (
     <div className="cli-readiness-panel">
@@ -1077,7 +1103,7 @@ function CliReadinessDetails({ entry }: { entry: CliAIEntrySettings }) {
       <ReadinessRow label="Binary" status={entry.binaryName ? "ready" : "warning"} value={entry.binaryName || "Unknown"} />
       <ReadinessRow label="Version" status={entry.version ? "ready" : "warning"} value={entry.version || "Not checked"} />
       <ReadinessRow label="Existing sign-in" status={entry.authState === "configured" ? "ready" : "warning"} value={cliAuthLabel(entry)} />
-      <ReadinessRow label="Current repo write wrapper" status={entry.readOnlyWrapperState === "ready" ? "ready" : "warning"} value={cliWrapperLabel(entry)} />
+      <ReadinessRow label="Current repo-only boundary" status={entry.readOnlyWrapperState === "ready" ? "ready" : "warning"} value={cliWrapperLabel(entry)} />
       <ReadinessRow label="Execution mode" status={entry.executionMode === "repoWrite" ? "ready" : "warning"} value={entry.executionMode === "repoWrite" ? "Current repo write" : "Not confirmed"} />
     </>
   );
@@ -1195,10 +1221,10 @@ function entryIcon(entry: AIEntryKind): string {
 }
 
 function entryDescription(entry: AIEntryKind): string {
-  if (entry === "codexCli") return "Installed CLI with guarded Current repo write execution.";
-  if (entry === "claudeCli") return "Installed CLI with tool-restricted Current repo write execution.";
-  if (entry === "aiApi") return "Remote HTTPS provider with selected context only.";
-  return "Loopback Ollama or LM Studio runtime with selected context only.";
+  if (entry === "codexCli") return "Installed CLI diagnostics; Current repo write is fail-closed while shared system temp remains writable.";
+  if (entry === "claudeCli") return "Installed CLI diagnostics; Current repo write remains unavailable until filesystem confinement can be proven.";
+  if (entry === "aiApi") return "Remote provider with context-only or server-validated Current repo text edits.";
+  return "Loopback local provider with context-only or server-validated Current repo text edits.";
 }
 
 function Field({ label, value, onChange, wide = false }: { label: string; value: string; onChange: (value: string) => void; wide?: boolean }) {
@@ -1274,7 +1300,7 @@ function connectionHint(provider: AIProviderSettings, status: AIConnectionStatus
     if ((provider.provider === "openaiCompatible" || provider.provider === "custom") && !provider.baseUrl.trim()) return "Add a Base URL in Endpoint settings.";
     return "Ready for a direct server-side endpoint and model check.";
   }
-  if (provider.runtime !== "ollama" && provider.runtime !== "lmStudio") return "Choose Ollama or LM Studio for Local AI.";
+  if (!provider.baseUrl.trim()) return "Enter a loopback Local AI endpoint.";
   if (!provider.model.trim()) return "Choose a local model.";
   return "Ready for a direct loopback endpoint and model check.";
 }
@@ -1312,6 +1338,7 @@ function providerSettingsFingerprint(provider: AIProviderSettings): string {
     baseUrl: provider.baseUrl,
     apiFormat: provider.apiFormat,
     credential: provider.credential || "",
+    executionMode: providerExecutionMode(provider),
   });
 }
 

@@ -37,6 +37,7 @@ describe("path guard", () => {
     const repo = testRepo(root);
     expect(isExcludedPath(repo, ".git/config")).toBe(true);
     expect(isExcludedPath(repo, "node_modules/pkg.txt")).toBe(true);
+    expect(isExcludedPath({ excludes: ["caf\u00e9"] }, "cafe\u0301/private.md")).toBe(true);
     await expect(resolveRepoPath(repo, ".git/config")).rejects.toThrow("excluded");
   });
 

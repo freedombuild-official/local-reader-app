@@ -52,6 +52,7 @@ export const defaultAISettings: AISettingsState = {
       baseUrl: "",
       apiFormat: "openaiCompatible",
       credential: "",
+      executionMode: "readOnly",
     },
     localAi: {
       entry: "localAi",
@@ -60,6 +61,7 @@ export const defaultAISettings: AISettingsState = {
       baseUrl: "http://127.0.0.1:11434/v1",
       apiFormat: "openaiCompatible",
       credential: "",
+      executionMode: "readOnly",
     },
     codexCli: {
       entry: "codexCli",
@@ -247,9 +249,6 @@ export function derivedAIStatus(entry: AIEntrySettings | null): AIConnectionStat
     return aiStatus("notConfigured", "not_configured", "info", "No active AI Entry is selected.", "Select one entry before running checks or sending AI Chat.");
   }
   if (isCliSettings(entry)) {
-    if (aiReady(entry)) {
-      return aiStatus("ready", "success", "success", entry.readinessMessage || "CLI Current repo write wrapper is ready.", "Use this entry for Current repo AI Chat or check again.", entry.lastCheckedAt || "");
-    }
     if (entry.authState === "configured") {
       return aiStatus("configured", "wrapper_not_ready", "warning", entry.readinessMessage || "CLI auth is configured, but the repo-scoped write wrapper is not confirmed.", "Run readiness check for this CLI entry.", entry.lastCheckedAt || "");
     }
@@ -259,7 +258,14 @@ export function derivedAIStatus(entry: AIEntrySettings | null): AIConnectionStat
     return aiStatus("notConfigured", "needs_test", "info", entry.readinessMessage || "CLI readiness has not been checked.", "Run readiness check for this CLI entry.", entry.lastCheckedAt || "");
   }
   if (aiConfigured(entry)) {
-    return aiStatus("configured", "needs_test", "warning", "Endpoint and model readiness have not been tested.", "Check readiness before using this context-only entry for AI Chat.");
+    const mode = providerExecutionMode(entry);
+    return aiStatus(
+      "configured",
+      "needs_test",
+      "warning",
+      "Endpoint, model, and access policy readiness have not been tested.",
+      `Check readiness before using this ${mode === "repoWrite" ? "Current repo write" : "context-only"} entry for AI Chat.`,
+    );
   }
   return aiStatus("notConfigured", "not_configured", "info", "Connection settings are incomplete.", providerNextAction(entry));
 }
@@ -323,11 +329,14 @@ export function invalidateAIReadiness(settings: AISettingsState): AISettingsStat
 export function updateCliEntryReadiness(settings: AISettingsState, readiness: CliAIEntryReadiness): AISettingsState {
   const entry = normalizeAIEntryKind(readiness.entry);
   const status = readiness.status;
+  const nextEntry = isProviderEntryKind(entry)
+    ? mergeProviderReadinessSettings(settings.entries[entry] as AIProviderSettings, readiness.settings as AIProviderSettings)
+    : readiness.settings;
   return {
     ...settings,
     entries: {
       ...settings.entries,
-      [entry]: readiness.settings,
+      [entry]: nextEntry,
     },
     statuses: {
       ...settings.statuses,
@@ -340,6 +349,11 @@ export function updateCliEntryReadiness(settings: AISettingsState, readiness: Cl
   };
 }
 
+function mergeProviderReadinessSettings(current: AIProviderSettings, response: AIProviderSettings): AIProviderSettings {
+  const { credential: _responseCredential, ...publicResponse } = response;
+  return { ...current, ...publicResponse, credential: current.credential };
+}
+
 export function normalizeAISettingsState(value: AISettingsState): AISettingsState {
   const activeEntry = normalizeOptionalAIEntryKind(value.activeEntry);
   const entries = value.entries as Partial<Record<AIEntryKind, AIEntrySettings>>;
@@ -347,8 +361,8 @@ export function normalizeAISettingsState(value: AISettingsState): AISettingsStat
   const checkedAtByEntry = value.lastCheckedAtByEntry as Partial<Record<AIEntryKind, string>>;
   const modelBehaviorByEntry = (value.modelBehaviorByEntry || {}) as Partial<Record<AIEntryKind, AIModelBehavior>>;
   const nextEntries = {
-    aiApi: { ...defaultAISettings.entries.aiApi, ...(entries.aiApi || {}), entry: "aiApi" } as AIProviderSettings,
-    localAi: { ...defaultAISettings.entries.localAi, ...(entries.localAi || {}), entry: "localAi" } as AIProviderSettings,
+    aiApi: normalizeProviderSettings("aiApi", entries.aiApi),
+    localAi: normalizeProviderSettings("localAi", entries.localAi),
     codexCli: normalizeCliSettings("codexCli", entries.codexCli),
     claudeCli: normalizeCliSettings("claudeCli", entries.claudeCli),
   };
@@ -413,6 +427,21 @@ function normalizeCliSettings(entry: AICliEntryKind, value: AIEntrySettings | un
   };
 }
 
+function normalizeProviderSettings(entry: AIProviderEntryKind, value: AIEntrySettings | undefined): AIProviderSettings {
+  const source = value as Partial<AIProviderSettings> | undefined;
+  const defaults = defaultAISettings.entries[entry] as AIProviderSettings;
+  return {
+    ...defaults,
+    ...source,
+    entry,
+    executionMode: source?.executionMode === "repoWrite" ? "repoWrite" : "readOnly",
+  };
+}
+
+export function providerExecutionMode(entry: AIProviderSettings): "readOnly" | "repoWrite" {
+  return entry.executionMode === "repoWrite" ? "repoWrite" : "readOnly";
+}
+
 function normalizeOptionalAIEntryKind(entry: unknown): AIEntryKind | null {
   if (entry == null || entry === "") return null;
   if (entry === "aiApi" || entry === "localAi" || entry === "codexCli" || entry === "claudeCli") return entry;
@@ -426,18 +455,10 @@ function normalizeAIEntryKind(entry: unknown): AIEntryKind {
 
 function modelBehaviorCapabilityForEntry(entry: AIEntrySettings): AIModelBehaviorCapability {
   if (isCliSettings(entry)) {
-    if (entry.entry === "codexCli") {
-      return {
-        kind: "intelligence",
-        label: "Codex intelligence",
-        description: "Choose the response depth used when the Codex CLI write adapter receives the chat prompt.",
-        levels: ["low", "medium", "high", "xhigh"],
-      };
-    }
     return {
       kind: "none",
-      label: "Claude Code default",
-      description: "Claude Code CLI uses its configured default model behavior. Reader-Wiki does not override it.",
+      label: "CLI diagnostics only",
+      description: "This CLI entry is fail-closed for AI Chat, so Reader-Wiki does not apply a model behavior override.",
     };
   }
 

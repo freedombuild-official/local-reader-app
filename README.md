@@ -37,7 +37,7 @@ Reader-Wiki currently runs from the source files on GitHub. There is no `.dmg`, 
 - Adjust text size, light or dark appearance, and workspace width.
 - Optionally ask an AI service about files or folders that you select explicitly.
 
-Reader-Wiki is primarily a reader, not a general file editor, terminal, Git client, or remote file server. Normal viewing does not write to registered folders. Optional CLI AI Chat is the explicit exception and can edit only its Current repo after readiness succeeds. Saving Repository Settings updates only Reader-Wiki's own configuration, while downloading a Memo creates a browser download that you requested. Removing an entry from the repository list never deletes the registered folder.
+Reader-Wiki is primarily a reader, not a general file editor, terminal, Git client, or remote file server. Normal viewing does not write to registered folders. A supported optional AI Chat **Current repo write** entry is the explicit exception and can edit only its Current repo after readiness succeeds. Saving Repository Settings updates only Reader-Wiki's own configuration, while downloading a Memo creates a browser download that you requested. Removing an entry from the repository list never deletes the registered folder.
 
 ## Before You Install
 
@@ -455,11 +455,11 @@ Choose one AI entry, enter only the connection details it needs, run a readiness
 | AI conversation | Current page memory | Cleared |
 | AI entry settings and credentials | Current page memory only | Cleared |
 | HTTP Delivery sessions | Current Reader-Wiki server process | Cleared when the server stops |
-| Files in registered repositories | Read by the viewer; not saved by normal viewing | Unchanged |
+| Files in registered repositories | Read by the viewer; changed only by a guarded Current repo write run that you explicitly request | May change only after that run |
 
 ## Set Up Optional AI Chat
 
-AI Chat is optional. Use **AI API** for a remote provider or **Local AI** for an Ollama or LM Studio server running on the same computer; these entries use selected context without repository write tools. You can also use an already installed and signed-in **Codex CLI** or **Claude Code CLI** to let AI Chat edit the Current repo. All entries use the normal `pnpm start` command.
+AI Chat is optional. Use **AI API** for a remote provider or **Local AI** for a model server running on the same computer. These entries default to **Context-only**. You may explicitly select **Current repo write** when the configured endpoint and model pass Reader-Wiki's strict edit-protocol readiness check. The model still receives no shell or filesystem access: Reader-Wiki mediates bounded reads and applies only validated text operations inside the Current repo. **Codex CLI** and **Claude Code CLI** remain available for installation and persistent-auth diagnostics, but both write paths fail closed in this build because Reader-Wiki cannot prove a Current repo-only filesystem boundary for them. All four entries use the normal `pnpm start` command; there is no separate AI startup command.
 
 You provide and manage any AI account, API key, local runtime, model, endpoint, and credential used with AI Chat. Provider subscriptions, API usage fees, token or quota limits, network access, local model downloads, model licenses, storage, memory, compute, electricity, updates, and model selection are your responsibility. Reader-Wiki does not pay AI costs, refund provider charges, increase quotas, choose models for you, or provide provider-specific support.
 
@@ -469,13 +469,20 @@ You provide and manage any AI account, API key, local runtime, model, endpoint, 
 2. Set **AI API** active.
 3. Choose OpenAI, Anthropic, Google, OpenAI-compatible, or Custom.
 4. Enter the exact model name and API key. OpenAI-compatible and Custom entries also need a base URL and API format.
-5. Select **Check readiness**.
+5. Keep **Repository access** at **Context-only**, or explicitly select **Current repo write** to use Reader-Wiki's guarded server-side edit protocol.
+6. Select **Check readiness**. Changing the access mode invalidates the previous readiness result.
 
 Remote AI endpoints must use HTTPS and resolve to a public network address. Reader-Wiki blocks embedded URL credentials, private or reserved remote addresses, and redirects to another origin.
 
 The readiness check may list models or send a minimal test prompt to the configured provider. It does not send repository content.
 
 Context sent to a remote provider leaves your computer and is subject to that provider's policies. Review every selected path, rule chip, and attachment before sending.
+
+AI API **Current repo write** uses the configured OpenAI-compatible, Anthropic, or Google request format; Custom uses the API format selected in Settings. Write readiness sends a repository-free capability prompt and succeeds only when the endpoint and selected model return the exact versioned JSON protocol. A model that answers with ordinary prose remains usable in **Context-only** mode but cannot become write-ready.
+
+For a write run, Reader-Wiki sends a bounded repository-relative tree manifest. The model may request additional UTF-8 text files through bounded read rounds; those provider-visible paths appear in the run summary. The server rejects absolute and parent paths, symlinks, excluded paths, `.git`, `.codex`, `.agents`, Reader-Wiki control-plane files, binary data, oversized requests, stale file identities or hashes, colliding operations, and reserved staging names. It preflights every operation, uses repo-local staging and backups, applies create, replace, full-text write, and explicitly authorized delete operations in a deterministic order, rolls back a failed run where possible, and verifies the resulting files before removing backups. This is guarded multi-file application with rollback, not a promise of a crash-proof filesystem transaction or protection against the final path-check-to-rename race from another process running as the same user.
+
+The protocol may create or update multiple files and nested paths only after you send a message requesting repository edits. Deletion is fail-closed unless the latest user message contains an exact `DELETE: relative/path` line for that file; add one line per file. A move therefore requires a validated destination write plus an exact deletion authorization for the read source. An authorization in an earlier message, a different path, a wildcard, or ordinary prose does not authorize deletion. Selected paths are optional context hints, not the authorization boundary. There is no save, direct-edit, terminal, or Preview / Apply UI.
 
 ### Local AI with Ollama or LM Studio
 
@@ -490,27 +497,26 @@ For example, with LM Studio:
 5. Select **LM Studio**.
 6. Set the endpoint to `http://127.0.0.1:1234/v1` and the model to the exact model name loaded in LM Studio.
 7. Leave the optional credential empty unless your local server requires one.
-8. Select **Check readiness**.
+8. Keep **Repository access** at **Context-only**, or explicitly select **Current repo write** to use the guarded server-side edit protocol.
+9. Select **Check readiness**.
 
 Reader-Wiki does not start LM Studio or Ollama, download a model, load a model, check a model's license, or manage your local machine resources. Do those steps in the local runtime first and confirm that your computer has enough storage, memory, and compute for the model you choose.
 
-Ollama is also supported when its OpenAI-compatible endpoint and exact installed model name are configured. Although additional local runtime names appear in the current UI, normal server-side readiness is supported for Ollama and LM Studio.
+Ollama and other supported local runtimes can also be used when an explicit loopback host and port, the matching API format, and the exact loaded model name are configured. **Current repo write** is not restricted to a built-in LM Studio or Ollama URL, but readiness must prove that the configured model follows the strict edit protocol. Reader-Wiki never starts or downloads the local runtime or model.
 
 ### CLI entries
 
-Codex CLI and Claude Code CLI entries can edit files in the Current repo selected in Reader-Wiki. Reader-Wiki starts them with that registered repository root as the working directory only after a successful readiness check tied to the current repository revision.
+The Codex CLI and Claude Code CLI entries are diagnostics-only in this build. Reader-Wiki checks the installed binary, persistent sign-in, relevant non-interactive flags, and selected workspace, but their Current repo write boundary always reports **Check failed** and no CLI edit run starts.
 
 1. Install Codex CLI or Claude Code CLI separately by following that CLI's official instructions.
 2. Complete the CLI's persistent sign-in from your own terminal and confirm that it works before starting Reader-Wiki. Reader-Wiki intentionally does not forward credential-like environment variables to CLI child processes, so an environment-variable-only API key does not satisfy this check.
 3. Start Reader-Wiki normally with `pnpm start`.
 4. Open **Settings** > **AI Chat**, set the installed CLI active, and select **Check readiness**.
-5. Review the Current repo and context chips before sending a request.
+5. Confirm the diagnostic result. The AI Chat composer stays unavailable for this CLI entry; use AI API or Local AI for supported requests.
 
-Readiness checks the installed binary, persistent sign-in, required non-interactive flags, and Current repo without sending an AI prompt or editing repository files. Reader-Wiki does not start sign-in, browser authorization, CLI installation, model download, terminal, or Git remote operations.
+Readiness performs those diagnostics without sending an AI prompt or editing repository files. Reader-Wiki does not start sign-in, browser authorization, CLI installation, model download, terminal, or Git remote operations.
 
-Codex CLI runs with a per-run permission profile that allows minimal runtime reads and Current repo reads/writes while disabling user config, rules, apps, hooks, Multi-Agent, shell network, and additional workspace roots. Claude Code CLI runs with `Read,Edit,Write`, `acceptEdits`, and `Bash` disabled for its Current repo working directory.
-
-A CLI AI Chat run can create, update, or delete files in the Current repo. Keep backups, review the run summary and actual working-tree diff after every run, and do not send an edit request if you cannot accept or restore the result. AI output and tool behavior can be incomplete, incorrect, or broader than intended. CLI accounts, provider charges, repository contents, backups, prompts, and all resulting edits remain your responsibility.
+Codex CLI is fail-closed because the tested macOS Codex 0.144.1 `:minimal` runtime grants shared system temporary directories read/write access even when the dynamic profile denies them; that is wider than Current repo-only. Claude Code CLI is fail-closed because Reader-Wiki has not proved repo-outside read denial and protected-path write denial with an equivalent cross-platform filesystem sandbox. A future CLI path must pass the same boundary tests before it can become write-ready.
 
 ### Choose context and send a message
 
@@ -519,7 +525,7 @@ A CLI AI Chat run can create, update, or delete files in the Current repo. Keep 
 3. Review the context chips above the message box. Remove anything you do not want to send.
 4. Enter a message and send it.
 
-Selecting a path is optional. Skip step 2 for a general question or an attachment-only request, but still review and remove any automatically suggested root rule that you do not want to send.
+Selecting a path is optional. Skip step 2 for a general question, an attachment-only request, or a repo-wide edit instruction that does not need an initial path hint. A directory or several selected files are valid context. Still review and remove any automatically suggested root rule that you do not want to send.
 
 An open file is not sent automatically. A selected file can contribute text; a selected directory contributes only its direct child list, not every nested file. When present, root `AGENTS.md` or `CLAUDE.md` rules appear as a visible, removable rule chip.
 
@@ -540,9 +546,9 @@ AI context is bounded to 12 primary items, 2 rule items, 64 KiB in total, and at
 - The complete AI request body is limited to about 140 KiB, so several large text attachments can still be rejected. Use fewer or smaller files when that happens.
 - Choose Low, Medium, or High response depth for supported GPT-style models, or Thinking mode for supported Qwen-style models. Other models use their defaults.
 
-Only one AI run can use the same repository at a time, with up to four runs across the server. Send within 60 seconds after **Check readiness** succeeds; after that, or after changing settings, check again. Switching to another registered repository clears the conversation, selected context, and readiness state.
+Only one AI run can use the same repository at a time, with up to four runs across the server. Readiness uses a short server-side lease. If that lease expired or disappeared after a server restart while the browser still shows **Connected** or **Success**, sending automatically repeats the same entry, settings, Current repo, and revision checks before continuing. A failed renewal stops before the provider editing request or CLI run. Changing settings or switching repositories still invalidates readiness.
 
-AI API and Local AI responses end with a context-only run summary showing that Reader-Wiki did not grant repository write tools. CLI responses report detected Current repo changes or an `unverified` warning. AI remains advisory; a person must review the repository and decide what to keep.
+AI API and Local AI **Context-only** responses end with a summary showing no repository changes. Every **Current repo write** response reports provider-visible read paths plus new, changed, and deleted Current repo paths, or an `unverified` warning when cleanup or post-write verification was incomplete. AI remains advisory; a person must review the response, repository, and actual working-tree diff and decide what to keep.
 
 ## Safety and Privacy
 
@@ -551,8 +557,8 @@ AI API and Local AI responses end with a context-only run summary showing that R
 - Requested paths must stay inside a registered root. Absolute input paths, `..` traversal, and excluded paths are rejected. File-body reads and HTTP Delivery also reject every symbolic-link path component, while tree navigation refuses links that resolve outside the root.
 - `.git` is always excluded from file viewing. Git commands are used only for local status and diff information; Reader-Wiki does not contact Git remotes.
 - Normal viewing does not edit repository files. Repository Settings writes only the selected Reader-Wiki configuration file.
-- AI API and Local AI send the conversation, versioned system instructions, and the context visible in chips and attachments; they do not silently add other repository files. CLI entries can inspect additional files only inside the Current repo through their guarded tools. Remote AI sends the applicable material to the configured provider.
-- AI API and Local AI are context-only. Codex CLI and Claude Code CLI are the explicit exception: after readiness succeeds, they can edit the Current repo selected for that run. Reader-Wiki does not commit, push, pull, fetch, checkout, merge, reset, rebase, tag, or branch on your behalf.
+- AI API and Local AI send the conversation, versioned system instructions, and the context visible in chips and attachments. **Context-only** sends no repository write tools. **Current repo write** additionally sends a bounded repository-relative tree manifest and only the additional files requested through guarded reads. Remote AI sends that material to its configured provider.
+- AI API and Local AI default to **Context-only**. In a write run, the model has no direct filesystem or shell access; only the Reader-Wiki server validates and applies bounded UTF-8 text operations inside the Current repo. Selected context paths do not restrict the run to those paths. Reader-Wiki does not commit, push, pull, fetch, checkout, merge, reset, rebase, tag, or branch on your behalf.
 - HTTP Delivery uses temporary, restricted local URLs and does not turn Reader-Wiki into a public server.
 
 Do not run Reader-Wiki on an untrusted copy of its own source, and do not expose its port through a tunnel or network rule. To report a security problem privately, follow [SECURITY.md](SECURITY.md).
@@ -561,7 +567,7 @@ Do not run Reader-Wiki on an untrusted copy of its own source, and do not expose
 
 Reader-Wiki is provided as free, open-source software under the MIT License. It does not include individual installation, configuration, operation, or troubleshooting support comparable to a paid product or support contract.
 
-Decide whether and how to use Reader-Wiki at your own discretion and responsibility. Keep backups of important repositories before changing tools, settings, dependencies, local AI configuration, or enabling a CLI entry. You are responsible for checking the effect of commands you run, folders you register, files you expose through HTTP Delivery, context you send to AI, and every file change produced by Codex CLI or Claude Code CLI.
+Decide whether and how to use Reader-Wiki at your own discretion and responsibility. Keep backups of important repositories before changing tools, settings, dependencies, local AI configuration, or enabling provider write mode. You are responsible for checking the effect of commands you run, folders you register, files you expose through HTTP Delivery, context you send to AI, and every file change applied for an AI API or Local AI write run. Codex CLI and Claude Code CLI do not edit files in this build.
 
 Bug reports and issues, if available on the public repository, do not guarantee an individual reply, a fix, a release date, or a service-level agreement. Security reports are separate from general support; follow [SECURITY.md](SECURITY.md) and do not post unpatched vulnerability details in a public issue, discussion, AI prompt, screenshot, or log.
 

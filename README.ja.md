@@ -37,7 +37,7 @@ Reader-Wiki は、Mac または Windows PC 上のフォルダを、ブラウザ�
 - 文字サイズ、Light/Dark 表示、作業領域の幅を調整する。
 - 任意で、明示的に選んだファイルやフォルダについて AI サービスへ質問する。
 
-Reader-Wiki は閲覧を主目的とするアプリであり、汎用のファイル編集ソフト、ターミナル、Git クライアント、遠隔ファイルサーバーではありません。通常閲覧は登録したフォルダへ書き込みません。任意のCLI AI Chatだけが明示的な例外で、準備確認の成功後にCurrent repoだけを編集できます。Repository Settings の保存で更新するのは Reader-Wiki 自身の設定だけで、Memo のダウンロードは利用者が明示的に指示したブラウザからの保存です。一覧から項目を削除しても、登録したフォルダは削除しません。
+Reader-Wiki は閲覧を主目的とするアプリであり、汎用のファイル編集ソフト、ターミナル、Git クライアント、遠隔ファイルサーバーではありません。通常閲覧は登録したフォルダへ書き込みません。対応する任意のAI Chat **Current repo write**だけが明示的な例外で、準備確認の成功後にCurrent repoだけを編集できます。Repository Settings の保存で更新するのは Reader-Wiki 自身の設定だけで、Memo のダウンロードは利用者が明示的に指示したブラウザからの保存です。一覧から項目を削除しても、登録したフォルダは削除しません。
 
 ## インストール前の準備
 
@@ -455,11 +455,11 @@ HTTP Delivery は、選択したファイルに同じローカル Reader-Wiki �
 | AI との会話 | 現在のページのメモリ | 消える |
 | AI 接続設定と認証情報 | 現在のページのメモリのみ | 消える |
 | HTTP Delivery セッション | 現在の Reader-Wiki サーバープロセス | サーバー停止時に消える |
-| 登録リポジトリ内のファイル | 閲覧機能が読み取るだけで、通常閲覧では保存しない | 変更しない |
+| 登録リポジトリ内のファイル | 閲覧機能は読み取るだけで、利用者が明示依頼した制限付きCurrent repo write runだけが変更する | そのrun後だけ変更される場合がある |
 
 ## 任意のAI Chatを設定する
 
-AI Chat は任意です。遠隔の AI 事業者には **AI API**、同じコンピュータで動く Ollama または LM Studio サーバーには **Local AI** を使います。これらは選択した情報を使いますが、リポジトリへの書き込みtoolを持ちません。インストールとサインインが完了している **Codex CLI** または **Claude Code CLI** を使い、AI ChatからCurrent repoを編集することもできます。どの項目も通常の `pnpm start` で利用します。
+AI Chat は任意です。遠隔の AI 事業者には **AI API**、同じコンピュータで動くモデルサーバーには **Local AI** を使います。これらの既定は **Context-only** です。設定した接続先とモデルがReader-Wikiの厳格な編集protocol準備確認に成功した場合は、**Current repo write**を明示選択できます。この場合もモデルへshellやfilesystem accessを渡しません。Reader-Wikiが制限付きreadを仲介し、Current repo内で検証済みtext操作だけを適用します。**Codex CLI**と**Claude Code CLI**は導入とpersistent authの診断に使えますが、Current repoだけというfilesystem境界を証明できないため、このbuildでは両方のwriteをfail closedにします。4項目とも通常の`pnpm start`で使い、AI専用の別起動commandはありません。
 
 AI Chat で使う AI アカウント、API キー、ローカル実行環境、モデル、接続先、認証情報は、利用者自身が用意して管理します。事業者の契約料金、API 利用料、token や quota の上限、ネットワーク利用、ローカルモデルのダウンロード、モデルのライセンス、ストレージ、メモリ、計算資源、電力、更新、モデル選択は利用者の責任と負担です。Reader-Wiki は AI 利用料を負担せず、事業者への支払いの返金、quota の増加、モデル選定の代行、事業者別の個別サポートを提供しません。
 
@@ -469,13 +469,20 @@ AI Chat で使う AI アカウント、API キー、ローカル実行環境、�
 2. **AI API** を使用中にします。
 3. OpenAI、Anthropic、Google、OpenAI-compatible、Custom から選びます。
 4. 正確なモデル名と API キーを入力します。OpenAI-compatible と Custom には、接続先 URL と API 形式も必要です。
-5. **Check readiness** を選びます。
+5. **Repository access**を**Context-only**のままにするか、Reader-Wikiの制限付きserver-side編集protocolを使うために**Current repo write**を明示選択します。
+6. **Check readiness**を選びます。access modeを変えると、以前の準備確認は無効になります。
 
 遠隔 AI の接続先は HTTPS を使い、公開ネットワークアドレスへ名前解決できる必要があります。Reader-Wiki は URL 内の認証情報、非公開または予約済みの遠隔アドレス、別の接続先への転送を拒否します。
 
 準備確認では、設定した事業者のモデル一覧を取得するか、最小限のテスト指示を送ることがあります。リポジトリの内容は送信しません。
 
 遠隔の AI 事業者へ送る情報はコンピュータの外へ出て、その事業者の方針が適用されます。送信前に、選択したパス、規則を示すチップ、添付ファイルをすべて確認してください。
+
+AI APIの**Current repo write**は、設定したOpenAI-compatible、Anthropic、Googleのrequest形式を使います。CustomはSettingsで選んだAPI formatを使います。write readinessではrepository情報を含まないcapability promptを送り、接続先と選択モデルがversion付きJSON protocolを正確に返した場合だけ成功します。通常の文章で応答するモデルは**Context-only**では使えますが、write-readyにはなりません。
+
+write runでは、Reader-Wikiが上限付きのrepository-relative tree manifestを送ります。モデルは制限付きread roundで追加のUTF-8 text fileを要求でき、providerへ見せたpathはrun summaryに表示します。serverはabsolute path、parent traversal、symlink、exclude、`.git`、`.codex`、`.agents`、Reader-Wikiのcontrol-plane file、binary、size超過、古いfile identityまたはhash、操作衝突、予約済みstaging名を拒否します。全操作を事前検査し、repo内のstagingとbackupを使い、作成、exact replace、全文write、明示承認済み削除を決定順で適用します。失敗時は可能な範囲でrollbackし、backupを削除する前に適用後のfileを再確認します。これはrollback付きの制限されたmulti-file適用であり、process crashにも耐える完全なfilesystem transactionや、同じ利用者権限の別processによる最後のpath確認からrenameまでのrace防止を保証するものではありません。
+
+現在のメッセージでrepository編集を依頼したrunだけが、複数fileとnested pathを作成または更新できます。削除は、最新のuser messageに対象fileと完全一致する`DELETE: relative/path`行がある場合だけ許可します。fileごとに1行必要です。移動には、検証済みの移動先writeに加え、read済み移動元への完全一致した削除承認が必要です。以前のmessage、別path、wildcard、通常の文章は削除承認になりません。選択pathは任意のcontext hintで、編集許可範囲の上限ではありません。保存、直接編集、terminal、Preview / ApplyのUIはありません。
 
 ### OllamaまたはLM Studioを使うLocal AI
 
@@ -490,27 +497,26 @@ Local AI は、同じコンピュータ上で利用者が起動したモデル�
 5. **LM Studio** を選びます。
 6. 接続先を `http://127.0.0.1:1234/v1` にし、モデルには LM Studio で読み込んだ正確なモデル名を入力します。
 7. ローカルサーバーが要求しない限り、任意の認証情報は空欄にします。
-8. **Check readiness** を選びます。
+8. **Repository access**を**Context-only**のままにするか、制限付きserver-side編集protocolを使うために**Current repo write**を明示選択します。
+9. **Check readiness**を選びます。
 
 Reader-Wiki は LM Studio や Ollama の起動、モデルのダウンロード、モデルの読み込み、モデルのライセンス確認、端末資源の管理を行いません。先にローカル実行環境側で準備し、選んだモデルに十分なストレージ、メモリ、計算資源があるか確認してください。
 
-Ollama も、OpenAI 互換の接続先とインストール済みモデルの正確な名前を設定すれば利用できます。現在の画面にはほかのローカル実行環境名も表示されますが、通常のサーバー側準備確認に対応するのは Ollama と LM Studio です。
+Ollamaなど、対応するlocal runtimeも、明示的なloopback hostとport、合致するAPI format、読み込み済みmodelの正確な名前を設定すれば利用できます。**Current repo write**は内蔵のLM StudioまたはOllama URLだけに限定しませんが、設定したmodelが厳格な編集protocolに従うことをreadinessで実証する必要があります。Reader-Wikiはlocal runtimeやmodelを起動またはdownloadしません。
 
 ### CLIの項目
 
-Codex CLI と Claude Code CLI の項目は、Reader-Wikiで選択中のCurrent repoにあるファイルを編集できます。Reader-Wikiは、現在のリポジトリrevisionに結び付いた準備確認が成功した場合だけ、登録済みrepository rootを作業directoryとしてCLIを起動します。
+Codex CLIとClaude Code CLIの項目は、このbuildでは診断専用です。インストール済みbinary、persistent sign-in、関連する非対話flag、選択workspaceを検査しますが、Current repo write境界は必ず**Check failed**になり、CLI編集runを開始しません。
 
 1. Codex CLIまたはClaude Code CLIを、各CLIの公式手順に従って別途インストールします。
 2. 自分のターミナルからCLIのpersistent sign-inを完了し、Reader-Wikiを起動する前に動作を確認します。Reader-Wikiはcredential-likeな環境変数をCLIの子processへ意図的に渡さないため、環境変数だけで設定したAPI keyではこの確認を通過しません。
 3. Reader-Wikiを通常どおり`pnpm start`で起動します。
 4. **Settings** > **AI Chat**を開き、インストール済みCLIを使用中にして、**Check readiness**を選びます。
-5. 送信前にCurrent repoと、送信情報を示すチップを確認します。
+5. 診断結果を確認します。このCLI項目ではAI Chatの入力欄は使えません。対応するrequestにはAI APIまたはLocal AIを使います。
 
-準備確認は、インストール済みbinary、persistent sign-in、必要な非対話flag、Current repoを検査します。AIへの指示送信やリポジトリ編集は行いません。Reader-Wikiは、サインイン手順、ブラウザ認証、CLIのインストール、モデルのダウンロード、ターミナル、Git remote操作を開始しません。
+準備確認は、AI promptの送信やrepository編集をせずにこれらの診断を行います。Reader-Wikiは、sign-in手順、browser認証、CLIのinstall、model download、terminal、Git remote操作を開始しません。
 
-Codex CLIはrunごとのpermission profileでminimal runtime readとCurrent repoのread/writeだけを許可し、利用者config、rules、apps、hooks、Multi-Agent、shell network、追加workspace rootを無効化します。Claude Code CLIはCurrent repoを作業directoryとし、`Read,Edit,Write`、`acceptEdits`、`Bash`禁止で実行します。
-
-CLIを使うAI Chatは、Current repoのファイルを作成、更新、削除できます。backupを用意し、毎回run summaryと実際のworking tree diffを確認してください。結果を受け入れたり復元したりできない場合は、編集要求を送らないでください。AI出力とtool動作は、不完全、誤り、または意図より広い場合があります。CLIアカウント、事業者への支払い、リポジトリ内容、backup、指示、発生したすべての編集は利用者の責任です。
+Codex CLIは、検証したmacOS版Codex 0.144.1の`:minimal` runtimeが、dynamic profileで拒否しても共有system temporary directoryのread/writeを許可するためfail closedです。これはCurrent repoだけという境界より広い権限です。Claude Code CLIは、repo外read禁止と保護pathへのwrite禁止を同等のcross-platform filesystem sandboxで実証できないためfail closedです。将来CLIを有効にするには、同じ境界testへの合格が必要です。
 
 ### 送る情報を選んでメッセージを送る
 
@@ -519,7 +525,7 @@ CLIを使うAI Chatは、Current repoのファイルを作成、更新、削除�
 3. メッセージ欄の上にある、送信情報を示すチップを確認します。送りたくないものは取り除きます。
 4. メッセージを入力して送信します。
 
-パスの選択は任意です。一般的な質問または添付ファイルだけの質問では手順2を省けますが、自動提案されたルートのルールを送りたくない場合は、確認して取り除いてください。
+パスの選択は任意です。一般的な質問、添付ファイルだけの質問、初期path hintを必要としないrepo-wide編集依頼では手順2を省けます。directoryや複数fileを選んだcontextも有効です。自動提案されたルートのルールを送りたくない場合は、確認して取り除いてください。
 
 開いているファイルは自動送信されません。選択したファイルはテキストを渡せます。選択したフォルダが渡すのは直下の項目一覧だけで、入れ子にあるすべてのファイル本文ではありません。ルートに `AGENTS.md` または `CLAUDE.md` がある場合は、内容を確認して取り除くこともできる規則チップとして表示します。
 
@@ -540,9 +546,9 @@ AI へ送る情報には、主要項目12件、規則項目2件、合計64 KiB�
 - AI へ送る要求全体は約140 KiBが上限です。そのため、大きめのテキストファイルを複数添付すると拒否される場合があります。その場合は、数またはサイズを減らしてください。
 - 対応する GPT 系モデルでは Low、Medium、High の応答の深さを選び、対応する Qwen 系モデルでは Thinking mode を選ぶ。それ以外はモデルの既定値を使う。
 
-同じリポジトリで同時に実行できる AI 処理は1件、サーバー全体では最大4件です。**Check readiness** の成功後60秒以内に送信してください。時間が過ぎた場合や設定を変更した場合は、もう一度確認します。別の登録リポジトリへ切り替えると、会話、選択した情報、準備確認の状態を消去します。
+同じリポジトリで同時に実行できる AI 処理は1件、サーバー全体では最大4件です。readinessは短いserver-side leaseを使います。leaseが期限切れになった場合やserver再起動で消えた場合でも、画面に**Connected**または**Success**が残っていれば、送信時に同じEntry、設定、Current repo、revisionを自動再確認してから続行します。更新に失敗した場合はprovider編集要求またはCLI runの前に停止します。設定変更またはrepo切替では引き続きreadinessを無効にします。
 
-AI APIとLocal AIの応答末尾には、Reader-Wikiがrepository write toolを与えていないことを示すcontext-onlyの実行結果が付きます。CLIの応答には、検出したCurrent repoの変更または`unverified` warningが表示されます。AIは助言を行うだけであり、人間がリポジトリを確認して残す内容を判断します。
+AI APIとLocal AIの**Context-only**応答末尾には、repository変更がないことを示す結果が付きます。すべての**Current repo write**応答は、providerへ見せたread pathと、new、changed、deletedのCurrent repo pathを表示します。cleanupまたは適用後確認が完了しなければ`unverified` warningを表示します。AIは助言を行うだけであり、人間が応答、repository、実際のworking tree diffを確認して残す内容を判断します。
 
 ## 安全性とプライバシー
 
@@ -551,8 +557,8 @@ AI APIとLocal AIの応答末尾には、Reader-Wikiがrepository write toolを�
 - 要求するパスは登録したルート内に留まる必要があります。絶対パスの入力、`..` による上位移動、除外パスを拒否します。ファイル本文の読み取りと HTTP Delivery では、パス途中のシンボリックリンクもすべて拒否します。ツリー表示では、ルート外へ解決されるリンクを拒否します。
 - `.git` はファイル閲覧から常に除外します。Git コマンドはローカルの状態と差分情報だけに使い、Reader-Wiki は Git のリモートリポジトリへ接続しません。
 - 通常閲覧はリポジトリ内のファイルを編集しません。Repository Settings が書き込むのは、選択された Reader-Wiki の設定ファイルだけです。
-- AI APIとLocal AIは、会話、版が管理されたシステム指示、画面上のチップと添付ファイルで確認できる情報だけを送り、ほかのリポジトリファイルを黙って追加しません。CLI項目は、制限されたtoolを通してCurrent repo内の追加ファイルを確認できます。遠隔AIには、その項目で利用する情報を設定した事業者へ送信します。
-- AI APIとLocal AIはcontext-onlyです。Codex CLIとClaude Code CLIは明示的な例外で、準備確認の成功後、そのrunで選択したCurrent repoを編集できます。Reader-Wikiは、commit、push、pull、fetch、checkout、merge、reset、rebase、tag、branchを代行しません。
+- AI APIとLocal AIは、会話、version付きsystem指示、画面上のchipと添付fileで確認できる情報を送ります。**Context-only**ではrepository write toolを送りません。**Current repo write**では、上限付きのrepository-relative tree manifestと、guarded readで要求された追加fileだけも送ります。遠隔AIにはその情報を設定した事業者へ送信します。
+- AI APIとLocal AIの既定は**Context-only**です。write runでもmodelはfilesystemやshellへ直接accessできず、Reader-Wiki serverだけがCurrent repo内で上限付きUTF-8 text操作を検証して適用します。選択context pathはrunをそのpathだけに制限しません。Reader-Wikiは、commit、push、pull、fetch、checkout、merge、reset、rebase、tag、branchを代行しません。
 - HTTP Delivery は一時的で制限されたローカル URL を使い、Reader-Wiki を公開サーバーにはしません。
 
 信頼できない Reader-Wiki のソースを実行せず、ポートをトンネルやネットワーク規則で外部公開しないでください。セキュリティ上の問題を非公開で報告するには、[SECURITY.md](SECURITY.md)に従ってください。
@@ -561,7 +567,7 @@ AI APIとLocal AIの応答末尾には、Reader-Wikiがrepository write toolを�
 
 Reader-Wiki は MIT License のもとで無償公開される OSS です。有償製品または有償サポート契約に相当する個別の導入、設定、操作、トラブル対応サポートは含まれません。
 
-Reader-Wiki を使うかどうか、どの環境でどう運用するかは、利用者自身の裁量と責任で判断してください。重要なリポジトリを扱う場合は、ツール、設定、依存関係、ローカル AI 設定を変更したりCLI項目を有効にしたりする前にバックアップを用意してください。実行するコマンド、登録するフォルダ、HTTP Delivery で開くファイル、AI へ送る情報、Codex CLIまたはClaude Code CLIが行ったすべてのファイル変更を確認する責任は利用者にあります。
+Reader-Wiki を使うかどうか、どの環境でどう運用するかは、利用者自身の裁量と責任で判断してください。重要なrepositoryを扱う場合は、tool、設定、依存関係、Local AI設定、provider write modeを変える前にbackupを用意してください。実行するcommand、登録するfolder、HTTP Deliveryで開くfile、AIへ送る情報、AI APIまたはLocal AIのwrite runで適用されたすべてのfile変更を確認する責任は利用者にあります。このbuildではCodex CLIとClaude Code CLIはfileを編集しません。
 
 公開リポジトリで bug report や issue を受け付けている場合でも、個別返信、修正、公開時期、SLA は約束しません。セキュリティ報告は一般サポートとは別です。[SECURITY.md](SECURITY.md)に従い、修正前の脆弱性の詳細を public issue、discussion、AI への相談、スクリーンショット、ログへ投稿しないでください。
 

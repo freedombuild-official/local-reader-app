@@ -13,6 +13,7 @@ type ProviderRequest = {
   context?: AIChatContext;
   attachments?: AIChatAttachment[];
   modelBehavior?: AIModelBehavior;
+  systemPrompt?: string;
   signal?: AbortSignal;
 };
 
@@ -28,6 +29,39 @@ const DEFAULT_BASE_URLS: Record<string, string> = {
 };
 const PROVIDER_RESPONSE_MAX_BYTES = 1024 * 1024;
 const PROVIDER_STREAM_MAX_BYTES = 2 * 1024 * 1024;
+const GUARDED_JSON_RESPONSE_FORMAT = {
+  type: "json_schema",
+  json_schema: {
+    name: "reader_wiki_edit_protocol",
+    strict: false,
+    schema: {
+      type: "object",
+      properties: {
+        version: { type: "string", enum: ["reader-wiki.edit-protocol.v1"] },
+        type: { type: "string", enum: ["read", "apply", "complete"] },
+        paths: { type: "array", items: { type: "string" } },
+        operations: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              op: { type: "string", enum: ["write", "replace", "delete"] },
+              path: { type: "string" },
+              content: { type: "string" },
+              oldText: { type: "string" },
+              newText: { type: "string" },
+            },
+            required: ["op", "path"],
+            additionalProperties: false,
+          },
+        },
+        message: { type: "string" },
+      },
+      required: ["version", "type"],
+      additionalProperties: false,
+    },
+  },
+} as const;
 const PROVIDER_MAX_REDIRECTS = 3;
 const PROVIDER_CONNECTION_TIMEOUT_MS = 15_000;
 const PROVIDER_CHAT_TIMEOUT_MS = 60_000;
@@ -80,7 +114,7 @@ export async function testAIConnection(provider: AIProviderSettings, signal?: Ab
         signal: timeoutSignal,
       });
       assertProviderContent(content);
-      return status("ready", "success", "success", "Connected.", "This provider endpoint is reachable. Run AI Entry readiness to confirm context-only execution.");
+      return status("ready", "success", "success", "Connected.", "This provider endpoint is reachable. Run AI Entry readiness to confirm the selected access policy.");
     });
   } catch (error) {
     return safeProviderErrorStatus(error);
@@ -140,15 +174,15 @@ export function providerReadiness(provider: AIProviderSettings): AIConnectionSta
   return status("ready", "needs_test", "info", "Connection can be tested.", "Run AI Entry readiness before using this entry.");
 }
 
-async function requestProviderText({ provider, messages = [], context, attachments = [], modelBehavior, signal }: ProviderRequest): Promise<string> {
+async function requestProviderText({ provider, messages = [], context, attachments = [], modelBehavior, systemPrompt, signal }: ProviderRequest): Promise<string> {
   const baseUrl = providerBaseUrl(provider).replace(/\/+$/, "");
   if (provider.apiFormat === "anthropic" || provider.provider === "anthropic") {
-    return requestAnthropicText(baseUrl, provider, messages, context, attachments, modelBehavior, signal);
+    return requestAnthropicText(baseUrl, provider, messages, context, attachments, modelBehavior, systemPrompt, signal);
   }
   if (provider.apiFormat === "google" || provider.provider === "google") {
-    return requestGoogleText(baseUrl, provider, messages, context, attachments, modelBehavior, signal);
+    return requestGoogleText(baseUrl, provider, messages, context, attachments, modelBehavior, systemPrompt, signal);
   }
-  return requestOpenAICompatibleText(baseUrl, provider, messages, context, attachments, modelBehavior, signal);
+  return requestOpenAICompatibleText(baseUrl, provider, messages, context, attachments, modelBehavior, systemPrompt, signal);
 }
 
 async function requestOpenAICompatibleText(
@@ -158,6 +192,7 @@ async function requestOpenAICompatibleText(
   context: AIChatContext | undefined,
   attachments: AIChatAttachment[],
   modelBehavior: AIModelBehavior | undefined,
+  systemPrompt: string | undefined,
   signal: AbortSignal | undefined,
 ): Promise<string> {
   const response = await providerFetch(provider, `${baseUrl}/chat/completions`, {
@@ -168,7 +203,8 @@ async function requestOpenAICompatibleText(
     },
     body: JSON.stringify({
       model: provider.model,
-      messages: buildOpenAIMessages(messages, context, attachments, modelBehavior),
+      ...(systemPrompt ? { temperature: 0, response_format: GUARDED_JSON_RESPONSE_FORMAT } : {}),
+      messages: buildOpenAIMessages(messages, context, attachments, modelBehavior, systemPrompt),
     }),
     signal,
   });
@@ -249,9 +285,11 @@ async function requestAnthropicText(
   context: AIChatContext | undefined,
   attachments: AIChatAttachment[],
   modelBehavior: AIModelBehavior | undefined,
+  systemPrompt: string | undefined,
   signal: AbortSignal | undefined,
 ): Promise<string> {
   const runtime = context ? buildAIChatRuntimePrompt(context, attachments, modelBehavior) : null;
+  const effectiveSystemPrompt = [systemPrompt, runtime?.systemPrompt].filter(Boolean).join("\n\n");
   const response = await providerFetch(provider, `${baseUrl}/v1/messages`, {
     method: "POST",
     headers: {
@@ -261,7 +299,8 @@ async function requestAnthropicText(
     },
     body: JSON.stringify({
       model: provider.model,
-      ...(runtime ? { system: runtime.systemPrompt } : {}),
+      ...(systemPrompt ? { temperature: 0 } : {}),
+      ...(effectiveSystemPrompt ? { system: effectiveSystemPrompt } : {}),
       messages: buildAnthropicMessages(messages, runtime?.contextPrompt || ""),
     }),
     signal,
@@ -278,16 +317,19 @@ async function requestGoogleText(
   context: AIChatContext | undefined,
   attachments: AIChatAttachment[],
   modelBehavior: AIModelBehavior | undefined,
+  systemPrompt: string | undefined,
   signal: AbortSignal | undefined,
 ): Promise<string> {
   const runtime = context ? buildAIChatRuntimePrompt(context, attachments, modelBehavior) : null;
+  const effectiveSystemPrompt = [systemPrompt, runtime?.systemPrompt].filter(Boolean).join("\n\n");
   const url = new URL(`${baseUrl}/v1beta/models/${encodeURIComponent(provider.model)}:generateContent`);
   if (provider.credential) url.searchParams.set("key", provider.credential);
   const response = await providerFetch(provider, url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      ...(runtime ? { systemInstruction: { parts: [{ text: runtime.systemPrompt }] } } : {}),
+      ...(effectiveSystemPrompt ? { systemInstruction: { parts: [{ text: effectiveSystemPrompt }] } } : {}),
+      ...(systemPrompt ? { generationConfig: { temperature: 0 } } : {}),
       contents: buildGoogleMessages(messages, runtime?.contextPrompt || ""),
     }),
     signal,
@@ -297,12 +339,12 @@ async function requestGoogleText(
   return data.candidates?.[0]?.content?.parts?.map((part) => part.text || "").join("\n").trim() || "";
 }
 
-function buildOpenAIMessages(messages: AIChatMessage[], context: AIChatContext | undefined, attachments: AIChatAttachment[], modelBehavior: AIModelBehavior | undefined): ProviderChatMessage[] {
-  if (!context) return messages;
-  const runtime = buildAIChatRuntimePrompt(context, attachments, modelBehavior);
+function buildOpenAIMessages(messages: AIChatMessage[], context: AIChatContext | undefined, attachments: AIChatAttachment[], modelBehavior: AIModelBehavior | undefined, systemPrompt?: string): ProviderChatMessage[] {
+  const runtime = context ? buildAIChatRuntimePrompt(context, attachments, modelBehavior) : null;
+  const effectiveSystemPrompt = [systemPrompt, runtime?.systemPrompt].filter(Boolean).join("\n\n");
   return [
-    { role: "system", content: runtime.systemPrompt },
-    ...(runtime.contextPrompt ? [{ role: "user" as const, content: runtime.contextPrompt }] : []),
+    ...(effectiveSystemPrompt ? [{ role: "system" as const, content: effectiveSystemPrompt }] : []),
+    ...(runtime?.contextPrompt ? [{ role: "user" as const, content: runtime.contextPrompt }] : []),
     ...messages,
   ];
 }

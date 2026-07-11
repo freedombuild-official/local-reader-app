@@ -19,9 +19,13 @@ const MAX_ATTACHMENT_CONTEXT_CHARS = 12000;
 
 export function loadAIChatSystemPrompt(): AIChatSystemPrompt {
   const customPromptPath = process.env.READER_WIKI_AI_CHAT_SYSTEM_PROMPT;
-  const promptPath = customPromptPath || DEFAULT_PROMPT_PATH;
+  const promptPath = aiChatSystemPromptPath();
   const raw = readFileSync(promptPath, "utf8");
   return parseMarkdownPrompt(raw, promptPath, customPromptPath ? undefined : DEFAULT_PROMPT_VERSION);
+}
+
+export function aiChatSystemPromptPath(): string {
+  return process.env.READER_WIKI_AI_CHAT_SYSTEM_PROMPT || DEFAULT_PROMPT_PATH;
 }
 
 export function buildAIChatRuntimePrompt(
