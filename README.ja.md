@@ -516,7 +516,7 @@ Codex CLIとClaude Code CLIの項目は、このbuildでは診断専用です。
 
 準備確認は、AI promptの送信やrepository編集をせずにこれらの診断を行います。Reader-Wikiは、sign-in手順、browser認証、CLIのinstall、model download、terminal、Git remote操作を開始しません。
 
-Codex CLIは、検証したmacOS版Codex 0.144.1の`:minimal` runtimeが、dynamic profileで拒否しても共有system temporary directoryのread/writeを許可するためfail closedです。これはCurrent repoだけという境界より広い権限です。Claude Code CLIは、repo外read禁止と保護pathへのwrite禁止を同等のcross-platform filesystem sandboxで実証できないためfail closedです。将来CLIを有効にするには、同じ境界testへの合格が必要です。
+Codex CLI 0.144.1にはstructured outputとread-only sandboxがありますが、planner processからすべてのbuilt-in toolとextension toolが消えていることを、全対応platformでReader-Wikiが実証できません。Claude Code CLIにはno-toolとstructured-outputのflagがありますが、このbuildではisolated persistent authenticationと同じsynthetic conformance checkを備えたplannerとして未統合・未実証です。このため、両項目はfail closedを維持します。将来のCLI plannerもrepository filesystem accessを受け取らず、Reader-Wiki serverだけが適用できる同じguarded protocol objectを返す必要があります。
 
 ### 送る情報を選んでメッセージを送る
 

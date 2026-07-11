@@ -611,9 +611,30 @@ describe("api", () => {
     const requester: GuardedProviderRequester = async (request) => {
       providerCalls.push(request);
       const protocolMessages = request.messages || [];
-      const latest = JSON.parse(protocolMessages.at(-1)?.content || "{}") as { type?: string };
+      const latest = JSON.parse(protocolMessages.at(-1)?.content || "{}") as { type?: string; synthetic?: boolean };
       if (latest.type === "capability_check") {
-        return { content: JSON.stringify({ version: "reader-wiki.edit-protocol.v1", type: "complete", message: "ready" }), status: readyProviderStatus() };
+        return { content: JSON.stringify({
+          version: "reader-wiki.edit-protocol.v1",
+          type: "read",
+          paths: ["reader-wiki-capability-probe.md"],
+          operations: null,
+          message: null,
+        }), status: readyProviderStatus() };
+      }
+      if (latest.type === "read_result" && latest.synthetic) {
+        return { content: JSON.stringify({
+          version: "reader-wiki.edit-protocol.v1",
+          type: "apply",
+          paths: null,
+          operations: [{
+            op: "replace",
+            path: "reader-wiki-capability-probe.md",
+            content: null,
+            oldText: "Reader-Wiki capability probe: before",
+            newText: "Reader-Wiki capability probe: after",
+          }],
+          message: "ready",
+        }), status: readyProviderStatus() };
       }
       if (latest.type === "task") {
         runCount += 1;
@@ -865,10 +886,31 @@ describe("api", () => {
     let capabilityChecks = 0;
     let editRequests = 0;
     const requester: GuardedProviderRequester = async (request) => {
-      const latest = JSON.parse(request.messages?.at(-1)?.content || "{}") as { type?: string };
+      const latest = JSON.parse(request.messages?.at(-1)?.content || "{}") as { type?: string; synthetic?: boolean };
       if (latest.type === "capability_check") {
         capabilityChecks += 1;
-        return { content: JSON.stringify({ version: "reader-wiki.edit-protocol.v1", type: "complete", message: "ready" }), status: readyProviderStatus() };
+        return { content: JSON.stringify({
+          version: "reader-wiki.edit-protocol.v1",
+          type: "read",
+          paths: ["reader-wiki-capability-probe.md"],
+          operations: null,
+          message: null,
+        }), status: readyProviderStatus() };
+      }
+      if (latest.type === "read_result" && latest.synthetic) {
+        return { content: JSON.stringify({
+          version: "reader-wiki.edit-protocol.v1",
+          type: "apply",
+          paths: null,
+          operations: [{
+            op: "replace",
+            path: "reader-wiki-capability-probe.md",
+            content: null,
+            oldText: "Reader-Wiki capability probe: before",
+            newText: "Reader-Wiki capability probe: after",
+          }],
+          message: "ready",
+        }), status: readyProviderStatus() };
       }
       if (latest.type === "task") {
         editRequests += 1;

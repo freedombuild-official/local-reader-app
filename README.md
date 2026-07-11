@@ -516,7 +516,7 @@ The Codex CLI and Claude Code CLI entries are diagnostics-only in this build. Re
 
 Readiness performs those diagnostics without sending an AI prompt or editing repository files. Reader-Wiki does not start sign-in, browser authorization, CLI installation, model download, terminal, or Git remote operations.
 
-Codex CLI is fail-closed because the tested macOS Codex 0.144.1 `:minimal` runtime grants shared system temporary directories read/write access even when the dynamic profile denies them; that is wider than Current repo-only. Claude Code CLI is fail-closed because Reader-Wiki has not proved repo-outside read denial and protected-path write denial with an equivalent cross-platform filesystem sandbox. A future CLI path must pass the same boundary tests before it can become write-ready.
+Codex CLI 0.144.1 has structured output and a read-only sandbox, but Reader-Wiki cannot prove that every built-in and extension tool is absent from the planner process on every supported platform. Claude Code CLI exposes no-tool and structured-output flags, but this build has not integrated and proved that planner with isolated persistent authentication and the same synthetic conformance check. Both entries therefore remain fail-closed. A future CLI planner must receive no repository filesystem access and return the same guarded protocol objects that only the Reader-Wiki server may apply.
 
 ### Choose context and send a message
 

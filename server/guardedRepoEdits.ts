@@ -3,6 +3,13 @@ import { constants } from "node:fs";
 import { link, lstat, mkdir, open, realpath, rename, rmdir, unlink } from "node:fs/promises";
 import path from "node:path";
 import { HttpError, isHttpError } from "./errors.js";
+import {
+  GUARDED_EDIT_PROTOCOL_VERSION,
+  GUARDED_EDIT_SYSTEM_PROMPT,
+  parseGuardedEditResponse,
+  serializeGuardedEditResponse,
+  type GuardedEditOperation,
+} from "./guardedEditProtocol.js";
 import { buildAIChatRuntimePrompt } from "./aiPromptPolicy.js";
 import { requestAIChatCompletion } from "./aiProviders.js";
 import { isExcludedPath, isInsideRoot, normalizeRelativePath, readGuardedRepoFile } from "./pathGuard.js";
@@ -32,7 +39,7 @@ type GuardedRepoWriteRequest = {
   signal?: AbortSignal;
   requester?: GuardedProviderRequester;
   pathPolicy?: GuardedRepoPathPolicy;
-  mutationFaultInjector?: (phase: "before-commit" | "before-postflight" | "before-rollback", index: number, relativePath: string) => Promise<void> | void;
+  mutationFaultInjector?: (phase: "before-commit" | "after-backup" | "before-postflight" | "before-rollback", index: number, relativePath: string) => Promise<void> | void;
 };
 
 export type GuardedRepoPathPolicy = {
@@ -43,25 +50,32 @@ export type GuardedRepoPathPolicy = {
   protectedPrefixes: string[];
 };
 
-type ProtocolRead = { type: "read"; paths: string[] };
-type ProtocolWriteOperation = { op: "write"; path: string; content: string };
-type ProtocolReplaceOperation = { op: "replace"; path: string; oldText: string; newText: string };
-type ProtocolDeleteOperation = { op: "delete"; path: string };
-type ProtocolOperation = ProtocolWriteOperation | ProtocolReplaceOperation | ProtocolDeleteOperation;
-type ProtocolApply = { type: "apply"; operations: ProtocolOperation[]; message: string };
-type ProtocolComplete = { type: "complete"; message: string };
-type ProtocolResponse = ProtocolRead | ProtocolApply | ProtocolComplete;
-
 type ReadState = {
   path: string;
   absolutePath: string;
   exists: boolean;
   content: string;
   hash: string;
+  size: number;
   mode: number;
   device: number;
   inode: number;
 };
+
+type FileFingerprint = {
+  hash: string;
+  size: number;
+  mode: number;
+  device: number;
+  inode: number;
+};
+
+type OwnedArtifact = {
+  path: string;
+  fingerprint: FileFingerprint;
+};
+
+type CreatedDirectory = PinnedDirectory;
 
 type PinnedRepositoryRoot = {
   rootRealPath: string;
@@ -80,14 +94,21 @@ type PreparedOperation = {
   absolutePath: string;
   existed: boolean;
   previousHash: string;
+  previousContent: string;
+  previousSize: number;
   previousDevice: number;
   previousInode: number;
   mode: number;
   nextContent: string | null;
   status: AIChangedPath["status"];
   stagedPath?: string;
+  stagedFingerprint?: FileFingerprint;
   backupPath?: string;
+  backupFingerprint?: FileFingerprint;
   placed?: boolean;
+  originalBackedUp?: boolean;
+  placedFingerprint?: FileFingerprint;
+  recoveryArtifacts?: OwnedArtifact[];
   parent?: PinnedDirectory;
 };
 
@@ -97,35 +118,15 @@ const PROTOCOL_MAX_READ_PATHS = 24;
 const PROTOCOL_MAX_TOTAL_READ_PATHS = 64;
 const PROTOCOL_MAX_READ_FILE_BYTES = 256 * 1024;
 const PROTOCOL_MAX_TOTAL_READ_BYTES = 768 * 1024;
-const PROTOCOL_MAX_OPERATIONS = 32;
 const PROTOCOL_MAX_WRITE_FILE_BYTES = 256 * 1024;
 const PROTOCOL_MAX_TOTAL_WRITE_BYTES = 768 * 1024;
 const PROTOCOL_MAX_TREE_ITEMS = 5_000;
 const PROTOCOL_MAX_TREE_BYTES = 128 * 1024;
-const PROTOCOL_MAX_MESSAGE_CHARS = 8_000;
 const RESERVED_TEMP_MARKER = ".reader-wiki-ai-";
-const PROTOCOL_VERSION = "reader-wiki.edit-protocol.v1";
 const PROTECTED_ROOT_SEGMENTS = new Set([".git", ".codex", ".agents"]);
-
-const GUARDED_EDIT_SYSTEM_PROMPT = [
-  "You are Reader-Wiki's constrained repository edit planner.",
-  "You have no shell, filesystem, Git, network, plugin, browser, or application tools.",
-  "Reader-Wiki alone performs bounded reads and validated text-file operations inside the active Current repo.",
-  "Return exactly one JSON object and no Markdown, code fences, commentary, or hidden reasoning.",
-  "Use one of these response shapes:",
-  `{"version":"${PROTOCOL_VERSION}","type":"read","paths":["relative/path"]}`,
-  `{"version":"${PROTOCOL_VERSION}","type":"apply","operations":[{"op":"write","path":"relative/path","content":"full text"},{"op":"replace","path":"relative/path","oldText":"exact unique text","newText":"replacement"},{"op":"delete","path":"relative/path"}],"message":"concise user-facing result"}`,
-  `{"version":"${PROTOCOL_VERSION}","type":"complete","message":"concise user-facing answer when no repository change is needed"}`,
-  "Rules:",
-  "- Paths must be repository-relative. Never use absolute paths or parent traversal.",
-  "- Request a read before modifying or deleting every existing file. A new file may be written without a prior read.",
-  "- Read only files needed for the user's explicit request. Selected paths are hints, not an edit boundary.",
-  "- Never target .git, .codex, .agents, excluded paths, symlinks, binary files, or Reader-Wiki temporary names.",
-  "- Use replace when a small exact change is sufficient. oldText must occur exactly once in the last read content.",
-  "- Make changes idempotent. If the requested result already exists, return complete or an apply plan without duplicate content.",
-  "- Delete only paths listed in the task's deleteAuthorizations array. Reader-Wiki derives that list from exact `DELETE: relative/path` lines in the user's latest message.",
-  "- Do not claim a file changed unless it appears in operations. Reader-Wiki reports the authoritative changed path list.",
-].join("\n");
+const READINESS_PROBE_PATH = "reader-wiki-capability-probe.md";
+const READINESS_PROBE_BEFORE = "Reader-Wiki capability probe: before";
+const READINESS_PROBE_AFTER = "Reader-Wiki capability probe: after";
 
 export async function buildGuardedRepoPathPolicy(repo: RepositoryConfig, controlPaths: string[]): Promise<GuardedRepoPathPolicy> {
   const pin = await pinRepositoryRoot(repo);
@@ -204,20 +205,82 @@ export async function probeGuardedRepoWriteCapability(
   signal?: AbortSignal,
   requester: GuardedProviderRequester | undefined = requestAIChatCompletion,
 ): Promise<{ ok: boolean; message: string; status?: AIConnectionStatus }> {
+  let lastStatus: AIConnectionStatus | undefined;
   try {
-    const result = await (requester || requestAIChatCompletion)({
+    const providerRequester = requester || requestAIChatCompletion;
+    const messages: AIChatMessage[] = [{
+      role: "user",
+      content: JSON.stringify({
+        version: GUARDED_EDIT_PROTOCOL_VERSION,
+        type: "capability_check",
+        phase: "read",
+        syntheticPath: READINESS_PROBE_PATH,
+        instruction: "Return a read response for exactly the synthetic path. Do not return complete.",
+      }),
+    }];
+    const readResult = await providerRequester({
       provider,
       systemPrompt: GUARDED_EDIT_SYSTEM_PROMPT,
-      messages: [{ role: "user", content: JSON.stringify({ version: PROTOCOL_VERSION, type: "capability_check", instruction: "Return a complete response whose message is exactly ready." }) }],
+      messages,
       signal,
     });
-    const parsed = parseProtocolResponse(result.content);
-    if (parsed.type !== "complete" || parsed.message.trim().toLowerCase() !== "ready") {
-      return { ok: false, message: "The selected model did not confirm the strict Reader-Wiki edit protocol.", status: result.status };
+    lastStatus = readResult.status;
+    const readResponse = parseGuardedEditResponse(readResult.content);
+    if (readResponse.type !== "read" || readResponse.paths.length !== 1 || readResponse.paths[0] !== READINESS_PROBE_PATH) {
+      return { ok: false, message: "The selected model did not return the required synthetic guarded read response.", status: readResult.status };
     }
-    return { ok: true, message: "The endpoint and selected model returned the strict Reader-Wiki edit protocol without receiving filesystem access.", status: result.status };
+    messages.push({ role: "assistant", content: serializeGuardedEditResponse(readResponse) });
+    messages.push({
+      role: "user",
+      content: JSON.stringify({
+        version: GUARDED_EDIT_PROTOCOL_VERSION,
+        type: "read_result",
+        synthetic: true,
+        files: [{
+          path: READINESS_PROBE_PATH,
+          exists: true,
+          sha256: hashText(READINESS_PROBE_BEFORE),
+          content: READINESS_PROBE_BEFORE,
+        }],
+        instruction: `Return one apply response with one replace operation that changes ${JSON.stringify(READINESS_PROBE_BEFORE)} to ${JSON.stringify(READINESS_PROBE_AFTER)}. The message must be exactly ready.`,
+      }),
+    });
+    const applyResult = await providerRequester({
+      provider,
+      systemPrompt: GUARDED_EDIT_SYSTEM_PROMPT,
+      messages,
+      signal,
+    });
+    lastStatus = applyResult.status;
+    const applyResponse = parseGuardedEditResponse(applyResult.content);
+    const operation = applyResponse.type === "apply" && applyResponse.operations.length === 1 ? applyResponse.operations[0] : undefined;
+    const validSyntheticOperation = operation?.path === READINESS_PROBE_PATH
+      && ((operation.op === "replace"
+        && countOccurrences(READINESS_PROBE_BEFORE, operation.oldText) === 1
+        && READINESS_PROBE_BEFORE.replace(operation.oldText, operation.newText) !== READINESS_PROBE_BEFORE)
+        || (operation.op === "write" && operation.content !== READINESS_PROBE_BEFORE));
+    if (applyResponse.type !== "apply"
+      || !validSyntheticOperation) {
+      const responseType = applyResponse.type;
+      const operationType = operation?.op || "none";
+      const mismatchFields = [
+        ...(applyResponse.type !== "apply" ? ["type"] : []),
+        ...(applyResponse.type === "apply" && applyResponse.operations.length !== 1 ? ["operations"] : []),
+        ...(applyResponse.type === "apply" && operation?.path !== READINESS_PROBE_PATH ? ["path"] : []),
+        ...(applyResponse.type === "apply" && operation?.op === "replace" && countOccurrences(READINESS_PROBE_BEFORE, operation.oldText) !== 1 ? ["oldText"] : []),
+        ...(applyResponse.type === "apply" && operation?.op === "replace" && READINESS_PROBE_BEFORE.replace(operation.oldText, operation.newText) === READINESS_PROBE_BEFORE ? ["newText"] : []),
+        ...(applyResponse.type === "apply" && operation?.op === "write" && operation.content === READINESS_PROBE_BEFORE ? ["content"] : []),
+        ...(applyResponse.type === "apply" && operation?.op === "delete" ? ["op"] : []),
+      ];
+      return {
+        ok: false,
+        message: `The selected model did not return the required synthetic guarded apply response (response type: ${responseType}; operation type: ${operationType}; mismatched fields: ${mismatchFields.join(", ") || "operation"}).`,
+        status: applyResult.status,
+      };
+    }
+    return { ok: true, message: "The endpoint and selected model completed the synthetic read and apply protocol without receiving filesystem access.", status: applyResult.status };
   } catch (error) {
-    return { ok: false, message: safeProtocolError(error) };
+    return { ok: false, message: safeProtocolError(error), status: lastStatus };
   }
 }
 
@@ -241,7 +304,7 @@ export async function requestGuardedRepoWriteAIChatCompletion(request: GuardedRe
     role: "user",
     content: JSON.stringify({
       type: "task",
-      version: PROTOCOL_VERSION,
+      version: GUARDED_EDIT_PROTOCOL_VERSION,
       repository: {
         id: request.repo.id,
         tree: tree.items,
@@ -260,6 +323,7 @@ export async function requestGuardedRepoWriteAIChatCompletion(request: GuardedRe
 
   for (let round = 0; round < PROTOCOL_MAX_ROUNDS; round += 1) {
     if (request.signal?.aborted) throw new HttpError(499, "AI provider request was canceled.");
+    await assertPinnedRepositoryRoot(rootPin);
     const completion = await requester({
       provider: request.provider,
       systemPrompt: `${runtime.systemPrompt}\n\n${GUARDED_EDIT_SYSTEM_PROMPT}`,
@@ -268,9 +332,9 @@ export async function requestGuardedRepoWriteAIChatCompletion(request: GuardedRe
     });
     throwIfAborted(request.signal);
     lastStatus = completion.status;
-    const response = parseProtocolResponse(completion.content);
+    const response = parseGuardedEditResponse(completion.content);
     throwIfAborted(request.signal);
-    protocolMessages.push({ role: "assistant", content: JSON.stringify({ version: PROTOCOL_VERSION, ...response }) });
+    protocolMessages.push({ role: "assistant", content: serializeGuardedEditResponse(response) });
 
     if (response.type === "read") {
       readRounds += 1;
@@ -289,7 +353,8 @@ export async function requestGuardedRepoWriteAIChatCompletion(request: GuardedRe
           ? { path: state.path, exists: true, sha256: state.hash, content: state.content }
           : { path: state.path, exists: false });
       }
-      protocolMessages.push({ role: "user", content: JSON.stringify({ version: PROTOCOL_VERSION, type: "read_result", files }) });
+      await assertPinnedRepositoryRoot(rootPin);
+      protocolMessages.push({ role: "user", content: JSON.stringify({ version: GUARDED_EDIT_PROTOCOL_VERSION, type: "read_result", files }) });
       continue;
     }
 
@@ -360,73 +425,9 @@ async function buildTreeManifest(repo: RepositoryConfig, pathPolicy?: GuardedRep
   };
 }
 
-function parseProtocolResponse(content: string): ProtocolResponse {
-  const value = parseProtocolJson(content);
-  if (!isRecord(value) || typeof value.type !== "string") throw new HttpError(502, "The selected model returned an invalid guarded edit response.");
-  if (value.version !== PROTOCOL_VERSION) throw new HttpError(502, "The selected model returned an unknown guarded edit protocol version.");
-  if (value.type === "read") {
-    assertExactKeys(value, ["version", "type", "paths"]);
-    if (!Array.isArray(value.paths) || value.paths.length === 0 || value.paths.some((item) => typeof item !== "string" || !item.trim())) {
-      throw new HttpError(502, "The guarded edit read response must contain non-empty repository-relative paths.");
-    }
-    return { type: "read", paths: Array.from(new Set(value.paths)) };
-  }
-  if (value.type === "complete") {
-    assertExactKeys(value, ["version", "type", "message"]);
-    return { type: "complete", message: protocolMessage(value.message) };
-  }
-  if (value.type !== "apply") throw new HttpError(502, "The selected model returned an unknown guarded edit response type.");
-  assertExactKeys(value, ["version", "type", "operations", "message"]);
-  if (!Array.isArray(value.operations) || value.operations.length > PROTOCOL_MAX_OPERATIONS) {
-    throw new HttpError(502, `The guarded edit response supports at most ${PROTOCOL_MAX_OPERATIONS} operations.`);
-  }
-  const operations = value.operations.map(parseProtocolOperation);
-  return { type: "apply", operations, message: protocolMessage(value.message) };
-}
-
-function parseProtocolOperation(value: unknown): ProtocolOperation {
-  if (!isRecord(value) || typeof value.op !== "string" || typeof value.path !== "string" || !value.path.trim()) {
-    throw new HttpError(502, "The selected model returned an invalid guarded edit operation.");
-  }
-  if (value.op === "write") {
-    assertExactKeys(value, ["op", "path", "content"]);
-    if (typeof value.content !== "string") throw new HttpError(502, "A guarded write operation requires text content.");
-    return { op: "write", path: value.path, content: value.content };
-  }
-  if (value.op === "replace") {
-    assertExactKeys(value, ["op", "path", "oldText", "newText"]);
-    if (typeof value.oldText !== "string" || !value.oldText || typeof value.newText !== "string") {
-      throw new HttpError(502, "A guarded replace operation requires non-empty oldText and text newText.");
-    }
-    return { op: "replace", path: value.path, oldText: value.oldText, newText: value.newText };
-  }
-  if (value.op === "delete") {
-    assertExactKeys(value, ["op", "path"]);
-    return { op: "delete", path: value.path };
-  }
-  throw new HttpError(502, "The selected model returned an unsupported guarded edit operation.");
-}
-
-function parseProtocolJson(content: string): unknown {
-  const trimmed = content.trim();
-  try {
-    return JSON.parse(trimmed);
-  } catch {
-    const fenced = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
-    if (fenced) {
-      try {
-        return JSON.parse(fenced[1]);
-      } catch {
-        // Report the same fail-closed protocol error below.
-      }
-    }
-  }
-  throw new HttpError(502, "The selected model did not return a valid guarded edit JSON object.");
-}
-
 async function applyProtocolOperations(
   repo: RepositoryConfig,
-  operations: ProtocolOperation[],
+  operations: GuardedEditOperation[],
   readStates: Map<string, ReadState>,
   rootPin: PinnedRepositoryRoot,
   pathPolicy: GuardedRepoPathPolicy | undefined,
@@ -482,6 +483,8 @@ async function applyProtocolOperations(
       absolutePath: current.absolutePath,
       existed: current.exists,
       previousHash: current.hash,
+      previousContent: current.content,
+      previousSize: current.size,
       previousDevice: current.device,
       previousInode: current.inode,
       mode: current.mode || 0o644,
@@ -491,7 +494,7 @@ async function applyProtocolOperations(
   }
 
   if (!prepared.length) return { changedPaths: [], warnings: [] };
-  const createdDirectories: string[] = [];
+  const createdDirectories: CreatedDirectory[] = [];
   const warnings: string[] = [];
   try {
     for (const operation of prepared) {
@@ -509,6 +512,14 @@ async function applyProtocolOperations(
       try {
         await handle.writeFile(operation.nextContent, "utf8");
         await handle.sync();
+        const stagedStat = await handle.stat();
+        operation.stagedFingerprint = {
+          hash: hashText(operation.nextContent),
+          size: stagedStat.size,
+          mode: stagedStat.mode & 0o777,
+          device: stagedStat.dev,
+          inode: stagedStat.ino,
+        };
       } finally {
         await handle.close();
       }
@@ -534,20 +545,30 @@ async function applyProtocolOperations(
       if (!matchesPreparedState(operation, current)) {
         throw new HttpError(409, `The file ${operation.path} changed immediately before guarded commit.`);
       }
+      if (operation.stagedPath && operation.stagedFingerprint) {
+        const stagedFingerprint = await readOwnedFileFingerprint(operation.stagedPath);
+        if (!sameFingerprint(stagedFingerprint, operation.stagedFingerprint)) {
+          throw new HttpError(409, `The staged file for ${operation.path} changed immediately before guarded commit.`);
+        }
+      }
       if (operation.existed) {
         operation.backupPath = path.join(path.dirname(operation.absolutePath), `${RESERVED_TEMP_MARKER}${randomUUID()}.bak`);
         await rename(operation.absolutePath, operation.backupPath);
+        operation.originalBackedUp = true;
+        operation.backupFingerprint = await readOwnedFileFingerprint(operation.backupPath);
+        if (!sameFingerprint(operation.backupFingerprint, originalFingerprint(operation))) {
+          throw new HttpError(409, `The file ${operation.path} changed while guarded commit created its recovery backup.`);
+        }
+        await mutationFaultInjector?.("after-backup", index, operation.path);
       }
       if (operation.nextContent !== null && operation.stagedPath) {
-        if (operation.existed) {
-          await rename(operation.stagedPath, operation.absolutePath);
-          operation.placed = true;
-        } else {
-          await link(operation.stagedPath, operation.absolutePath);
-          operation.placed = true;
-          await unlink(operation.stagedPath);
-        }
+        await link(operation.stagedPath, operation.absolutePath);
+        operation.placed = true;
+        await unlink(operation.stagedPath);
         operation.stagedPath = undefined;
+        operation.placedFingerprint = operation.stagedFingerprint;
+      } else if (operation.nextContent === null && operation.originalBackedUp) {
+        operation.placed = true;
       }
     }
 
@@ -557,7 +578,9 @@ async function applyProtocolOperations(
     for (const operation of prepared) {
       if (operation.parent) await assertPinnedDirectory(rootPin, operation.parent);
       const verified = await readTextState(repo, operation.path, PROTOCOL_MAX_WRITE_FILE_BYTES, rootRealPath, pathPolicy);
-      if (operation.nextContent === null ? verified.exists : !verified.exists || verified.hash !== hashText(operation.nextContent)) {
+      if (operation.nextContent === null
+        ? verified.exists
+        : !verified.exists || !operation.placedFingerprint || !sameFingerprint(fingerprintFromReadState(verified), operation.placedFingerprint)) {
         throw new HttpError(500, `The guarded post-write verification failed for ${operation.path}.`);
       }
     }
@@ -570,18 +593,31 @@ async function applyProtocolOperations(
     }
     const rollbackWarnings = await rollbackPreparedOperations(repo, rootPin, pathPolicy, prepared, createdDirectories);
     const baseMessage = isHttpError(error) ? error.message : "Guarded repository apply failed.";
+    const rollbackIncomplete = injectorWarnings.length > 0 || rollbackWarnings.length > 0;
+    const recoveryConflict = rollbackWarnings.some((warning) => warning.startsWith("Recovery warning:"));
     throw new HttpError(
-      isHttpError(error) ? error.status : 500,
-      `${baseMessage}${injectorWarnings.length || rollbackWarnings.length ? ` Rollback warnings: ${[...injectorWarnings, ...rollbackWarnings].join("; ")}` : " Changes were rolled back and verified."}`,
+      recoveryConflict ? 409 : isHttpError(error) ? error.status : 500,
+      `${baseMessage}${rollbackIncomplete ? ` Rollback warnings: ${[...injectorWarnings, ...rollbackWarnings].join("; ")}` : " Changes were rolled back and verified."}`,
+      rollbackIncomplete
+        ? { code: "guarded_rollback_incomplete", rollbackState: "unverified" }
+        : isHttpError(error) ? error.details : undefined,
     );
   }
 
   for (const operation of prepared) {
-    if (operation.backupPath) {
-      await unlink(operation.backupPath).catch((error) => warnings.push(`Cleanup warning: ${operation.path} backup could not be removed (${safeFsError(error)}).`));
+    if (operation.backupPath && operation.backupFingerprint) {
+      await removeOwnedArtifact(
+        { path: operation.backupPath, fingerprint: operation.backupFingerprint },
+        warnings,
+        `Cleanup warning: ${operation.path} backup`,
+      );
     }
-    if (operation.stagedPath) {
-      await unlink(operation.stagedPath).catch((error) => warnings.push(`Cleanup warning: ${operation.path} staged file could not be removed (${safeFsError(error)}).`));
+    if (operation.stagedPath && operation.stagedFingerprint) {
+      await removeOwnedArtifact(
+        { path: operation.stagedPath, fingerprint: operation.stagedFingerprint },
+        warnings,
+        `Cleanup warning: ${operation.path} staged file`,
+      );
     }
   }
   for (const operation of prepared) {
@@ -601,30 +637,77 @@ async function rollbackPreparedOperations(
   rootPin: PinnedRepositoryRoot,
   pathPolicy: GuardedRepoPathPolicy | undefined,
   operations: PreparedOperation[],
-  createdDirectories: string[],
+  createdDirectories: CreatedDirectory[],
 ): Promise<string[]> {
   const warnings: string[] = [];
   for (const operation of [...operations].reverse()) {
     try {
       await assertPinnedRepositoryRoot(rootPin);
       if (operation.parent) await assertPinnedDirectory(rootPin, operation.parent);
-      if (operation.placed) await unlink(operation.absolutePath);
-      if (operation.backupPath) await rename(operation.backupPath, operation.absolutePath);
-      if (operation.stagedPath) await unlink(operation.stagedPath).catch((error) => {
-        if (!isMissingPathError(error)) warnings.push(`${operation.path}: staged artifact cleanup failed (${safeFsError(error)})`);
-      });
+      let targetRecovery: OwnedArtifact | undefined;
+      let targetConflict = false;
+
+      if (operation.placed && operation.nextContent !== null) {
+        const current = await readTextState(repo, operation.path, PROTOCOL_MAX_WRITE_FILE_BYTES, rootPin.rootRealPath, pathPolicy);
+        if (!current.exists || !operation.placedFingerprint || !sameFingerprint(fingerprintFromReadState(current), operation.placedFingerprint)) {
+          warnings.push(`Recovery warning: ${operation.path} changed after Reader-Wiki placed it; the current file and recovery backup were preserved.`);
+          targetConflict = true;
+        } else {
+          const recoveryPath = path.join(path.dirname(operation.absolutePath), `${RESERVED_TEMP_MARKER}${randomUUID()}.recovery`);
+          await rename(operation.absolutePath, recoveryPath);
+          const movedFingerprint = await readOwnedFileFingerprint(recoveryPath);
+          targetRecovery = { path: recoveryPath, fingerprint: movedFingerprint };
+          if (!sameFingerprint(movedFingerprint, operation.placedFingerprint)) {
+            await link(recoveryPath, operation.absolutePath).catch(() => undefined);
+            operation.recoveryArtifacts = [...(operation.recoveryArtifacts || []), targetRecovery];
+            warnings.push(`Recovery warning: ${operation.path} changed while rollback isolated it; ${path.basename(recoveryPath)} was retained.`);
+            targetConflict = true;
+          }
+        }
+      } else if ((operation.placed || operation.originalBackedUp) && operation.nextContent === null) {
+        if (await pathExists(operation.absolutePath)) {
+          warnings.push(`Recovery warning: ${operation.path} reappeared after Reader-Wiki deleted it; the current file and recovery backup were preserved.`);
+          targetConflict = true;
+        }
+      } else if (operation.originalBackedUp && await pathExists(operation.absolutePath)) {
+        warnings.push(`Recovery warning: ${operation.path} reappeared before rollback; the current file and recovery backup were preserved.`);
+        targetConflict = true;
+      }
+
+      if (!targetConflict && operation.backupPath && operation.backupFingerprint) {
+        const restored = await restoreOwnedBackup(repo, rootPin, pathPolicy, operation, warnings);
+        if (!restored && targetRecovery) {
+          await link(targetRecovery.path, operation.absolutePath).catch(() => undefined);
+          operation.recoveryArtifacts = [...(operation.recoveryArtifacts || []), targetRecovery];
+        } else if (restored && targetRecovery) {
+          await removeOwnedArtifact(targetRecovery, warnings, `Recovery warning: ${operation.path} placed result`);
+        }
+      } else if (!targetConflict && targetRecovery) {
+        await removeOwnedArtifact(targetRecovery, warnings, `Recovery warning: ${operation.path} placed result`);
+      }
+
+      if (operation.stagedPath && operation.stagedFingerprint) {
+        await removeOwnedArtifact(
+          { path: operation.stagedPath, fingerprint: operation.stagedFingerprint },
+          warnings,
+          `Recovery warning: ${operation.path} staged file`,
+        );
+      }
     } catch (error) {
       warnings.push(`${operation.path}: ${safeFsError(error)}`);
     }
   }
-  for (const directory of Array.from(new Set(createdDirectories)).reverse()) {
+  for (const directory of [...createdDirectories].reverse()) {
     try {
       await assertPinnedRepositoryRoot(rootPin);
-      const directoryStat = await lstat(directory);
-      if (directoryStat.isSymbolicLink() || !directoryStat.isDirectory()) throw new HttpError(409, "Created directory identity changed during rollback.");
-      const directoryRealPath = await realpath(directory);
+      const directoryStat = await lstat(directory.path);
+      if (directoryStat.isSymbolicLink() || !directoryStat.isDirectory()
+        || directoryStat.dev !== directory.device || directoryStat.ino !== directory.inode) {
+        throw new HttpError(409, "Created directory identity changed during rollback.");
+      }
+      const directoryRealPath = await realpath(directory.path);
       if (!isInsideRoot(rootPin.rootRealPath, directoryRealPath)) throw new HttpError(403, "Created directory escaped the Current repo during rollback.");
-      await rmdir(directory);
+      await rmdir(directory.path);
     } catch (error) {
       if (!isMissingPathError(error)) warnings.push(`directory cleanup: ${safeFsError(error)}`);
     }
@@ -633,23 +716,157 @@ async function rollbackPreparedOperations(
     try {
       const restored = await readTextState(repo, operation.path, PROTOCOL_MAX_WRITE_FILE_BYTES, rootPin.rootRealPath, pathPolicy);
       const restoredCorrectly = operation.existed
-        ? restored.exists && restored.hash === operation.previousHash && restored.device === operation.previousDevice && restored.inode === operation.previousInode
+        ? matchesOriginalContent(operation, restored)
         : !restored.exists;
-      if (!restoredCorrectly) warnings.push(`${operation.path}: rollback verification did not restore the original state`);
+      if (!restoredCorrectly && !warnings.some((warning) => warning.includes(operation.path))) {
+        warnings.push(`${operation.path}: rollback verification did not restore the original state`);
+      }
     } catch (error) {
       warnings.push(`${operation.path}: rollback verification failed (${safeFsError(error)})`);
     }
-    for (const artifactPath of [operation.backupPath, operation.stagedPath].filter((item): item is string => Boolean(item))) {
+    const artifactPaths = [
+      operation.backupPath,
+      operation.stagedPath,
+      ...(operation.recoveryArtifacts || []).map((artifact) => artifact.path),
+    ].filter((item): item is string => Boolean(item));
+    for (const artifactPath of artifactPaths) {
       if (await pathExists(artifactPath)) warnings.push(`${operation.path}: guarded run artifact remains after rollback`);
     }
   }
   return warnings;
 }
 
+async function restoreOwnedBackup(
+  repo: RepositoryConfig,
+  rootPin: PinnedRepositoryRoot,
+  pathPolicy: GuardedRepoPathPolicy | undefined,
+  operation: PreparedOperation,
+  warnings: string[],
+): Promise<boolean> {
+  if (!operation.backupPath || !operation.backupFingerprint) return false;
+  if (await pathExists(operation.absolutePath)) {
+    warnings.push(`Recovery warning: ${operation.path} is occupied; ${path.basename(operation.backupPath)} was retained.`);
+    return false;
+  }
+  const actualBackup = await readOwnedFileFingerprint(operation.backupPath);
+  if (!sameFingerprint(actualBackup, operation.backupFingerprint)) {
+    warnings.push(`Recovery warning: ${operation.path} backup identity changed; ${path.basename(operation.backupPath)} was retained.`);
+    return false;
+  }
+  const backupRecoveryPath = path.join(path.dirname(operation.absolutePath), `${RESERVED_TEMP_MARKER}${randomUUID()}.recovery`);
+  await rename(operation.backupPath, backupRecoveryPath);
+  const backupRecovery = { path: backupRecoveryPath, fingerprint: operation.backupFingerprint };
+  operation.backupPath = backupRecoveryPath;
+  const movedBackup = await readOwnedFileFingerprint(backupRecoveryPath);
+  if (!sameFingerprint(movedBackup, backupRecovery.fingerprint)) {
+    operation.recoveryArtifacts = [...(operation.recoveryArtifacts || []), { path: backupRecoveryPath, fingerprint: movedBackup }];
+    warnings.push(`Recovery warning: ${operation.path} backup changed while rollback isolated it; ${path.basename(backupRecoveryPath)} was retained.`);
+    return false;
+  }
+  let restoreHandle;
+  try {
+    restoreHandle = await open(operation.absolutePath, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL, operation.mode);
+    await restoreHandle.writeFile(operation.previousContent, "utf8");
+    await restoreHandle.chmod(operation.mode);
+    await restoreHandle.sync();
+  } catch (error) {
+    warnings.push(`Recovery warning: ${operation.path} could not be restored without replacing another file; ${path.basename(backupRecoveryPath)} was retained (${safeFsError(error)}).`);
+    return false;
+  } finally {
+    await restoreHandle?.close().catch(() => undefined);
+  }
+  const restored = await readTextState(repo, operation.path, PROTOCOL_MAX_WRITE_FILE_BYTES, rootPin.rootRealPath, pathPolicy);
+  if (!restored.exists || !matchesOriginalContent(operation, restored)) {
+    warnings.push(`Recovery warning: ${operation.path} restoration could not be verified; ${path.basename(backupRecoveryPath)} was retained.`);
+    return false;
+  }
+  await removeOwnedArtifact(backupRecovery, warnings, `Recovery warning: ${operation.path} backup`);
+  operation.backupPath = undefined;
+  operation.backupFingerprint = undefined;
+  return true;
+}
+
+function originalFingerprint(operation: PreparedOperation): FileFingerprint {
+  return {
+    hash: operation.previousHash,
+    size: operation.previousSize,
+    mode: operation.mode,
+    device: operation.previousDevice,
+    inode: operation.previousInode,
+  };
+}
+
+function matchesOriginalContent(operation: PreparedOperation, state: ReadState): boolean {
+  return state.exists
+    && state.hash === operation.previousHash
+    && state.size === operation.previousSize
+    && state.mode === operation.mode
+    && state.device === operation.previousDevice;
+}
+
+function fingerprintFromReadState(state: ReadState): FileFingerprint {
+  return {
+    hash: state.hash,
+    size: state.size,
+    mode: state.mode,
+    device: state.device,
+    inode: state.inode,
+  };
+}
+
+function sameFingerprint(left: FileFingerprint, right: FileFingerprint): boolean {
+  return left.hash === right.hash
+    && left.size === right.size
+    && left.mode === right.mode
+    && left.device === right.device
+    && left.inode === right.inode;
+}
+
+async function readOwnedFileFingerprint(artifactPath: string): Promise<FileFingerprint> {
+  const noFollow = typeof constants.O_NOFOLLOW === "number" ? constants.O_NOFOLLOW : 0;
+  const handle = await open(artifactPath, constants.O_RDONLY | noFollow);
+  try {
+    const before = await handle.stat();
+    if (!before.isFile() || before.size > PROTOCOL_MAX_WRITE_FILE_BYTES) {
+      throw new HttpError(409, "A guarded recovery artifact is not an expected regular file.");
+    }
+    const bytes = await handle.readFile();
+    const after = await handle.stat();
+    if (before.dev !== after.dev || before.ino !== after.ino || before.size !== after.size || before.mode !== after.mode) {
+      throw new HttpError(409, "A guarded recovery artifact changed while it was inspected.");
+    }
+    return {
+      hash: createHash("sha256").update(bytes).digest("hex"),
+      size: after.size,
+      mode: after.mode & 0o777,
+      device: after.dev,
+      inode: after.ino,
+    };
+  } finally {
+    await handle.close();
+  }
+}
+
+async function removeOwnedArtifact(artifact: OwnedArtifact, warnings: string[], label: string): Promise<boolean> {
+  try {
+    const current = await readOwnedFileFingerprint(artifact.path);
+    if (!sameFingerprint(current, artifact.fingerprint)) {
+      warnings.push(`${label} identity changed; ${path.basename(artifact.path)} was retained.`);
+      return false;
+    }
+    await unlink(artifact.path);
+    return true;
+  } catch (error) {
+    warnings.push(`${label} could not be safely removed; ${path.basename(artifact.path)} was retained (${safeFsError(error)}).`);
+    return false;
+  }
+}
+
 function matchesPreparedState(operation: PreparedOperation, current: ReadState): boolean {
   if (current.exists !== operation.existed) return false;
   if (!current.exists) return true;
   return current.hash === operation.previousHash
+    && current.size === operation.previousSize
     && current.mode === operation.mode
     && current.device === operation.previousDevice
     && current.inode === operation.previousInode;
@@ -658,6 +875,7 @@ function matchesPreparedState(operation: PreparedOperation, current: ReadState):
 function sameReadIdentity(left: ReadState, right: ReadState): boolean {
   return left.exists === right.exists
     && left.hash === right.hash
+    && left.size === right.size
     && left.mode === right.mode
     && left.device === right.device
     && left.inode === right.inode;
@@ -676,7 +894,7 @@ async function readTextState(repo: RepositoryConfig, inputPath: string, maxBytes
     try {
       targetStat = await lstat(current);
     } catch (error) {
-      if (isMissingPathError(error)) return { path: relativePath, absolutePath, exists: false, content: "", hash: "", mode: 0o644, device: 0, inode: 0 };
+      if (isMissingPathError(error)) return { path: relativePath, absolutePath, exists: false, content: "", hash: "", size: 0, mode: 0o644, device: 0, inode: 0 };
       throw error;
     }
     if (targetStat.isSymbolicLink()) throw new HttpError(403, "Symbolic links are disabled by the guarded repository edit policy.");
@@ -701,13 +919,14 @@ async function readTextState(repo: RepositoryConfig, inputPath: string, maxBytes
     exists: true,
     content,
     hash: hashText(content),
+    size: guarded.stat.size,
     mode: guarded.stat.mode & 0o777,
     device: guarded.stat.dev,
     inode: guarded.stat.ino,
   };
 }
 
-async function ensureParentDirectories(repo: RepositoryConfig, rootPin: PinnedRepositoryRoot, parentPath: string, created: string[], pathPolicy?: GuardedRepoPathPolicy): Promise<void> {
+async function ensureParentDirectories(repo: RepositoryConfig, rootPin: PinnedRepositoryRoot, parentPath: string, created: CreatedDirectory[], pathPolicy?: GuardedRepoPathPolicy): Promise<void> {
   await assertPinnedRepositoryRoot(rootPin);
   if (!isInsideRoot(rootPin.rootRealPath, parentPath)) throw new HttpError(403, "A guarded repository parent escaped the Current repo.");
   const relative = path.relative(rootPin.rootRealPath, parentPath);
@@ -715,18 +934,23 @@ async function ensureParentDirectories(repo: RepositoryConfig, rootPin: PinnedRe
   let current = rootPin.rootRealPath;
   for (const segment of relative.split(path.sep).filter(Boolean)) {
     current = path.join(current, segment);
+    let createdNow = false;
     try {
       const targetStat = await lstat(current);
       if (targetStat.isSymbolicLink() || !targetStat.isDirectory()) throw new HttpError(403, "Guarded repository directories cannot traverse symbolic links or files.");
     } catch (error) {
       if (!isMissingPathError(error)) throw error;
       await mkdir(current, { mode: 0o755 });
-      created.push(current);
+      createdNow = true;
     }
     const currentRealPath = await realpath(current);
     if (!isInsideRoot(rootPin.rootRealPath, currentRealPath)) throw new HttpError(403, "A guarded repository directory escaped the Current repo.");
     const canonicalRelativePath = path.relative(rootPin.rootRealPath, currentRealPath).split(path.sep).join("/");
     guardedRelativePath(repo, canonicalRelativePath, pathPolicy);
+    if (createdNow) {
+      const createdStat = await lstat(current);
+      created.push({ path: current, device: createdStat.dev, inode: createdStat.ino });
+    }
   }
 }
 
@@ -852,19 +1076,6 @@ function throwIfAborted(signal?: AbortSignal): void {
   if (signal?.aborted) throw new HttpError(499, "AI provider request was canceled.");
 }
 
-function assertExactKeys(value: Record<string, unknown>, allowed: string[]): void {
-  const allowedSet = new Set(allowed);
-  if (Object.keys(value).some((key) => !allowedSet.has(key)) || allowed.some((key) => !(key in value))) {
-    throw new HttpError(502, "The selected model returned a guarded edit object with missing or unknown fields.");
-  }
-}
-
-function protocolMessage(value: unknown): string {
-  if (typeof value !== "string" || !value.trim()) throw new HttpError(502, "The guarded edit response requires a user-facing message.");
-  if (value.length > PROTOCOL_MAX_MESSAGE_CHARS) throw new HttpError(502, "The guarded edit response message exceeded the character limit.");
-  return value.trim();
-}
-
 function finalUserMessage(message: string, changedPaths: AIChangedPath[]): string {
   if (!changedPaths.length) return message;
   return `${message}\n\nChanged repository paths:\n${changedPaths.map((item) => `- ${item.path} (${item.status})`).join("\n")}`;
@@ -885,10 +1096,6 @@ function hashText(content: string): string {
   return createHash("sha256").update(content, "utf8").digest("hex");
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
 function isMissingPathError(error: unknown): boolean {
   return error !== null && typeof error === "object" && "code" in error && (error as { code?: string }).code === "ENOENT";
 }
@@ -904,7 +1111,12 @@ async function pathExists(targetPath: string): Promise<boolean> {
 }
 
 function safeFsError(error: unknown): string {
-  return error instanceof Error ? error.message.replace(/\/[\w./-]+/g, "[path]").slice(0, 240) : "filesystem error";
+  const code = error !== null && typeof error === "object" && "code" in error && typeof (error as { code?: unknown }).code === "string"
+    ? (error as { code: string }).code
+    : "";
+  return /^(?:EACCES|EBUSY|EEXIST|EIO|EISDIR|ENOENT|ENOTDIR|ENOTEMPTY|EPERM|EROFS|EXDEV)$/.test(code)
+    ? `filesystem ${code}`
+    : "filesystem error";
 }
 
 function safeProtocolError(error: unknown): string {

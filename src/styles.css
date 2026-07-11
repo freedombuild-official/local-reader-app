@@ -1484,22 +1484,6 @@ main:is(.app-shell, .settings-shell) {
   color: #172026;
   padding: 9px 10px;
 }
-.ai-edit-target-hint {
-  grid-column: 1 / -1;
-  margin: 0;
-  border-radius: 6px;
-  padding: 6px 8px;
-  font-size: 12px;
-  line-height: 1.4;
-}
-.ai-edit-target-hint.ready {
-  background: #edf7f0;
-  color: #315f40;
-}
-.ai-edit-target-hint.warning {
-  background: #fff5df;
-  color: #765513;
-}
 .settings-field textarea {
   resize: vertical;
 }

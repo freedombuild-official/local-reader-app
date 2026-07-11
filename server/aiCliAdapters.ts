@@ -67,10 +67,10 @@ const TRUSTED_WINDOWS_CMD_PACKAGES: Readonly<Record<string, string>> = {
 
 export async function requestRepoWriteAIChatCompletion(request: RepoWriteChatRequest): Promise<{ content: string; status: AIConnectionStatus; run: AIChatRunSummary }> {
   if (request.target.kind === "codexCli") {
-    throw new HttpError(409, "Codex CLI Current repo write is unavailable because the current macOS :minimal runtime profile also grants shared system temp read/write access, so Reader-Wiki cannot enforce a Current repo-only boundary.");
+    throw new HttpError(409, "Codex CLI Current repo write is unavailable because Reader-Wiki cannot prove an all-tools-disabled structured planner boundary on every supported platform.");
   }
   if (request.target.kind === "claudeCli") {
-    throw new HttpError(409, "Claude Code CLI Current repo write is unavailable because Reader-Wiki cannot yet prove repo-outside read and protected-path write confinement.");
+    throw new HttpError(409, "Claude Code CLI Current repo write is unavailable because this build has not integrated and proven its no-tool structured planner with isolated persistent auth.");
   }
   throw new HttpError(500, "Provider Current repo write must use the Reader-Wiki server edit protocol and cannot be routed through a CLI adapter.");
 }

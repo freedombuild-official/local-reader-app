@@ -285,6 +285,10 @@ export type AIChatSessionState = {
   draft: string;
   pending: boolean;
   error: string;
+  requestKey?: string;
+  refreshingRepository?: boolean;
+  repositoryRefreshError?: string;
+  suppressRequestRetry?: boolean;
   lastRequest: string;
   attachments: AIChatAttachment[];
   contextChips: AIChatContextChip[];

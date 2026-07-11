@@ -92,6 +92,10 @@ const defaultAIChatSession: AIChatSessionState = {
   draft: "",
   pending: false,
   error: "",
+  requestKey: "",
+  refreshingRepository: false,
+  repositoryRefreshError: "",
+  suppressRequestRetry: false,
   lastRequest: "",
   attachments: [],
   contextChips: [],
@@ -173,6 +177,8 @@ export function App() {
   const activeRepoIdRef = useRef("");
   const activeRepoRevisionRef = useRef("");
   const reposRef = useRef<RepoListItem[]>([]);
+  const tabsByRepoRef = useRef<TabsByRepo>({});
+  tabsByRepoRef.current = tabsByRepo;
 
   useEffect(() => {
     const loaded = loadBasicSettings();
@@ -378,7 +384,7 @@ export function App() {
     const repoId = activeRepoId;
     const reloadToken = repoReloadTokenRef.current + 1;
     repoReloadTokenRef.current = reloadToken;
-    const tabsSnapshot = tabsByRepo[repoId] || [];
+    const tabsSnapshot = tabsByRepoRef.current[repoId] || [];
 
     setRepositoryReloadingRepoId(repoId);
     setError("");
@@ -414,7 +420,63 @@ export function App() {
         setRepositoryReloadingRepoId("");
       }
     }
-  }, [activeRepoId, refreshFileTab, tabsByRepo]);
+  }, [activeRepoId, refreshFileTab]);
+
+  const refreshRepositoryAfterAIWrite = useCallback(async (repoId: string): Promise<boolean> => {
+    if (!repoId || activeRepoIdRef.current !== repoId) return false;
+    const reloadToken = repoReloadTokenRef.current + 1;
+    repoReloadTokenRef.current = reloadToken;
+    const tabsSnapshot = tabsByRepoRef.current[repoId] || [];
+
+    setRepositoryReloadingRepoId(repoId);
+    setError("");
+    setTabNotice("");
+    setRepoSyncByRepo((current) => ({
+      ...current,
+      [repoId]: { state: "syncing", message: "Refreshing repository after AI changes...", fetched: false },
+    }));
+
+    try {
+      const nextRepos = await fetchRepos();
+      const nextRepo = nextRepos.find((repo) => repo.id === repoId);
+      if (!nextRepo) throw new Error("The repository changed, but it is no longer registered in Reader-Wiki.");
+      if (repoReloadTokenRef.current !== reloadToken || activeRepoIdRef.current !== repoId) return false;
+
+      const opened = await openRepository(repoId, nextRepo.revision);
+      if (repoReloadTokenRef.current !== reloadToken || activeRepoIdRef.current !== repoId) return false;
+      if (opened.repoId !== repoId || opened.revision !== nextRepo.revision) {
+        throw new Error("The repository changed again before Reader-Wiki could refresh the viewer.");
+      }
+
+      reposRef.current = nextRepos;
+      activeRepoRevisionRef.current = nextRepo.revision;
+      setRepos(nextRepos);
+      setTreeCache(opened.tree);
+      setRepoSyncByRepo((current) => ({
+        ...current,
+        [repoId]: opened.treeTruncated && opened.treeWarnings.length
+          ? { ...opened.sync, state: "warning", message: opened.treeWarnings.join(" ") }
+          : opened.sync,
+      }));
+      if (tabsSnapshot.length) {
+        await Promise.all(tabsSnapshot.map((tab) => refreshFileTab(repoId, tab.id, tab.path)));
+      }
+      return true;
+    } catch (refreshError) {
+      const message = refreshError instanceof Error ? refreshError.message : String(refreshError);
+      if (repoReloadTokenRef.current !== reloadToken || activeRepoIdRef.current !== repoId) return false;
+      setRepoSyncByRepo((current) => ({
+        ...current,
+        [repoId]: { state: "warning", message, fetched: false },
+      }));
+      setError(message);
+      throw refreshError;
+    } finally {
+      if (repoReloadTokenRef.current === reloadToken) {
+        setRepositoryReloadingRepoId("");
+      }
+    }
+  }, [refreshFileTab]);
 
   const reloadRepositoriesAfterSettingsSave = useCallback(async () => {
     const previousActiveRepo = repos.find((repo) => repo.id === activeRepoId) || null;
@@ -969,6 +1031,7 @@ export function App() {
         aiChatSession={aiChatSession}
         onAIChatSessionChange={updateAIChatSession}
         onAIReadinessFailure={handleAIReadinessFailure}
+        onRepositoryChanged={refreshRepositoryAfterAIWrite}
         aiModelBehavior={aiModelBehavior}
         activeRepoId={activeRepoId}
         activeRepoRevision={activeRepo?.revision || ""}
@@ -1661,7 +1724,7 @@ function HttpDeliveryPanel({ status, stoppingItemIds, error, onStop }: {
   );
 }
 
-function RightPanel({ mode, onModeChange, file, outline, onHeadingSelect, memoText, memoMode, onMemoTextChange, onMemoModeChange, aiSettings, aiChatSession, onAIChatSessionChange, onAIReadinessFailure, aiModelBehavior, activeRepoId, activeRepoRevision, rootTreeNodes, onOpenSettings }: {
+function RightPanel({ mode, onModeChange, file, outline, onHeadingSelect, memoText, memoMode, onMemoTextChange, onMemoModeChange, aiSettings, aiChatSession, onAIChatSessionChange, onAIReadinessFailure, onRepositoryChanged, aiModelBehavior, activeRepoId, activeRepoRevision, rootTreeNodes, onOpenSettings }: {
   mode: RightPanelMode;
   onModeChange: (mode: RightPanelMode) => void;
   file: FileResponse | null;
@@ -1675,6 +1738,7 @@ function RightPanel({ mode, onModeChange, file, outline, onHeadingSelect, memoTe
   aiChatSession: AIChatSessionState;
   onAIChatSessionChange: (updater: (session: AIChatSessionState) => AIChatSessionState) => void;
   onAIReadinessFailure: (entry: AIEntryKind, message: string) => void;
+  onRepositoryChanged: (repoId: string) => Promise<boolean>;
   aiModelBehavior: ReturnType<typeof activeAIModelBehavior>;
   activeRepoId: string;
   activeRepoRevision: string;
@@ -1743,6 +1807,7 @@ function RightPanel({ mode, onModeChange, file, outline, onHeadingSelect, memoTe
               session={aiChatSession}
               onSessionChange={onAIChatSessionChange}
               onReadinessFailure={onAIReadinessFailure}
+              onRepositoryChanged={onRepositoryChanged}
               modelBehavior={aiModelBehavior}
               activeRepoId={activeRepoId}
               activeRepoRevision={activeRepoRevision}

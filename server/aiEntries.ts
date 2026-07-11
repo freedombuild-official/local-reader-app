@@ -46,7 +46,7 @@ async function probeCxReadiness(runner: AICommandRunner, repo?: RepositoryConfig
   const checks = [
     check("binary", "Binary", binaryReady, binaryReady ? probeText(version).split(/\r?\n/)[0] || "Installed." : version.error),
     check("auth", "Existing CLI auth", authReady, authReady ? "Existing CLI auth is configured." : login.ok ? "Existing CLI auth was not confirmed." : login.error),
-    check("wrapper", "Current repo-only write boundary", wrapperReady, help.ok ? "Codex CLI Current repo write is fail-closed. The tested macOS Codex 0.144.1 :minimal runtime grants shared system temp read/write access, and Reader-Wiki has not proven an equivalent Current repo-only boundary on every supported platform." : help.error),
+    check("wrapper", "Current repo-only write boundary", wrapperReady, help.ok ? "Codex CLI Current repo write is fail-closed. Codex 0.144.1 has structured output and a read-only sandbox, but Reader-Wiki cannot prove that every built-in and extension tool is absent from a planner process on every supported platform." : help.error),
     check("workspace", "Workspace", workspaceReady, workspace.message),
     check("execution-policy", "Readiness execution policy", true, "Readiness inspects binary, auth, flags, and workspace without running an AI edit. It does not enable CLI write while the Current repo-only boundary is unprovable."),
   ];
@@ -68,7 +68,7 @@ async function probeClaudeReadiness(runner: AICommandRunner, repo?: RepositoryCo
   const checks = [
     check("binary", "Binary", binaryReady, binaryReady ? probeText(version).split(/\r?\n/)[0] || "Installed." : version.error),
     check("auth", "Existing CLI auth", authReady, authReady ? "Existing CLI auth is configured." : auth.ok ? "Existing CLI auth was not confirmed." : auth.error),
-    check("wrapper", "Repo-scoped write wrapper", wrapperReady, capabilityPresent ? "Claude Code CLI Current repo write remains unavailable because Reader-Wiki cannot prove repo-outside read and protected-path write confinement." : help.ok ? "Tool-restricted print flags were not confirmed." : help.error),
+    check("wrapper", "Repo-scoped write wrapper", wrapperReady, capabilityPresent ? "Claude Code exposes no-tool structured-output flags, but this build has not integrated and proven an isolated synthetic planner with persistent auth on every supported platform." : help.ok ? "Tool-restricted print flags were not confirmed." : help.error),
     check("workspace", "Workspace", workspaceReady, workspace.message),
     check("execution-policy", "Readiness execution policy", true, "Readiness does not run an AI edit and fails closed when Current repo confinement cannot be proven."),
   ];

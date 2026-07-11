@@ -109,7 +109,7 @@ describe("AI provider network boundary", () => {
     const app = express();
     let receivedMessages: Array<{ role?: string; content?: string }> = [];
     let receivedTemperature: number | undefined;
-    let receivedResponseFormat: { type?: string; json_schema?: { strict?: boolean; schema?: { additionalProperties?: boolean } } } | undefined;
+    let receivedResponseFormat: Record<string, unknown> | undefined;
     app.use(express.json());
     app.post("/v1/chat/completions", (request, response) => {
       const body = request.body as {
@@ -136,7 +136,29 @@ describe("AI provider network boundary", () => {
       expect(receivedTemperature).toBe(0);
       expect(receivedResponseFormat).toMatchObject({
         type: "json_schema",
-        json_schema: { strict: false, schema: { additionalProperties: false } },
+        json_schema: {
+          strict: false,
+          schema: {
+            required: ["version", "type"],
+            additionalProperties: false,
+            properties: {
+              paths: { type: "array" },
+              operations: {
+                type: "array",
+                items: {
+                  required: ["op", "path"],
+                  additionalProperties: false,
+                  properties: {
+                    content: { type: "string" },
+                    oldText: { type: "string" },
+                    newText: { type: "string" },
+                  },
+                },
+              },
+              message: { type: "string" },
+            },
+          },
+        },
       });
     } finally {
       await server.close();

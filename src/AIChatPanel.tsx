@@ -19,6 +19,7 @@ type AIChatPanelProps = {
   activeFile: FileResponse | null;
   rootTreeNodes: TreeNode[];
   onReadinessFailure: (entry: AIEntryKind, message: string) => void;
+  onRepositoryChanged: (repoId: string) => Promise<boolean>;
   onOpenSettings: () => void;
   onMarkdownClick: (event: ReactMouseEvent<HTMLElement>) => void;
 };
@@ -39,18 +40,21 @@ const aiMarkdown = new MarkdownIt({ html: false, linkify: true });
 const MAX_ATTACHMENTS = 5;
 const MAX_ATTACHMENT_TEXT_BYTES = 64 * 1024;
 const TRANSCRIPT_BOTTOM_THRESHOLD_PX = 72;
+let aiRequestSequence = 0;
 
 installTableScrollRule(aiMarkdown);
 installCodeBlockRule(aiMarkdown);
 installTaskListRule(aiMarkdown);
 
-export function AIChatPanel({ aiSettings, session, onSessionChange, modelBehavior, activeRepoId, activeRepoRevision, rootTreeNodes, onReadinessFailure, onOpenSettings, onMarkdownClick }: AIChatPanelProps) {
+export function AIChatPanel({ aiSettings, session, onSessionChange, modelBehavior, activeRepoId, activeRepoRevision, rootTreeNodes, onReadinessFailure, onRepositoryChanged, onOpenSettings, onMarkdownClick }: AIChatPanelProps) {
   const [copyStateById, setCopyStateById] = useState<Record<string, CopyState>>({});
   const [voiceActive, setVoiceActive] = useState(false);
   const [canceling, setCanceling] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const activeRunIdRef = useRef("");
   const cancelRequestedRef = useRef(false);
+  const activeRequestKeyRef = useRef("");
+  const activeRepoWriteRequestRef = useRef(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const transcriptRef = useRef<HTMLDivElement | null>(null);
   const transcriptBottomRef = useRef<HTMLDivElement | null>(null);
@@ -63,7 +67,7 @@ export function AIChatPanel({ aiSettings, session, onSessionChange, modelBehavio
   activeRepoIdentityRef.current = activeRepoIdentity;
   const activeEntry = activeAIEntry(aiSettings);
   const target = activeAIChatTarget(aiSettings);
-  const providerWriteMode = Boolean(target && "provider" in target && target.provider.executionMode === "repoWrite");
+  const repoWriteRequest = Boolean(target && ("provider" in target ? target.provider.executionMode === "repoWrite" : true));
   const targetIdentity = target
     ? "provider" in target
       ? [target.kind, target.provider.entry, target.provider.executionMode || "readOnly", target.provider.provider || "", target.provider.runtime || "", target.provider.model, target.provider.baseUrl, target.provider.apiFormat].join(":")
@@ -76,6 +80,8 @@ export function AIChatPanel({ aiSettings, session, onSessionChange, modelBehavio
   const visibleContextChips = useMemo(() => visibleAIContextChips(session.contextChips || [], activeRepoId, defaultRuleChip), [session.contextChips, activeRepoId, defaultRuleChip]);
   const selectedPathChips = useMemo(() => visibleContextChips.filter((chip) => chip.role === "primary"), [visibleContextChips]);
   const ruleChips = useMemo(() => visibleContextChips.filter((chip) => chip.role === "rule"), [visibleContextChips]);
+  const refreshingRepository = Boolean(session.refreshingRepository);
+  const repositoryRefreshError = session.repositoryRefreshError || "";
   const canSend = Boolean(ready && activeRepoId && session.draft.trim() && !session.pending);
   const voiceAvailable = Boolean(getSpeechRecognitionCtor());
 
@@ -98,19 +104,24 @@ export function AIChatPanel({ aiSettings, session, onSessionChange, modelBehavio
       const controller = abortRef.current;
       if (!controller) return;
       const runId = activeRunIdRef.current;
+      const requestKey = activeRequestKeyRef.current;
+      const repoWrite = activeRepoWriteRequestRef.current;
       abortRef.current = null;
       activeRunIdRef.current = "";
       cancelRequestedRef.current = false;
       controller.abort();
       if (runId) void cancelAIChatRun(runId).catch(() => undefined);
       onSessionChangeRef.current((current) => {
+        if (!requestKey || current.requestKey !== requestKey) return current;
         const lastMessage = current.messages[current.messages.length - 1];
         const next = current.pending && lastMessage?.role === "assistant" && !lastMessage.content
           ? replaceLastAssistant(current, "AI Chat request canceled when the panel closed.")
           : current;
         return {
           ...next,
-          pending: false,
+          pending: repoWrite,
+          refreshingRepository: repoWrite,
+          suppressRequestRetry: repoWrite,
           error: "AI Chat request canceled when the panel closed.",
         };
       });
@@ -151,6 +162,7 @@ export function AIChatPanel({ aiSettings, session, onSessionChange, modelBehavio
     const requestRepoIdentity = activeRepoIdentity;
     const requestTargetIdentity = targetIdentity;
     const requestContextChips = visibleContextChips;
+    const requestKey = `ai-${Date.now()}-${++aiRequestSequence}`;
     const userMessage: AIChatMessage = { role: "user", content };
     const assistantMessage: AIChatMessage = { role: "assistant", content: "" };
     const nextMessages = [...session.messages, userMessage, assistantMessage];
@@ -161,6 +173,10 @@ export function AIChatPanel({ aiSettings, session, onSessionChange, modelBehavio
       draft: "",
       pending: true,
       error: "",
+      requestKey,
+      refreshingRepository: false,
+      repositoryRefreshError: "",
+      suppressRequestRetry: false,
       lastRequest: content,
       attachments: [],
       contextChips: (current.contextChips || []).filter((chip) => !isOneShotContextChip(chip)),
@@ -170,7 +186,14 @@ export function AIChatPanel({ aiSettings, session, onSessionChange, modelBehavio
     abortRef.current = controller;
     activeRunIdRef.current = "";
     cancelRequestedRef.current = false;
+    activeRequestKeyRef.current = requestKey;
+    activeRepoWriteRequestRef.current = repoWriteRequest;
     setCanceling(false);
+    let repositoryMayHaveChanged = repoWriteRequest;
+    let requestSettledForCurrentTarget = false;
+    const updateCurrentRequest = (updater: (current: AIChatSessionState) => AIChatSessionState) => {
+      updateSession((current) => current.requestKey === requestKey ? updater(current) : current);
+    };
     try {
       await streamAIChatMessage(
         {
@@ -189,6 +212,7 @@ export function AIChatPanel({ aiSettings, session, onSessionChange, modelBehavio
           if (abortRef.current !== controller || activeRepoIdentityRef.current !== requestRepoIdentity || targetIdentityRef.current !== requestTargetIdentity) return;
           if (event.type === "meta") {
             activeRunIdRef.current = event.runId || "";
+            if (repoWriteRequest) repositoryMayHaveChanged = true;
             if (cancelRequestedRef.current && event.runId) void requestServerCancellation(event.runId, controller);
             return;
           }
@@ -197,39 +221,89 @@ export function AIChatPanel({ aiSettings, session, onSessionChange, modelBehavio
             return;
           }
           if (event.type === "done") {
+            repositoryMayHaveChanged = repositoryMayHaveChanged || event.run.changedPaths.length > 0 || event.run.auditState === "unverified";
             updateSessionAndFollow((current) => replaceLastAssistant(current, appendRunSummary(event.message.content, event.run)));
             return;
           }
           if (event.type === "error") {
-            updateSessionAndFollow((current) => ({
-              ...(event.details?.run
-                ? replaceLastAssistant(current, appendRunSummary(event.error, event.details.run))
-                : replaceLastAssistant(current, event.error)),
-              error: event.error,
-            }));
+            repositoryMayHaveChanged = repositoryMayHaveChanged || repoWriteRequest || Boolean(event.details?.run && (event.details.run.changedPaths.length > 0 || event.details.run.auditState === "unverified"));
+            updateSessionAndFollow((current) => current.requestKey === requestKey
+              ? {
+                  ...(event.details?.run
+                    ? replaceLastAssistant(current, appendRunSummary(event.error, event.details.run))
+                    : replaceLastAssistant(current, event.error)),
+                  error: event.error,
+                  suppressRequestRetry: repositoryMayHaveChanged,
+                }
+              : current);
           }
         },
         controller.signal,
       );
     } catch (nextError) {
-      if (abortRef.current === controller && activeRepoIdentityRef.current === requestRepoIdentity && targetIdentityRef.current === requestTargetIdentity) {
+      if (activeRepoIdentityRef.current === requestRepoIdentity && targetIdentityRef.current === requestTargetIdentity) {
         const message = controller.signal.aborted ? "AI Chat request canceled." : nextError instanceof Error ? nextError.message : String(nextError);
         if (nextError instanceof AIChatRequestError && nextError.code === "readiness_renewal_failed" && nextError.entry) {
           onReadinessFailure(nextError.entry, message);
         }
-        updateSession((current) => ({
+        updateCurrentRequest((current) => ({
           ...replaceLastAssistant(current, message),
           error: message,
+          suppressRequestRetry: repositoryMayHaveChanged,
         }));
       }
     } finally {
-      if (abortRef.current === controller && activeRepoIdentityRef.current === requestRepoIdentity && targetIdentityRef.current === requestTargetIdentity) {
-        updateSession((current) => ({ ...current, pending: false }));
+      if (activeRepoIdentityRef.current === requestRepoIdentity && targetIdentityRef.current === requestTargetIdentity) {
+        requestSettledForCurrentTarget = true;
+        if (!repositoryMayHaveChanged) updateCurrentRequest((current) => ({ ...current, pending: false }));
+      }
+      if (abortRef.current === controller) {
         abortRef.current = null;
         activeRunIdRef.current = "";
         cancelRequestedRef.current = false;
+        activeRequestKeyRef.current = "";
+        activeRepoWriteRequestRef.current = false;
         setCanceling(false);
       }
+    }
+    if (repositoryMayHaveChanged && requestSettledForCurrentTarget) {
+      updateCurrentRequest((current) => ({ ...current, refreshingRepository: true }));
+      try {
+        await onRepositoryChanged(activeRepoId);
+      } catch (refreshError) {
+        updateCurrentRequest((current) => ({
+          ...current,
+          repositoryRefreshError: `The repository may have changed, but Reader-Wiki could not refresh the viewer: ${refreshError instanceof Error ? refreshError.message : String(refreshError)}`,
+        }));
+      } finally {
+        updateCurrentRequest((current) => ({ ...current, pending: false, refreshingRepository: false }));
+      }
+    }
+  }
+
+  async function retryRepositoryRefresh() {
+    if (!activeRepoId || session.pending) return;
+    const repoId = activeRepoId;
+    const requestKey = session.requestKey || `refresh-${Date.now()}-${++aiRequestSequence}`;
+    const updateCurrentRefresh = (updater: (current: AIChatSessionState) => AIChatSessionState) => {
+      updateSession((current) => current.requestKey === requestKey ? updater(current) : current);
+    };
+    updateSession((current) => ({
+      ...current,
+      requestKey,
+      pending: true,
+      refreshingRepository: true,
+      repositoryRefreshError: "",
+    }));
+    try {
+      await onRepositoryChanged(repoId);
+    } catch (refreshError) {
+      updateCurrentRefresh((current) => ({
+        ...current,
+        repositoryRefreshError: `Reader-Wiki could not refresh the viewer: ${refreshError instanceof Error ? refreshError.message : String(refreshError)}`,
+      }));
+    } finally {
+      updateCurrentRefresh((current) => ({ ...current, pending: false, refreshingRepository: false }));
     }
   }
 
@@ -388,8 +462,19 @@ export function AIChatPanel({ aiSettings, session, onSessionChange, modelBehavio
       {session.error ? (
         <div className="ai-chat-error">
           <span>{session.error}</span>
-          {session.lastRequest && !session.pending ? (
+          {session.lastRequest && !session.pending && !session.suppressRequestRetry ? (
             <button type="button" className="icon-button" aria-label="Retry AI Chat request" title="Retry AI Chat request" onClick={() => void sendMessage(session.lastRequest)}>
+              <RotateCcw aria-hidden="true" focusable="false" />
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+
+      {repositoryRefreshError ? (
+        <div className="ai-chat-error">
+          <span>{repositoryRefreshError}</span>
+          {!session.pending ? (
+            <button type="button" className="icon-button" aria-label="Retry repository refresh" title="Retry repository refresh" onClick={() => void retryRepositoryRefresh()}>
               <RotateCcw aria-hidden="true" focusable="false" />
             </button>
           ) : null}
@@ -443,11 +528,6 @@ export function AIChatPanel({ aiSettings, session, onSessionChange, modelBehavio
               ))}
             </div>
           ) : null}
-          {providerWriteMode ? (
-            <p className="ai-edit-target-hint ready" role="note">
-              Sending an explicit edit request authorizes one guarded run. Selected paths are hints; Reader-Wiki mediates bounded reads and validates every text operation inside the Current repo. To authorize deletion, add an exact <code>DELETE: relative/path</code> line for each file.
-            </p>
-          ) : null}
           <textarea
             aria-label="AI Chat message"
             value={session.draft}
@@ -465,8 +545,8 @@ export function AIChatPanel({ aiSettings, session, onSessionChange, modelBehavio
               <Mic aria-hidden="true" focusable="false" />
             </button>
             {session.pending ? (
-              <button type="button" className="icon-button" aria-label={canceling ? "Canceling AI Chat request" : "Cancel AI Chat request"} title={canceling ? "Canceling AI Chat request" : "Cancel AI Chat request"} disabled={canceling} onClick={() => void cancelRequest()}>
-                <Square aria-hidden="true" focusable="false" />
+              <button type="button" className="icon-button" aria-label={refreshingRepository ? "Refreshing repository" : canceling ? "Canceling AI Chat request" : "Cancel AI Chat request"} title={refreshingRepository ? "Refreshing repository" : canceling ? "Canceling AI Chat request" : "Cancel AI Chat request"} disabled={canceling || refreshingRepository} onClick={() => void cancelRequest()}>
+                {refreshingRepository ? <RotateCcw aria-hidden="true" focusable="false" /> : <Square aria-hidden="true" focusable="false" />}
               </button>
             ) : (
               <button type="submit" className="icon-button" aria-label="Send AI Chat message" title="Send AI Chat message" disabled={!canSend}>

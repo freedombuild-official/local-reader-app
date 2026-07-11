@@ -671,7 +671,7 @@ function AIChatSettingsPanel({
               entry="codexCli"
               title={entryLabel("codexCli")}
               subtitle="Existing CLI readiness"
-              note="Checks installation and sign-in, then fails closed because the current macOS Codex runtime cannot exclude shared system temp from its minimal read/write policy. No login or browser flow is started here."
+              note="Checks installation and sign-in, then fails closed because this build cannot prove an all-tools-disabled Codex planner boundary on every supported platform. No login or browser flow is started here."
               configured={configured}
               lastCheckedAt={settings.lastCheckedAtByEntry.codexCli}
               status={effectiveAIStatus(settings, "codexCli")}
@@ -693,7 +693,7 @@ function AIChatSettingsPanel({
               entry="claudeCli"
               title={entryLabel("claudeCli")}
               subtitle="Existing CLI readiness"
-              note="Checks installation and sign-in, then fails closed because this build cannot prove a Current repo-only filesystem boundary for Claude Code CLI."
+              note="Checks installation and sign-in, then fails closed because the no-tool structured Claude planner has not been integrated and proven with isolated persistent auth in this build."
               configured={configured}
               lastCheckedAt={settings.lastCheckedAtByEntry.claudeCli}
               status={effectiveAIStatus(settings, "claudeCli")}
@@ -1221,8 +1221,8 @@ function entryIcon(entry: AIEntryKind): string {
 }
 
 function entryDescription(entry: AIEntryKind): string {
-  if (entry === "codexCli") return "Installed CLI diagnostics; Current repo write is fail-closed while shared system temp remains writable.";
-  if (entry === "claudeCli") return "Installed CLI diagnostics; Current repo write remains unavailable until filesystem confinement can be proven.";
+  if (entry === "codexCli") return "Installed CLI diagnostics; Current repo write is fail-closed until an all-tools-disabled planner boundary is proven.";
+  if (entry === "claudeCli") return "Installed CLI diagnostics; the no-tool structured planner remains unavailable until isolated auth and conformance are proven.";
   if (entry === "aiApi") return "Remote provider with context-only or server-validated Current repo text edits.";
   return "Loopback local provider with context-only or server-validated Current repo text edits.";
 }

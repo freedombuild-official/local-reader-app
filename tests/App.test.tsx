@@ -1444,9 +1444,79 @@ describe("App", () => {
     expect(parseJsonBody(fetchCallsTo("/api/ai/entry-readiness").at(-1)?.[1]?.body)).toMatchObject({ provider: { executionMode: "repoWrite" } });
 
     fireEvent.click(screen.getByRole("button", { name: "Back to viewer" }));
+    fireEvent.click(await screen.findByRole("button", { name: "guide.md" }));
+    expect(await screen.findByRole("heading", { name: "Guide" })).toBeTruthy();
     fireEvent.click(await screen.findByRole("tab", { name: "AI Chat" }));
+    expect(screen.queryByText(/Sending an explicit edit request authorizes one guarded run/)).toBeNull();
     expect(screen.queryByText("AI Entry is not ready.")).toBeNull();
     expect(screen.queryByText("AI Entry is required.")).toBeNull();
+    const originalFetch = fetchMock.getMockImplementation();
+    const refreshedRevision = "revision-docs-v2";
+    let providerWriteRequested = false;
+    let delayNextRefresh = true;
+    let failNextRefresh = false;
+    let returnRollbackIncomplete = false;
+    let resolveDelayedRefresh: ((response: Response) => void) | null = null;
+    const refreshedRepoOpenResponse = () => json({
+      repoId: "docs",
+      revision: refreshedRevision,
+      sync: { state: "disabled", message: "Git remote fetch disabled.", fetched: false },
+      tree: treeSnapshot,
+      treeTruncated: false,
+      treeWarnings: [],
+    });
+    fetchMock.mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url === "/api/ai/chat/stream") {
+        providerWriteRequested = true;
+        if (returnRollbackIncomplete) {
+          returnRollbackIncomplete = false;
+          return streamJsonLines([
+            { type: "meta", runId: "rollback-incomplete-run", context: { repoId: "docs", revision: refreshedRevision, primaryItems: [], ruleItems: [], systemPromptVersion: "2.2.0" } },
+            { type: "error", error: "Guarded apply failed and rollback could not be verified.", details: { code: "guarded_rollback_incomplete", rollbackState: "unverified" } },
+          ]);
+        }
+        return originalFetch ? originalFetch(input, init) : json({ error: "missing fetch" }, 500);
+      }
+      if (providerWriteRequested && url === "/api/repos") {
+        return json({
+          repositories: [
+            { id: "docs", label: "Docs", root: "/tmp/docs", defaultPath: "README.md", exists: true, revision: refreshedRevision },
+            { id: "alt", label: "Alt", root: "/tmp/alt", defaultPath: "ALT.md", exists: true, revision: repoRevisions.alt },
+          ],
+        });
+      }
+      if (providerWriteRequested && url === "/api/repo-open") {
+        if (failNextRefresh) {
+          failNextRefresh = false;
+          throw new Error("planned repository refresh failure");
+        }
+        if (delayNextRefresh) {
+          delayNextRefresh = false;
+          return new Promise<Response>((resolve) => {
+            resolveDelayedRefresh = resolve;
+          });
+        }
+        return refreshedRepoOpenResponse();
+      }
+      if (providerWriteRequested && url.startsWith("/api/file")) {
+        const query = new URL(`http://local${url}`).searchParams;
+        if (query.get("path") === "guide.md") {
+          const refreshedGuide = fileForPath("guide.md");
+          return json({
+            ...refreshedGuide,
+            revision: refreshedRevision,
+            content: "# Guide\n\nAI-refreshed guide content.\n",
+            markdown: {
+              frontmatter: "",
+              body: "# Guide\n\nAI-refreshed guide content.\n",
+              html: "<h1>Guide</h1><p>AI-refreshed guide content.</p>",
+            },
+          });
+        }
+      }
+      return originalFetch ? originalFetch(input, init) : json({ error: "missing fetch" }, 500);
+    });
     const messageInput = await screen.findByLabelText("AI Chat message");
     fireEvent.change(messageInput, { target: { value: "Update the Current repo without selected context." } });
     expect((screen.getByRole("button", { name: "Send AI Chat message" }) as HTMLButtonElement).disabled).toBe(false);
@@ -1459,6 +1529,15 @@ describe("App", () => {
       expect(transcript).toContain("changed: guide.md");
       expect(transcript).toContain("new: docs/generated.md");
     });
+    const refreshingButton = await screen.findByRole("button", { name: "Refreshing repository" });
+    expect((refreshingButton as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.queryByRole("button", { name: "Send AI Chat message" })).toBeNull();
+    await act(async () => {
+      resolveDelayedRefresh?.(refreshedRepoOpenResponse());
+    });
+    expect(await screen.findByText("AI-refreshed guide content.")).toBeTruthy();
+    expect(parseJsonBody(fetchCallsTo("/api/repo-open").at(-1)?.[1]?.body)).toMatchObject({ repoId: "docs", expectedRevision: refreshedRevision });
+    expect((screen.getByLabelText("AI Chat message") as HTMLTextAreaElement).disabled).toBe(false);
 
     fireEvent.contextMenu(await screen.findByRole("button", { name: "docs" }), { clientX: 120, clientY: 120 });
     fireEvent.click(screen.getByRole("menuitem", { name: "Send a path to AI Chat" }));
@@ -1466,6 +1545,7 @@ describe("App", () => {
     fireEvent.click(screen.getByRole("menuitem", { name: "Send a path to AI Chat" }));
     expect(within(screen.getByLabelText("AI Chat selected paths")).getByText("docs")).toBeTruthy();
     expect(within(screen.getByLabelText("AI Chat selected paths")).getByText("guide.md")).toBeTruthy();
+    failNextRefresh = true;
     fireEvent.change(screen.getByLabelText("AI Chat message"), { target: { value: "Use both context hints and update the repo." } });
     expect((screen.getByRole("button", { name: "Send AI Chat message" }) as HTMLButtonElement).disabled).toBe(false);
     fireEvent.click(screen.getByRole("button", { name: "Send AI Chat message" }));
@@ -1475,6 +1555,20 @@ describe("App", () => {
       expect.objectContaining({ path: "docs", kind: "directory" }),
       expect.objectContaining({ path: "guide.md", kind: "file" }),
     ]) } });
+    expect((await screen.findAllByText(/planned repository refresh failure/)).length).toBeGreaterThan(0);
+    expect(screen.queryByRole("button", { name: "Retry AI Chat request" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Retry repository refresh" }));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Retry repository refresh" })).toBeNull());
+    expect(screen.getByRole("button", { name: "Send AI Chat message" })).toBeTruthy();
+
+    const repoListFetchesBeforeRollbackError = fetchCallsTo("/api/repos").length;
+    returnRollbackIncomplete = true;
+    fireEvent.change(screen.getByLabelText("AI Chat message"), { target: { value: "Exercise rollback-incomplete refresh handling." } });
+    fireEvent.click(screen.getByRole("button", { name: "Send AI Chat message" }));
+    expect((await screen.findAllByText("Guarded apply failed and rollback could not be verified.")).length).toBeGreaterThan(0);
+    await waitFor(() => expect(fetchCallsTo("/api/repos").length).toBeGreaterThan(repoListFetchesBeforeRollbackError));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Send AI Chat message" })).toBeTruthy());
+    expect(screen.queryByRole("button", { name: "Retry AI Chat request" })).toBeNull();
   });
 
   it("aborts and ignores a delayed repo-wide response after the Current repo changes", async () => {
@@ -1630,13 +1724,15 @@ describe("App", () => {
     fireEvent.change(screen.getByLabelText("AI Chat message"), { target: { value: "Start a delayed repo-wide run before mode change." } });
     fireEvent.click(screen.getByRole("button", { name: "Send AI Chat message" }));
     await waitFor(() => expect(delayedController).toBeTruthy());
+    const repoListFetchesBeforePanelUnmount = fetchCallsTo("/api/repos").length;
     fireEvent.click(openSettingsButton());
     await waitFor(() => expect(requestSignal?.aborted).toBe(true));
     fireEvent.click(await screen.findByRole("button", { name: "Back to viewer" }));
     fireEvent.click(await screen.findByRole("tab", { name: "AI Chat" }));
     expect(screen.queryByRole("button", { name: "Cancel AI Chat request" })).toBeNull();
     expect((screen.getByLabelText("AI Chat message") as HTMLTextAreaElement).disabled).toBe(false);
-    expect((screen.getByRole("button", { name: "Send AI Chat message" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: "Refreshing repository" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.queryByRole("button", { name: "Send AI Chat message" })).toBeNull();
     fireEvent.click(openSettingsButton());
     fireEvent.click(await screen.findByRole("tab", { name: "AI Chat" }));
     const modeChangedAuth = screen.getByLabelText("AI API connection");
@@ -1653,6 +1749,7 @@ describe("App", () => {
       })}\n`));
       delayedController?.close();
     });
+    await waitFor(() => expect(fetchCallsTo("/api/repos").length).toBeGreaterThan(repoListFetchesBeforePanelUnmount));
     fireEvent.click(screen.getByRole("button", { name: "Back to viewer" }));
     fireEvent.click(await screen.findByRole("tab", { name: "AI Chat" }));
     expect(screen.queryByText("Old mode response.")).toBeNull();

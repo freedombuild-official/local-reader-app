@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { HttpError } from "../server/errors.js";
+import { parseGuardedEditResponse } from "../server/guardedEditProtocol.js";
 import { buildGuardedRepoPathPolicy, probeGuardedRepoWriteCapability, requestGuardedRepoWriteAIChatCompletion, type GuardedProviderRequester } from "../server/guardedRepoEdits.js";
 import type { AIChatContext, AIConnectionStatus, AIProviderSettings, RepositoryConfig } from "../server/types.js";
 
@@ -351,7 +352,7 @@ describe("guarded provider repository edits", () => {
     }
   });
 
-  it("verifies committed content before backup cleanup and rolls back a failed postflight", async () => {
+  it("preserves an external change and recovery backup when postflight ownership changes", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "reader-wiki-guarded-postflight-"));
     try {
       const target = path.join(root, "note.md");
@@ -363,7 +364,7 @@ describe("guarded provider repository edits", () => {
           ? { content: JSON.stringify({ version: VERSION, type: "read", paths: ["note.md"] }), status: readyStatus() }
           : { content: JSON.stringify({ version: VERSION, type: "apply", operations: [{ op: "write", path: "note.md", content: "after\n" }], message: "changed" }), status: readyStatus() };
       };
-      await expect(requestGuardedRepoWriteAIChatCompletion({
+      const failure = await requestGuardedRepoWriteAIChatCompletion({
         provider: provider(),
         repo: repository(root),
         messages: [{ role: "user", content: "change note" }],
@@ -372,9 +373,55 @@ describe("guarded provider repository edits", () => {
         mutationFaultInjector: async (phase) => {
           if (phase === "before-postflight") await writeFile(target, "tampered\n", "utf8");
         },
-      })).rejects.toMatchObject({ status: 500 });
-      expect(await readFile(target, "utf8")).toBe("before\n");
-      expect((await readdir(root)).filter((name) => name.startsWith(".reader-wiki-ai-"))).toEqual([]);
+      }).then(
+        () => null,
+        (error: unknown) => error as HttpError,
+      );
+      expect(failure).toMatchObject({
+        status: 409,
+        details: { code: "guarded_rollback_incomplete", rollbackState: "unverified" },
+      });
+      expect(failure?.message).toContain("changed after Reader-Wiki placed it");
+      expect(failure?.message).not.toContain(root);
+      expect(await readFile(target, "utf8")).toBe("tampered\n");
+      const artifacts = (await readdir(root)).filter((name) => name.startsWith(".reader-wiki-ai-") && name.endsWith(".bak"));
+      expect(artifacts).toHaveLength(1);
+      expect(await readFile(path.join(root, artifacts[0]), "utf8")).toBe("before\n");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not replace a file recreated after the original was moved to backup", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "reader-wiki-guarded-no-replace-"));
+    try {
+      const target = path.join(root, "note.md");
+      await writeFile(target, "before\n", "utf8");
+      let call = 0;
+      const requester: GuardedProviderRequester = async () => {
+        call += 1;
+        return call === 1
+          ? { content: JSON.stringify({ version: VERSION, type: "read", paths: ["note.md"] }), status: readyStatus() }
+          : { content: JSON.stringify({ version: VERSION, type: "apply", operations: [{ op: "write", path: "note.md", content: "after\n" }], message: "changed" }), status: readyStatus() };
+      };
+      const failure = await requestGuardedRepoWriteAIChatCompletion({
+        provider: provider(),
+        repo: repository(root),
+        messages: [{ role: "user", content: "change note" }],
+        context: context(),
+        requester,
+        mutationFaultInjector: async (phase) => {
+          if (phase === "after-backup") await writeFile(target, "external recreation\n", "utf8");
+        },
+      }).then(
+        () => null,
+        (error: unknown) => error as HttpError,
+      );
+      expect(failure).toMatchObject({ status: 409, details: { code: "guarded_rollback_incomplete" } });
+      expect(await readFile(target, "utf8")).toBe("external recreation\n");
+      const backups = (await readdir(root)).filter((name) => name.endsWith(".bak"));
+      expect(backups).toHaveLength(1);
+      expect(await readFile(path.join(root, backups[0]), "utf8")).toBe("before\n");
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -527,13 +574,92 @@ describe("guarded provider repository edits", () => {
   });
 
   it("checks strict protocol capability without exposing a repository", async () => {
+    let call = 0;
     const requester: GuardedProviderRequester = async (request) => {
+      call += 1;
       expect(request.context).toBeUndefined();
       expect(request.systemPrompt).toContain(VERSION);
-      return { content: JSON.stringify({ version: VERSION, type: "complete", message: "ready" }), status: readyStatus() };
+      const latest = JSON.parse(request.messages?.at(-1)?.content || "{}") as { type?: string; files?: Array<{ path?: string; content?: string }> };
+      if (call === 1) {
+        expect(latest).toMatchObject({ type: "capability_check", syntheticPath: "reader-wiki-capability-probe.md" });
+        return {
+          content: JSON.stringify({ version: VERSION, type: "read", paths: ["reader-wiki-capability-probe.md"], operations: null, message: null }),
+          status: readyStatus(),
+        };
+      }
+      expect(latest).toMatchObject({ type: "read_result", synthetic: true, files: [{ path: "reader-wiki-capability-probe.md", content: "Reader-Wiki capability probe: before" }] });
+      return {
+        content: JSON.stringify({
+          version: VERSION,
+          type: "apply",
+          paths: [],
+          operations: [{
+            op: "replace",
+            path: "reader-wiki-capability-probe.md",
+            content: null,
+            oldText: "Reader-Wiki capability probe: before",
+            newText: "Reader-Wiki capability probe: after",
+          }],
+          message: "ready",
+        }),
+        status: readyStatus(),
+      };
     };
     await expect(probeGuardedRepoWriteCapability(provider(), undefined, requester)).resolves.toMatchObject({ ok: true });
-    await expect(probeGuardedRepoWriteCapability(provider(), undefined, async () => ({ content: "ready", status: readyStatus() }))).resolves.toMatchObject({ ok: false });
+    expect(call).toBe(2);
+    await expect(probeGuardedRepoWriteCapability(provider(), undefined, async () => ({
+      content: JSON.stringify({ version: VERSION, type: "complete", message: "ready" }),
+      status: readyStatus(),
+    }))).resolves.toMatchObject({ ok: false, message: expect.stringContaining("synthetic guarded read") });
+  });
+});
+
+describe("guarded edit protocol normalization", () => {
+  it("accepts minimal and full envelopes while discarding only empty inactive fields", () => {
+    expect(parseGuardedEditResponse(JSON.stringify({ version: VERSION, type: "read", paths: ["note.md"] }))).toEqual({ type: "read", paths: ["note.md"] });
+    expect(parseGuardedEditResponse(JSON.stringify({
+      version: VERSION,
+      type: "apply",
+      paths: [],
+      operations: [{ op: "replace", path: "note.md", content: null, oldText: "before", newText: "after" }],
+      message: "updated",
+    }))).toEqual({ type: "apply", operations: [{ op: "replace", path: "note.md", oldText: "before", newText: "after" }], message: "updated" });
+    expect(parseGuardedEditResponse(JSON.stringify({
+      version: VERSION,
+      type: "complete",
+      paths: null,
+      operations: "   ",
+      message: "done",
+    }))).toEqual({ type: "complete", message: "done" });
+  });
+
+  it("rejects missing, unknown, and non-empty conflicting fields with sanitized diagnostics", () => {
+    const responses = [
+      {
+        value: { version: VERSION, type: "apply", operations: [], secretField: "do-not-echo-value" },
+        details: { phase: "response", responseType: "apply", missingFields: ["message"], unknownFields: ["secretField"] },
+      },
+      {
+        value: { version: VERSION, type: "apply", paths: ["private-value.md"], operations: [], message: "no-op" },
+        details: { phase: "response", responseType: "apply", missingFields: [], unknownFields: ["paths"] },
+      },
+      {
+        value: { version: VERSION, type: "apply", operations: [{ op: "write", path: "note.md", content: "safe", oldText: "private-value", newText: null }], message: "write" },
+        details: { phase: "operation", operationType: "write", missingFields: [], unknownFields: ["oldText"] },
+      },
+    ];
+    for (const item of responses) {
+      let failure: HttpError | undefined;
+      try {
+        parseGuardedEditResponse(JSON.stringify(item.value));
+      } catch (error) {
+        failure = error as HttpError;
+      }
+      expect(failure).toMatchObject({ status: 502, details: item.details });
+      expect(failure?.message).not.toContain("do-not-echo-value");
+      expect(failure?.message).not.toContain("private-value");
+      expect(JSON.stringify(failure?.details)).not.toContain("private-value");
+    }
   });
 });
 

@@ -4,6 +4,7 @@ import { request as requestHttps } from "node:https";
 import { isIP } from "node:net";
 import { Readable } from "node:stream";
 import { HttpError } from "./errors.js";
+import { GUARDED_EDIT_RESPONSE_FORMAT } from "./guardedEditProtocol.js";
 import { buildAIChatRuntimePrompt } from "./aiPromptPolicy.js";
 import type { AIChatAttachment, AIChatContext, AIChatMessage, AIConnectionStatus, AIModelBehavior, AIProviderSettings } from "./types.js";
 
@@ -29,39 +30,6 @@ const DEFAULT_BASE_URLS: Record<string, string> = {
 };
 const PROVIDER_RESPONSE_MAX_BYTES = 1024 * 1024;
 const PROVIDER_STREAM_MAX_BYTES = 2 * 1024 * 1024;
-const GUARDED_JSON_RESPONSE_FORMAT = {
-  type: "json_schema",
-  json_schema: {
-    name: "reader_wiki_edit_protocol",
-    strict: false,
-    schema: {
-      type: "object",
-      properties: {
-        version: { type: "string", enum: ["reader-wiki.edit-protocol.v1"] },
-        type: { type: "string", enum: ["read", "apply", "complete"] },
-        paths: { type: "array", items: { type: "string" } },
-        operations: {
-          type: "array",
-          items: {
-            type: "object",
-            properties: {
-              op: { type: "string", enum: ["write", "replace", "delete"] },
-              path: { type: "string" },
-              content: { type: "string" },
-              oldText: { type: "string" },
-              newText: { type: "string" },
-            },
-            required: ["op", "path"],
-            additionalProperties: false,
-          },
-        },
-        message: { type: "string" },
-      },
-      required: ["version", "type"],
-      additionalProperties: false,
-    },
-  },
-} as const;
 const PROVIDER_MAX_REDIRECTS = 3;
 const PROVIDER_CONNECTION_TIMEOUT_MS = 15_000;
 const PROVIDER_CHAT_TIMEOUT_MS = 60_000;
@@ -203,7 +171,7 @@ async function requestOpenAICompatibleText(
     },
     body: JSON.stringify({
       model: provider.model,
-      ...(systemPrompt ? { temperature: 0, response_format: GUARDED_JSON_RESPONSE_FORMAT } : {}),
+      ...(systemPrompt ? { temperature: 0, response_format: GUARDED_EDIT_RESPONSE_FORMAT } : {}),
       messages: buildOpenAIMessages(messages, context, attachments, modelBehavior, systemPrompt),
     }),
     signal,
