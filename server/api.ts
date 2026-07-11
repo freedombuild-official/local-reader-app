@@ -31,7 +31,6 @@ export function createApiRouter(registryOrConfigPath: RepositoryRegistry | strin
   const activeAIRepos = new Set<string>();
   let activeAIRequests = 0;
   let configSaveActive = false;
-  const experimentalAIWrite = process.env.READER_WIKI_EXPERIMENTAL_AI_WRITE === "1";
 
   function storeReadinessAttestation(entry: AIEntryKind, repoId: string, revision: string, provider: AIProviderSettings | undefined): void {
     readinessAttestations.set(readinessAttestationKey(entry, repoId, revision, provider), Date.now() + READINESS_ATTESTATION_TTL_MS);
@@ -238,7 +237,6 @@ export function createApiRouter(registryOrConfigPath: RepositoryRegistry | strin
           });
           return { ...direct, run: contextOnlyRunSummary(target) };
         }
-        if (!experimentalAIWrite) throw new HttpError(403, "CLI repository writes are disabled by the public execution policy.");
         return requestRepoWriteAIChatCompletion({ target, messages: body.messages, context, repo, attachments: body.attachments, modelBehavior: body.modelBehavior, runner: options.aiCommandRunner, signal: abortScope.signal });
         })();
         return { context, result };
@@ -283,7 +281,6 @@ export function createApiRouter(registryOrConfigPath: RepositoryRegistry | strin
           });
           return { ...direct, run: contextOnlyRunSummary(target) };
         }
-        if (!experimentalAIWrite) throw new HttpError(403, "CLI repository writes are disabled by the public execution policy.");
         const cli = await requestRepoWriteAIChatCompletion({ target, messages: body.messages, context, repo, attachments: body.attachments, modelBehavior: body.modelBehavior, runner: options.aiCommandRunner, signal: abortScope.signal });
         if (canWriteResponse(response)) response.write(`${JSON.stringify({ type: "delta", content: cli.content })}\n`);
         return cli;

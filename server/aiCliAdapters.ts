@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { chmod, mkdir, mkdtemp, open, readFile, readdir, realpath, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -144,6 +144,7 @@ const WORKSPACE_SNAPSHOT_MAX_MS = 5_000;
 const WORKSPACE_SNAPSHOT_SKIPPED_DIRECTORIES = new Set([".git", "node_modules", "dist", "dist-server", "coverage"]);
 const DUPLICATE_BLOCK_PREVIEW_CHARS = 72;
 const WORK_ORDER_PREVIEW_ITEMS = 8;
+const CODEX_CURRENT_REPO_PERMISSION_FILESYSTEM = '{":minimal"="read",":workspace_roots"={"."="write",".git"="read",".git/**"="read",".codex"="read",".codex/**"="read",".agents"="read",".agents/**"="read"}}';
 
 export async function requestRepoWriteAIChatCompletion(request: RepoWriteChatRequest): Promise<{ content: string; status: AIConnectionStatus; run: AIChatRunSummary }> {
   const runner = request.runner || runAICommand;
@@ -507,6 +508,29 @@ export function safeCliEnv(entry: AIEntryKind, extra: NodeJS.ProcessEnv = {}, pl
   return { ...env, ...extra };
 }
 
+export function codexCurrentRepoPermissionArgs(profileName = `reader_wiki_${randomUUID().replaceAll("-", "")}`): string[] {
+  if (!/^reader_wiki_[a-z0-9_]+$/.test(profileName)) throw new HttpError(500, "Codex Current repo permission profile name is invalid.");
+  return [
+    "--strict-config",
+    "--ignore-user-config",
+    "--ignore-rules",
+    "--disable",
+    "apps",
+    "--disable",
+    "hooks",
+    "--disable",
+    "multi_agent",
+    "-c",
+    "approval_policy=\"never\"",
+    "-c",
+    `default_permissions="${profileName}"`,
+    "-c",
+    `permissions.${profileName}.filesystem=${CODEX_CURRENT_REPO_PERMISSION_FILESYSTEM}`,
+    "-c",
+    `permissions.${profileName}.network.enabled=false`,
+  ];
+}
+
 export async function collectGitChangedPaths(cwd: string): Promise<GitChangeSnapshot> {
   const result = await runLocalCommand("git", ["-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false", "-C", cwd, "status", "--porcelain=v1", "-z", "--untracked-files=all"], cwd).catch(() => null);
   if (!result) return { available: false, paths: [] };
@@ -556,10 +580,7 @@ async function runCodexChat(runner: AICommandRunner, target: AIChatExecutionTarg
     const result = await runner("codex", [
       "exec",
       ...substrate.args,
-      "--sandbox",
-      "workspace-write",
-      "-c",
-      "approval_policy=\"never\"",
+      ...codexCurrentRepoPermissionArgs(),
       "--ephemeral",
       "--skip-git-repo-check",
       "--json",

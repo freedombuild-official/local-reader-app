@@ -68,7 +68,7 @@ export const defaultAISettings: AISettingsState = {
       authState: "unknown",
       readOnlyWrapperState: "unknown",
       executionMode: "unknown",
-      readinessMessage: "Run repo-scoped write readiness check before using this entry.",
+      readinessMessage: "Run Current repo write readiness check before using this entry.",
     },
     claudeCli: {
       entry: "claudeCli",
@@ -77,7 +77,7 @@ export const defaultAISettings: AISettingsState = {
       authState: "unknown",
       readOnlyWrapperState: "unknown",
       executionMode: "unknown",
-      readinessMessage: "Run repo-scoped write readiness check before using this entry.",
+      readinessMessage: "Run Current repo write readiness check before using this entry.",
     },
   },
   statuses: {
@@ -248,13 +248,13 @@ export function derivedAIStatus(entry: AIEntrySettings | null): AIConnectionStat
   }
   if (isCliSettings(entry)) {
     if (aiReady(entry)) {
-      return aiStatus("ready", "success", "success", entry.readinessMessage || "CLI repo-scoped write wrapper is ready.", "Use this entry for repo-scoped AI Chat or check again.", entry.lastCheckedAt || "");
+      return aiStatus("ready", "success", "success", entry.readinessMessage || "CLI Current repo write wrapper is ready.", "Use this entry for Current repo AI Chat or check again.", entry.lastCheckedAt || "");
     }
     if (entry.authState === "configured") {
       return aiStatus("configured", "wrapper_not_ready", "warning", entry.readinessMessage || "CLI auth is configured, but the repo-scoped write wrapper is not confirmed.", "Run readiness check for this CLI entry.", entry.lastCheckedAt || "");
     }
     if (entry.authState === "notConfigured") {
-      return aiStatus("notConfigured", "cli_auth_missing", "warning", entry.readinessMessage || "CLI auth is not configured.", "Sign in with the CLI outside Reader-Wiki, then check readiness again.", entry.lastCheckedAt || "");
+      return aiStatus("notConfigured", "cli_auth_missing", "warning", entry.readinessMessage || "CLI auth is not configured.", "Complete persistent sign-in with the CLI outside Reader-Wiki, then check readiness again.", entry.lastCheckedAt || "");
     }
     return aiStatus("notConfigured", "needs_test", "info", entry.readinessMessage || "CLI readiness has not been checked.", "Run readiness check for this CLI entry.", entry.lastCheckedAt || "");
   }

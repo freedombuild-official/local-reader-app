@@ -670,7 +670,7 @@ function AIChatSettingsPanel({
               entry="codexCli"
               title={entryLabel("codexCli")}
               subtitle="Existing CLI readiness"
-              note="Checks installed CLI sign-in and the repo-scoped write wrapper. No login, browser launch, or Git remote operation is started here."
+              note="Checks installed CLI sign-in and the Current repo write wrapper. No login, browser launch, or Git remote operation is started here."
               configured={configured}
               lastCheckedAt={settings.lastCheckedAtByEntry.codexCli}
               status={effectiveAIStatus(settings, "codexCli")}
@@ -692,7 +692,7 @@ function AIChatSettingsPanel({
               entry="claudeCli"
               title={entryLabel("claudeCli")}
               subtitle="Existing CLI readiness"
-              note="Checks installed CLI sign-in and the tool-restricted repo write wrapper. No login, browser auth, or credential handling is started here."
+              note="Checks installed CLI sign-in and the tool-restricted Current repo write wrapper. No login, browser auth, or credential handling is started here."
               configured={configured}
               lastCheckedAt={settings.lastCheckedAtByEntry.claudeCli}
               status={effectiveAIStatus(settings, "claudeCli")}
@@ -765,15 +765,15 @@ function AIChatSettingsPanel({
           />
         </SettingsCard>
       ) : null}
-      <SettingsCard title="Access policy" eyebrow="AI Chat" status="Context-only by default">
+      <SettingsCard title="Access policy" eyebrow="AI Chat" status="Context-only or Current repo write">
         <div className="policy-grid">
           <div className="policy-item ready">
             <strong>Read selected context</strong>
             <small>AI Chat receives selected files, directories, attachments, and repository rule context with repository-relative paths.</small>
           </div>
           <div className="policy-item">
-            <strong>Public write policy</strong>
-            <small>AI API and Local AI cannot edit repositories. CLI repository writes remain disabled unless an operator explicitly enables the experimental development path.</small>
+            <strong>CLI Current repo write</strong>
+            <small>Codex CLI and Claude Code CLI may edit only the Current repo selected for this AI Chat run. Review changes and keep backups; CLI use and edit results are your responsibility.</small>
           </div>
           <div className="policy-item">
             <strong>Guarded execution</strong>
@@ -1077,8 +1077,8 @@ function CliReadinessDetails({ entry }: { entry: CliAIEntrySettings }) {
       <ReadinessRow label="Binary" status={entry.binaryName ? "ready" : "warning"} value={entry.binaryName || "Unknown"} />
       <ReadinessRow label="Version" status={entry.version ? "ready" : "warning"} value={entry.version || "Not checked"} />
       <ReadinessRow label="Existing sign-in" status={entry.authState === "configured" ? "ready" : "warning"} value={cliAuthLabel(entry)} />
-      <ReadinessRow label="Repo-scoped write wrapper" status={entry.readOnlyWrapperState === "ready" ? "ready" : "warning"} value={cliWrapperLabel(entry)} />
-      <ReadinessRow label="Execution mode" status={entry.executionMode === "repoWrite" ? "ready" : "warning"} value={entry.executionMode === "repoWrite" ? "Repo write" : "Not confirmed"} />
+      <ReadinessRow label="Current repo write wrapper" status={entry.readOnlyWrapperState === "ready" ? "ready" : "warning"} value={cliWrapperLabel(entry)} />
+      <ReadinessRow label="Execution mode" status={entry.executionMode === "repoWrite" ? "ready" : "warning"} value={entry.executionMode === "repoWrite" ? "Current repo write" : "Not confirmed"} />
     </>
   );
 }
@@ -1195,8 +1195,8 @@ function entryIcon(entry: AIEntryKind): string {
 }
 
 function entryDescription(entry: AIEntryKind): string {
-  if (entry === "codexCli") return "Installed CLI; repository writes are disabled by the public execution policy.";
-  if (entry === "claudeCli") return "Installed CLI; repository writes are disabled by the public execution policy.";
+  if (entry === "codexCli") return "Installed CLI with guarded Current repo write execution.";
+  if (entry === "claudeCli") return "Installed CLI with tool-restricted Current repo write execution.";
   if (entry === "aiApi") return "Remote HTTPS provider with selected context only.";
   return "Loopback Ollama or LM Studio runtime with selected context only.";
 }
@@ -1286,7 +1286,7 @@ function cliAuthLabel(entry: CliAIEntrySettings): string {
 }
 
 function cliWrapperLabel(entry: CliAIEntrySettings): string {
-  if (entry.readOnlyWrapperState === "ready") return "Repo write ready";
+  if (entry.readOnlyWrapperState === "ready") return "Current repo write ready";
   if (entry.readOnlyWrapperState === "notReady") return "Not ready";
   return "Unknown";
 }
@@ -1353,7 +1353,7 @@ function cliStatusLabel(status: AIConnectionStatus): string {
 
 function cliStatusMessage(status: AIConnectionStatus): string {
   if (status.state === "ready") return "Ready to use for AI Chat.";
-  if (status.code === "cli_auth_missing") return "Sign in with the CLI outside Reader-Wiki, then check readiness again.";
+  if (status.code === "cli_auth_missing") return "Complete persistent sign-in with the CLI outside Reader-Wiki, then check readiness again.";
   if (status.state === "failed" || status.code === "wrapper_not_ready") return status.nextAction || status.message;
   return "Check the installed CLI and existing sign-in state.";
 }

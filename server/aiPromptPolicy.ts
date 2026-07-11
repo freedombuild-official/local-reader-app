@@ -14,12 +14,14 @@ export type AIChatRuntimePrompt = {
 };
 
 const DEFAULT_PROMPT_PATH = path.join(process.cwd(), "prompts", "ai-chat-system.md");
+const DEFAULT_PROMPT_VERSION = "2.2.0";
 const MAX_ATTACHMENT_CONTEXT_CHARS = 12000;
 
 export function loadAIChatSystemPrompt(): AIChatSystemPrompt {
-  const promptPath = process.env.READER_WIKI_AI_CHAT_SYSTEM_PROMPT || DEFAULT_PROMPT_PATH;
+  const customPromptPath = process.env.READER_WIKI_AI_CHAT_SYSTEM_PROMPT;
+  const promptPath = customPromptPath || DEFAULT_PROMPT_PATH;
   const raw = readFileSync(promptPath, "utf8");
-  return parseMarkdownPrompt(raw, promptPath);
+  return parseMarkdownPrompt(raw, promptPath, customPromptPath ? undefined : DEFAULT_PROMPT_VERSION);
 }
 
 export function buildAIChatRuntimePrompt(
@@ -44,9 +46,13 @@ export function buildConversationTranscript(messages: AIChatMessage[]): string {
   return messages.map((message) => `${message.role === "assistant" ? "Assistant" : "User"}: ${message.content}`).join("\n\n");
 }
 
-function parseMarkdownPrompt(raw: string, promptPath: string): AIChatSystemPrompt {
+function parseMarkdownPrompt(raw: string, promptPath: string, fallbackVersion?: string): AIChatSystemPrompt {
   const match = raw.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
-  if (!match) throw new Error(`AI Chat system prompt is missing frontmatter: ${promptPath}`);
+  if (!match) {
+    const body = raw.trim();
+    if (fallbackVersion && body) return { version: fallbackVersion, body };
+    throw new Error(`AI Chat system prompt is missing frontmatter: ${promptPath}`);
+  }
   const frontmatter = match[1];
   const body = match[2].trim();
   const versionMatch = frontmatter.match(/^version:\s*['"]?([^'"\n]+)['"]?\s*$/m);

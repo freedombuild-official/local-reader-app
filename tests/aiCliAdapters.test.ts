@@ -4,9 +4,32 @@ import { access, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/p
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { codexProviderSubstrate, resolveAICommandLaunch, runAICommand, safeCliEnv } from "../server/aiCliAdapters.js";
+import { codexCurrentRepoPermissionArgs, codexProviderSubstrate, resolveAICommandLaunch, runAICommand, safeCliEnv } from "../server/aiCliAdapters.js";
 
 describe("AI CLI process boundary", () => {
+  it("builds a Current repo-only Codex permission profile without the legacy workspace sandbox", () => {
+    const args = codexCurrentRepoPermissionArgs("reader_wiki_test");
+    expect(args).toEqual([
+      "--strict-config",
+      "--ignore-user-config",
+      "--ignore-rules",
+      "--disable",
+      "apps",
+      "--disable",
+      "hooks",
+      "--disable",
+      "multi_agent",
+      "-c",
+      "approval_policy=\"never\"",
+      "-c",
+      "default_permissions=\"reader_wiki_test\"",
+      "-c",
+      expect.stringContaining('permissions.reader_wiki_test.filesystem={":minimal"="read",":workspace_roots"={"."="write"'),
+      "-c",
+      "permissions.reader_wiki_test.network.enabled=false",
+    ]);
+    expect(args).not.toContain("--sandbox");
+  });
   it("handles a child that closes stdin early without an unhandled EPIPE", async () => {
     const result = await runAICommand(process.execPath, ["-e", "process.exit(0)"], {
       cwd: process.cwd(),

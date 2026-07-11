@@ -1204,6 +1204,8 @@ describe("App", () => {
     const aiEntryHeading = screen.getByRole("heading", { name: "AI Entry" });
     const accessHeading = screen.getByRole("heading", { name: "Access policy" });
     expect(aiEntryHeading.compareDocumentPosition(accessHeading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByText("CLI Current repo write")).toBeTruthy();
+    expect(screen.getByText("Context-only or Current repo write")).toBeTruthy();
     expect(screen.queryByRole("heading", { name: "Connection / Credentials" })).toBeNull();
     expect(screen.queryByRole("heading", { name: "Readiness diagnostics" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Test connection" })).toBeNull();
@@ -1685,7 +1687,7 @@ describe("App", () => {
     expect(within(codexDetailsBefore).getByLabelText("Readiness checklist").textContent).toContain("Binary");
     expect(within(codexDetailsBefore).getByLabelText("Readiness checklist").textContent).toContain("Version");
     expect(within(codexDetailsBefore).getByLabelText("Readiness checklist").textContent).toContain("Existing sign-in");
-    expect(within(codexDetailsBefore).getByLabelText("Readiness checklist").textContent).toContain("Repo-scoped write wrapper");
+    expect(within(codexDetailsBefore).getByLabelText("Readiness checklist").textContent).toContain("Current repo write wrapper");
     expect(within(codexDetailsBefore).getByLabelText("Readiness checklist").textContent).toContain("Execution mode");
     expect(within(codexDetailsBefore).getByLabelText("Readiness checklist").textContent).toContain("Last check");
     await waitFor(() => expect(within(codexAuth).getByRole("button", { name: "Check again" })).toBeTruthy());

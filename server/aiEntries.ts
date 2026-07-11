@@ -1,7 +1,6 @@
 import { HttpError } from "./errors.js";
 import {
-  codexLocalSubstrate,
-  codexProviderSubstrate,
+  codexCurrentRepoPermissionArgs,
   ensureSafeCwd,
   resolveAIWorkspace,
   type AICommandRunner,
@@ -22,9 +21,6 @@ type ProbeOptions = {
 };
 
 export async function probeAIEntryReadiness(entry: AIEntryKind, options: ProbeOptions = {}): Promise<AIEntryReadiness> {
-  if ((entry === "codexCli" || entry === "claudeCli") && process.env.READER_WIKI_EXPERIMENTAL_AI_WRITE !== "1") {
-    return experimentalWriteDisabled(entry);
-  }
   if (entry === "codexCli") return probeCxReadiness(options.runner || runAICommand, options.repo, options.signal);
   if (entry === "claudeCli") return probeClaudeReadiness(options.runner || runAICommand, options.repo, options.signal);
   if (entry === "aiApi") return probeCodexBackedProviderReadiness(options.provider, options.signal);
@@ -41,7 +37,7 @@ async function probeCxReadiness(runner: AICommandRunner, repo?: RepositoryConfig
   const probeCwd = await ensureSafeCwd();
   const version = await runProbe(runner, "codex", ["--version"], probeCwd, "codexCli", signal);
   const login = await runProbe(runner, "codex", ["login", "status"], probeCwd, "codexCli", signal);
-  const help = await runProbe(runner, "codex", ["exec", "-c", "approval_policy=\"never\"", "--help"], probeCwd, "codexCli", signal);
+  const help = await runProbe(runner, "codex", ["exec", ...codexCurrentRepoPermissionArgs(), "--help"], probeCwd, "codexCli", signal);
   const helpText = probeText(help);
   const binaryReady = version.ok;
   const authReady = login.ok && /logged in/i.test(probeText(login));
@@ -135,34 +131,18 @@ async function runProbe(runner: AICommandRunner, binary: string, args: string[],
   }
 }
 
-async function probeSubstrate(prepare: () => Promise<{ env: NodeJS.ProcessEnv }>): Promise<{ ok: boolean; message: string }> {
-  try {
-    const prepared = await prepare();
-    if (!prepared.env.CODEX_HOME) return { ok: false, message: "Isolated CODEX_HOME was not prepared." };
-    return { ok: true, message: "Isolated Codex substrate is prepared without using the default Codex auth store." };
-  } catch (error) {
-    return { ok: false, message: sanitizeCliText(error instanceof Error ? error.message : String(error)) };
-  }
-}
-
 function probeText(result: { stdout: string; stderr: string }): string {
   return sanitizeCliText([result.stdout, result.stderr].filter(Boolean).join("\n"));
 }
 
 function cxHelpSupportsRepoWrite(help: string): boolean {
-  return help.includes("--sandbox") && help.includes("workspace-write") && help.includes("--ephemeral") && help.includes("--json");
-}
-
-function cxExecutionSucceeded(stdout: string): boolean {
-  return stdout.split(/\r?\n/).some((line) => {
-    if (!line.trim()) return false;
-    try {
-      const event = JSON.parse(line) as { type?: string; item?: { type?: string; text?: string } };
-      return event.type === "item.completed" && event.item?.type === "agent_message" && typeof event.item.text === "string" && event.item.text.trim().length > 0;
-    } catch {
-      return false;
-    }
-  });
+  return help.includes("--strict-config")
+    && help.includes("--ignore-user-config")
+    && help.includes("--ignore-rules")
+    && help.includes("--disable")
+    && help.includes("--config")
+    && help.includes("--ephemeral")
+    && help.includes("--json");
 }
 
 function claudeHelpSupportsRepoWrite(help: string): boolean {
@@ -175,15 +155,6 @@ function claudeAuthConfigured(stdout: string): boolean {
     return data.loggedIn === true;
   } catch {
     return /logged.?in/i.test(stdout);
-  }
-}
-
-function claudeExecutionSucceeded(stdout: string): boolean {
-  try {
-    const data = JSON.parse(stdout) as { is_error?: boolean; result?: string };
-    return data.is_error !== true && typeof data.result === "string" && data.result.trim().length > 0;
-  } catch {
-    return false;
   }
 }
 
@@ -215,34 +186,6 @@ function providerReadinessResult(entry: "aiApi" | "localAi", provider: AIProvide
   };
 }
 
-function experimentalWriteDisabled(entry: AICliEntryKind): AIEntryReadiness {
-  const message = "CLI repository writes are disabled by default. Set READER_WIKI_EXPERIMENTAL_AI_WRITE=1 before startup only for isolated development testing.";
-  const checkedAt = new Date().toISOString();
-  return {
-    entry,
-    ready: false,
-    status: {
-      state: "failed",
-      code: "wrapper_not_ready",
-      severity: "warning",
-      message,
-      nextAction: "Use AI API or Local AI context-only mode for the public configuration.",
-      checkedAt,
-    },
-    checks: [check("public-policy", "Public execution policy", false, message)],
-    settings: {
-      entry,
-      binaryName: entry === "codexCli" ? "codex" : "claude",
-      version: "",
-      authState: "unknown",
-      readOnlyWrapperState: "notReady",
-      executionMode: "unknown",
-      lastCheckedAt: checkedAt,
-      readinessMessage: message,
-    },
-  };
-}
-
 function check(id: string, label: string, ok: boolean, message: string): Check {
   return { id, label, status: ok ? "ready" : "error", message: sanitizeCliText(message) };
 }
@@ -269,7 +212,7 @@ function readinessStatus(ready: boolean, checks: Check[], message: string): AICo
           ? "substrate_missing"
           : "wrapper_not_ready";
   const nextAction = failed?.id === "auth"
-    ? "Sign in with the CLI outside Reader-Wiki, then check readiness again."
+    ? "Complete persistent sign-in with the CLI outside Reader-Wiki, then check readiness again. Credential-like environment variables are not forwarded."
     : failed?.id === "workspace"
       ? "Select a registered repository root before sending AI Chat."
       : "Check AI Entry settings and run readiness again.";

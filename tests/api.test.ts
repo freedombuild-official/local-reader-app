@@ -18,6 +18,30 @@ import { createHttpDeliveryService } from "../server/httpDelivery.js";
 import { createRepositoryRegistry } from "../server/repositoryRegistry.js";
 
 const execFileAsync = promisify(execFile);
+const CODEX_REPO_WRITE_HELP = "--strict-config --ignore-user-config --ignore-rules --disable --config --ephemeral --skip-git-repo-check --json";
+
+function expectCodexCurrentRepoPermissionBoundary(args: string[]): void {
+  expect(args).toEqual(expect.arrayContaining([
+    "--strict-config",
+    "--ignore-user-config",
+    "--ignore-rules",
+    "--disable",
+    "apps",
+    "hooks",
+    "multi_agent",
+    "approval_policy=\"never\"",
+  ]));
+  expect(args).not.toContain("--sandbox");
+  const defaultPermission = args.find((arg) => /^default_permissions="reader_wiki_[a-f0-9]+"$/.test(arg));
+  expect(defaultPermission).toBeTruthy();
+  const profileName = defaultPermission?.slice('default_permissions="'.length, -1) || "";
+  const filesystem = args.find((arg) => arg.startsWith(`permissions.${profileName}.filesystem=`));
+  expect(filesystem).toContain('":minimal"="read"');
+  expect(filesystem).toContain('":workspace_roots"');
+  expect(filesystem).toContain('"."="write"');
+  expect(filesystem).toContain('".git"="read"');
+  expect(args).toContain(`permissions.${profileName}.network.enabled=false`);
+}
 
 async function listen(app: express.Express): Promise<{ url: string; close: () => Promise<void> }> {
   const server = await new Promise<Server>((resolve, reject) => {
@@ -581,46 +605,59 @@ describe("api", () => {
     }
   });
 
-  it("keeps CLI repository writes disabled in the public execution policy", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "reader-wiki-local-ai-api-"));
-    await writeFile(path.join(root, "README.md"), "# Public CLI policy\n");
+  it("enables guarded CLI repository writes during standard startup", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "reader-wiki-standard-cli-api-"));
+    await writeFile(path.join(root, "README.md"), "# Standard CLI policy\n");
     const configPath = path.join(root, "repositories.yaml");
     await writeFile(configPath, `repositories:\n  - id: docs\n    label: Docs\n    root: ${root}\n    defaultPath: README.md\n`);
     await initGitRepo(root);
-    const calls: string[] = [];
-    const runner: AICommandRunner = async (binary) => {
-      calls.push(binary);
-      throw new Error("The public policy must not invoke a CLI adapter.");
+    const calls: Array<{ binary: string; args: string[]; cwd: string; input: string }> = [];
+    const runner: AICommandRunner = async (binary, args, options) => {
+      calls.push({ binary, args, cwd: options.cwd, input: options.input || "" });
+      if (binary !== "codex") throw new Error("Unexpected command");
+      if (args.includes("--version")) return { stdout: "codex-cli 0.144.1\n", stderr: "" };
+      if (args.includes("login")) return { stdout: "Logged in using ChatGPT\n", stderr: "" };
+      if (args.includes("--help")) return { stdout: `${CODEX_REPO_WRITE_HELP}\n`, stderr: "" };
+      if (options.input) return { stdout: '{"type":"item.completed","item":{"type":"agent_message","text":"Inspected the Current repo without changing files."}}\n', stderr: "" };
+      throw new Error("Unexpected command");
     };
-    const previous = process.env.READER_WIKI_EXPERIMENTAL_AI_WRITE;
-    delete process.env.READER_WIKI_EXPERIMENTAL_AI_WRITE;
     const app = express();
     app.use("/api", createApiRouter(configPath, undefined, { aiCommandRunner: runner }));
     const server = await listen(app);
     try {
       const readinessResponse = await postJson(`${server.url}/api/ai/entry-readiness`, { entry: "codexCli", repoId: "docs" });
       expect(readinessResponse.status).toBe(200);
-      const readiness = await readinessResponse.json() as { ready?: boolean; status?: { code?: string }; checks?: Array<{ id?: string }> };
-      expect(readiness).toMatchObject({ ready: false, status: { code: "wrapper_not_ready" } });
-      expect(readiness.checks).toEqual(expect.arrayContaining([expect.objectContaining({ id: "public-policy" })]));
+      const readiness = await readinessResponse.json() as { ready?: boolean; status?: { state?: string; code?: string }; settings?: { authState?: string; readOnlyWrapperState?: string; executionMode?: string } };
+      expect(readiness).toMatchObject({
+        ready: true,
+        status: { state: "ready", code: "success" },
+        settings: { authState: "configured", readOnlyWrapperState: "ready", executionMode: "repoWrite" },
+      });
+      expect(calls).toHaveLength(3);
+      expect(calls.every((call) => call.input === "")).toBe(true);
+      expectCodexCurrentRepoPermissionBoundary(calls.find((call) => call.args.includes("--help"))?.args || []);
 
       const chatResponse = await postJson(`${server.url}/api/ai/chat`, {
-        target: { kind: "codexCli", entry: "codexCli", status: { state: "ready", code: "success" } },
-        messages: [{ role: "user", content: "Edit the repository." }],
+        target: { kind: "codexCli", entry: "codexCli", status: readiness.status },
+        messages: [{ role: "user", content: "Inspect the Current repo." }],
         context: { repoId: "docs", path: "README.md", includeContent: true },
       });
-      expect(chatResponse.status).toBe(409);
-      await expect(chatResponse.json()).resolves.toMatchObject({ error: expect.stringContaining("attestation") });
-      expect(calls).toEqual([]);
+      expect(chatResponse.status).toBe(200);
+      await expect(chatResponse.json()).resolves.toMatchObject({
+        message: { content: expect.stringContaining("Current repo") },
+        run: { accessMode: "repoWrite", entry: "codexCli", substrate: "codexCli", changedPaths: [] },
+      });
+      const chatCall = calls.find((call) => Boolean(call.input));
+      expect(chatCall?.cwd).toBe(await realpath(root));
+      expectCodexCurrentRepoPermissionBoundary(chatCall?.args || []);
+      expect(chatCall?.args).toEqual(expect.arrayContaining(["--ephemeral", "--skip-git-repo-check", "--json"]));
+      expect(await readFile(path.join(root, "README.md"), "utf8")).toBe("# Standard CLI policy\n");
     } finally {
       await server.close();
-      if (previous === undefined) delete process.env.READER_WIKI_EXPERIMENTAL_AI_WRITE;
-      else process.env.READER_WIKI_EXPERIMENTAL_AI_WRITE = previous;
     }
   });
 
   it("tracks selected file edits without requiring a Git working tree", async () => {
-    const restoreExperimentalAIWrite = enableExperimentalAIWrite();
     const root = await mkdtemp(path.join(tmpdir(), "reader-wiki-non-git-ai-"));
     await writeFile(path.join(root, "README.md"), "# Non Git\n\nVisible content\n");
     const configPath = path.join(root, "repositories.yaml");
@@ -631,7 +668,7 @@ describe("api", () => {
       if (binary !== "codex") throw new Error("Unexpected command");
       if (args.includes("--version")) return { stdout: "codex-cli 0.143.0\n", stderr: "" };
       if (args.includes("login")) return { stdout: "Logged in using ChatGPT\n", stderr: "" };
-      if (args.includes("--help")) return { stdout: "--sandbox workspace-write --ephemeral --skip-git-repo-check --json\n", stderr: "" };
+      if (args.includes("--help")) return { stdout: `${CODEX_REPO_WRITE_HELP}\n`, stderr: "" };
       if (options.input?.includes("Reader-Wiki CLI readiness")) {
         return { stdout: '{"type":"item.completed","item":{"type":"agent_message","text":"ready"}}\n', stderr: "" };
       }
@@ -660,15 +697,14 @@ describe("api", () => {
       expect(chat.run?.changedPaths).toEqual([expect.objectContaining({ path: "README.md", status: "changed" })]);
       expect(chat.run?.warnings).toEqual([]);
       const chatCall = calls.find((call) => call.input.includes("Visible content") && !call.input.includes("Reader-Wiki CLI readiness"));
-      expect(chatCall?.args).toEqual(expect.arrayContaining(["--sandbox", "workspace-write", "--skip-git-repo-check"]));
+      expectCodexCurrentRepoPermissionBoundary(chatCall?.args || []);
+      expect(chatCall?.args).toContain("--skip-git-repo-check");
     } finally {
       await server.close();
-      restoreExperimentalAIWrite();
     }
   });
 
   it("warns about duplicate selected-file edits without rewriting user content", async () => {
-    const restoreExperimentalAIWrite = enableExperimentalAIWrite();
     const root = await mkdtemp(path.join(tmpdir(), "reader-wiki-ignored-duplicate-ai-"));
     const selectedPath = "reader-wiki-ai-write-test.md";
     await writeFile(path.join(root, ".gitignore"), `${selectedPath}\n`);
@@ -681,7 +717,7 @@ describe("api", () => {
       if (binary !== "codex") throw new Error("Unexpected command");
       if (args.includes("--version")) return { stdout: "codex-cli 0.143.0\n", stderr: "" };
       if (args.includes("login")) return { stdout: "Logged in using ChatGPT\n", stderr: "" };
-      if (args.includes("--help")) return { stdout: "--sandbox workspace-write --ephemeral --json --oss --local-provider --model\n", stderr: "" };
+      if (args.includes("--help")) return { stdout: `${CODEX_REPO_WRITE_HELP} --oss --local-provider --model\n`, stderr: "" };
       if (options.input) {
         await writeFile(path.join(options.cwd, selectedPath), [
           "# Write Test",
@@ -732,12 +768,10 @@ describe("api", () => {
       expect((writtenContent.match(/## Write Result 3/g) || [])).toHaveLength(3);
     } finally {
       await server.close();
-      restoreExperimentalAIWrite();
     }
   });
 
   it("does not repair duplicate blocks that already existed before the current run", async () => {
-    const restoreExperimentalAIWrite = enableExperimentalAIWrite();
     const root = await mkdtemp(path.join(tmpdir(), "reader-wiki-existing-duplicate-ai-"));
     const selectedPath = "existing-duplicate.md";
     await writeFile(path.join(root, selectedPath), [
@@ -758,7 +792,7 @@ describe("api", () => {
       if (binary !== "codex") throw new Error("Unexpected command");
       if (args.includes("--version")) return { stdout: "codex-cli 0.143.0\n", stderr: "" };
       if (args.includes("login")) return { stdout: "Logged in using ChatGPT\n", stderr: "" };
-      if (args.includes("--help")) return { stdout: "--sandbox workspace-write --ephemeral --skip-git-repo-check --json\n", stderr: "" };
+      if (args.includes("--help")) return { stdout: `${CODEX_REPO_WRITE_HELP}\n`, stderr: "" };
       if (options.input?.includes("Reader-Wiki CLI readiness")) return { stdout: '{"type":"item.completed","item":{"type":"agent_message","text":"ready"}}\n', stderr: "" };
       if (options.input) {
         await writeFile(path.join(options.cwd, selectedPath), [
@@ -800,12 +834,10 @@ describe("api", () => {
       expect((content.match(/## Keep Me/g) || [])).toHaveLength(3);
     } finally {
       await server.close();
-      restoreExperimentalAIWrite();
     }
   });
 
   it("removes leaked CLI tool-call markup before returning the final answer", async () => {
-    const restoreExperimentalAIWrite = enableExperimentalAIWrite();
     const root = await mkdtemp(path.join(tmpdir(), "reader-wiki-tool-markup-ai-"));
     await writeFile(path.join(root, "README.md"), "# Tool Markup\n\nVisible content\n");
     const configPath = path.join(root, "repositories.yaml");
@@ -814,7 +846,7 @@ describe("api", () => {
       if (binary !== "codex") throw new Error("Unexpected command");
       if (args.includes("--version")) return { stdout: "codex-cli 0.143.0\n", stderr: "" };
       if (args.includes("login")) return { stdout: "Logged in using ChatGPT\n", stderr: "" };
-      if (args.includes("--help")) return { stdout: "--sandbox workspace-write --ephemeral --json --oss --local-provider --model\n", stderr: "" };
+      if (args.includes("--help")) return { stdout: `${CODEX_REPO_WRITE_HELP} --oss --local-provider --model\n`, stderr: "" };
       if (options.input) {
         await writeFile(path.join(options.cwd, "README.md"), "# Tool Markup\n\nVisible content\n\nAI result.\n");
         return { stdout: '{"type":"item.completed","item":{"type":"agent_message","text":"Need confirm file content.<|channel|>functions.exec_command<|message|>{\\"cmd\\":\\"sed -n 1,200p README.md\\"}"}}\n', stderr: "" };
@@ -839,7 +871,6 @@ describe("api", () => {
       expect(chat.run?.warnings?.some((warning) => warning.includes("tool-call markup"))).toBe(true);
     } finally {
       await server.close();
-      restoreExperimentalAIWrite();
     }
   });
 
@@ -916,7 +947,6 @@ describe("api", () => {
   });
 
   it("checks CLI readiness and answers with guarded repo-scoped write context through fixed adapters", async () => {
-    const restoreExperimentalAIWrite = enableExperimentalAIWrite();
     const root = await mkdtemp(path.join(tmpdir(), "reader-wiki-cli-api-"));
     await mkdir(path.join(root, "private"));
     await writeFile(path.join(root, "README.md"), "# CLI Context\n\nVisible content\n");
@@ -930,7 +960,7 @@ describe("api", () => {
       if (binary === "codex") {
         if (args.includes("--version")) return { stdout: "codex-cli 0.142.5\n", stderr: "" };
         if (args.includes("login")) return { stdout: "Logged in using ChatGPT\n", stderr: "" };
-        if (args.includes("--help")) return { stdout: "--sandbox workspace-write read-only --ephemeral --skip-git-repo-check --json --cd\n", stderr: "" };
+        if (args.includes("--help")) return { stdout: `${CODEX_REPO_WRITE_HELP} read-only --cd\n`, stderr: "" };
         if (options.input?.includes("Reader-Wiki CLI readiness")) return { stdout: '{"type":"item.completed","item":{"type":"agent_message","text":"ready"}}\n', stderr: "" };
         await writeFile(path.join(options.cwd, "cli-output.md"), "# CLI output\n");
         return { stdout: `{"type":"item.completed","item":{"type":"agent_message","text":"${["Co", "dex CLI"].join("")} answer from repo-scoped write context."}}\n`, stderr: "raw stderr" };
@@ -977,7 +1007,14 @@ describe("api", () => {
       expect(chatCall?.input).toContain("Repository-relative path: README.md");
       expect(chatCall?.input).toContain("Visible content");
       expect(chatCall?.input).not.toContain(root);
-      expect(chatCall?.args).toEqual(expect.arrayContaining(["--sandbox", "workspace-write", "--json", "--ephemeral", "--skip-git-repo-check", "-C", realRoot]));
+      expectCodexCurrentRepoPermissionBoundary(chatCall?.args || []);
+      expect(chatCall?.args).toEqual(expect.arrayContaining([
+        "--json",
+        "--ephemeral",
+        "--skip-git-repo-check",
+        "-C",
+        realRoot,
+      ]));
       expect(chatCall?.input).toContain("After writing, re-read each changed file");
 
       const excludedResponse = await postJson(`${server.url}/api/ai/chat`, {
@@ -998,7 +1035,6 @@ describe("api", () => {
       expect(claudeChatCall?.input).toContain("After writing, re-read each changed file");
     } finally {
       await server.close();
-      restoreExperimentalAIWrite();
     }
   });
 
@@ -1043,7 +1079,7 @@ describe("api", () => {
       calls.push({ binary, args, input: options.input || "" });
       if (args.includes("--version")) return { stdout: "codex-cli 0.142.5\n", stderr: "" };
       if (args.includes("login")) return { stdout: "Logged in using ChatGPT\n", stderr: "" };
-      if (args.includes("--help")) return { stdout: "--sandbox workspace-write --ephemeral --skip-git-repo-check --json\n", stderr: "" };
+      if (args.includes("--help")) return { stdout: `${CODEX_REPO_WRITE_HELP}\n`, stderr: "" };
       throw new Error("readiness execution failed");
     };
     const app = express();
@@ -1066,7 +1102,6 @@ describe("api", () => {
   });
 
   it("sanitizes CLI adapter failures before returning API errors", async () => {
-    const restoreExperimentalAIWrite = enableExperimentalAIWrite();
     const root = await mkdtemp(path.join(tmpdir(), "reader-wiki-cli-error-api-"));
     await writeFile(path.join(root, "README.md"), "# CLI Error\n");
     const configPath = path.join(root, "repositories.yaml");
@@ -1078,7 +1113,7 @@ describe("api", () => {
     const runner: AICommandRunner = async (_binary, args, options) => {
       if (args.includes("--version")) return { stdout: "codex-cli 0.142.5\n", stderr: "" };
       if (args.includes("login")) return { stdout: "Logged in using ChatGPT\n", stderr: "" };
-      if (args.includes("--help")) return { stdout: "--sandbox workspace-write --ephemeral --skip-git-repo-check --json\n", stderr: "" };
+      if (args.includes("--help")) return { stdout: `${CODEX_REPO_WRITE_HELP}\n`, stderr: "" };
       if (options.input?.includes("Reader-Wiki CLI readiness")) {
         return { stdout: '{"type":"item.completed","item":{"type":"agent_message","text":"ready"}}\n', stderr: "" };
       }
@@ -1106,12 +1141,10 @@ describe("api", () => {
       expect(body.error).not.toContain("def-456");
     } finally {
       await server.close();
-      restoreExperimentalAIWrite();
     }
   });
 
   it("keeps a large unedited selected file byte-identical when duplicate text exists after the context limit", async () => {
-    const restoreExperimentalAIWrite = enableExperimentalAIWrite();
     const root = await mkdtemp(path.join(tmpdir(), "reader-wiki-large-no-edit-"));
     const selectedPath = "large.md";
     const duplicate = "This paragraph intentionally appears twice and must never be removed.";
@@ -1122,7 +1155,7 @@ describe("api", () => {
     const runner: AICommandRunner = async (_binary, args, options) => {
       if (args.includes("--version")) return { stdout: "codex-cli 0.143.0\n", stderr: "" };
       if (args.includes("login")) return { stdout: "Logged in using ChatGPT\n", stderr: "" };
-      if (args.includes("--help")) return { stdout: "--sandbox workspace-write --ephemeral --skip-git-repo-check --json\n", stderr: "" };
+      if (args.includes("--help")) return { stdout: `${CODEX_REPO_WRITE_HELP}\n`, stderr: "" };
       if (options.input) return { stdout: '{"type":"item.completed","item":{"type":"agent_message","text":"No edit required."}}\n', stderr: "" };
       throw new Error("Unexpected command");
     };
@@ -1143,12 +1176,10 @@ describe("api", () => {
       expect(await readFile(path.join(root, selectedPath))).toEqual(before);
     } finally {
       await server.close();
-      restoreExperimentalAIWrite();
     }
   });
 
   it("cancels by run ID, returns failure postflight changes, and releases the repo lock after verified termination", async () => {
-    const restoreExperimentalAIWrite = enableExperimentalAIWrite();
     const root = await mkdtemp(path.join(tmpdir(), "reader-wiki-cancel-audit-"));
     await writeFile(path.join(root, "README.md"), "# Cancel audit\n");
     await writeFile(path.join(root, "dirty.md"), "tracked baseline\n");
@@ -1162,7 +1193,7 @@ describe("api", () => {
     const runner: AICommandRunner = async (_binary, args, options) => {
       if (args.includes("--version")) return { stdout: "codex-cli 0.143.0\n", stderr: "" };
       if (args.includes("login")) return { stdout: "Logged in using ChatGPT\n", stderr: "" };
-      if (args.includes("--help")) return { stdout: "--sandbox workspace-write --ephemeral --skip-git-repo-check --json\n", stderr: "" };
+      if (args.includes("--help")) return { stdout: `${CODEX_REPO_WRITE_HELP}\n`, stderr: "" };
       if (!options.input) throw new Error("Unexpected command");
       executionCount += 1;
       if (executionCount > 1) return { stdout: '{"type":"item.completed","item":{"type":"agent_message","text":"Second run completed."}}\n', stderr: "" };
@@ -1225,7 +1256,6 @@ describe("api", () => {
       expect(second.status).toBe(200);
     } finally {
       await server.close();
-      restoreExperimentalAIWrite();
     }
   });
 
@@ -1341,15 +1371,6 @@ async function postJson(url: string, payload: unknown): Promise<Response> {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(nextPayload),
   });
-}
-
-function enableExperimentalAIWrite(): () => void {
-  const previous = process.env.READER_WIKI_EXPERIMENTAL_AI_WRITE;
-  process.env.READER_WIKI_EXPERIMENTAL_AI_WRITE = "1";
-  return () => {
-    if (previous === undefined) delete process.env.READER_WIKI_EXPERIMENTAL_AI_WRITE;
-    else process.env.READER_WIKI_EXPERIMENTAL_AI_WRITE = previous;
-  };
 }
 
 async function readJsonLines(response: Response): Promise<Array<{ type?: string; content?: string; message?: { content?: string } }>> {
