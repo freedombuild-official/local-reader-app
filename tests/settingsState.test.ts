@@ -197,7 +197,7 @@ describe("settings state", () => {
     expect(updated.statuses.aiApi).toMatchObject({ state: "ready", code: "success" });
   });
 
-  it("selects ready provider chat targets while keeping CLI entries fail-closed", () => {
+  it("selects verified provider and CLI chat targets", () => {
     const localAiReady: AIProviderSettings = { ...(defaultAISettings.entries.localAi as AIProviderSettings), model: "local-model" };
     const aiApiReady: AIProviderSettings = { ...(defaultAISettings.entries.aiApi as AIProviderSettings), credential: "local-test-key" };
     const codexReady: CliAIEntrySettings = {
@@ -236,15 +236,15 @@ describe("settings state", () => {
       provider: aiApiReady,
       status: { state: "ready", code: "success" },
     });
-    expect(activeAIChatTarget({ ...defaultAISettings, activeEntry: "codexCli", entries: { ...defaultAISettings.entries, codexCli: codexReady } })).toBeNull();
+    expect(activeAIChatTarget({ ...defaultAISettings, activeEntry: "codexCli", entries: { ...defaultAISettings.entries, codexCli: codexReady } })).toMatchObject({ kind: "codexCli", entry: "codexCli" });
     expect(activeAIChatTarget({ ...defaultAISettings, activeEntry: "codexCli", entries: { ...defaultAISettings.entries, codexCli: codexReadOnly } })).toBeNull();
   });
 
   it("normalizes AI model behavior by active entry and model capability", () => {
     const codexSettings = { ...defaultAISettings, activeEntry: "codexCli" as const };
-    expect(aiModelBehaviorCapability(codexSettings, "codexCli")).toMatchObject({ kind: "none", label: "CLI diagnostics only" });
-    expect(activeAIModelBehavior(codexSettings)).toEqual({ kind: "none" });
-    expect(activeAIModelBehavior(updateAIModelBehavior(codexSettings, "codexCli", { kind: "intelligence", level: "xhigh" }))).toEqual({ kind: "none" });
+    expect(aiModelBehaviorCapability(codexSettings, "codexCli")).toMatchObject({ kind: "intelligence", label: "Codex intelligence", levels: ["low", "medium", "high", "xhigh"] });
+    expect(activeAIModelBehavior(codexSettings)).toEqual({ kind: "intelligence", level: "medium" });
+    expect(activeAIModelBehavior(updateAIModelBehavior(codexSettings, "codexCli", { kind: "intelligence", level: "xhigh" }))).toEqual({ kind: "intelligence", level: "xhigh" });
 
     const gptApi: AIProviderSettings = { ...(defaultAISettings.entries.aiApi as AIProviderSettings), provider: "openai", model: "gpt-5" };
     const gptSettings = {

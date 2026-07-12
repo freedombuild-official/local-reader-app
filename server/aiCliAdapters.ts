@@ -1,9 +1,12 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { mkdir, readFile, realpath, stat } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import { chmod, mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { buildAIChatRuntimePrompt, buildConversationTranscript } from "./aiPromptPolicy.js";
 import { HttpError } from "./errors.js";
 import type {
+  AIChangedPath,
   AIChatAttachment,
   AIChatContext,
   AIChatExecutionTarget,
@@ -24,6 +27,22 @@ type RepoWriteChatRequest = {
   modelBehavior?: AIModelBehavior;
   runner?: AICommandRunner;
   signal?: AbortSignal;
+};
+
+type WorkspaceFileFingerprint = {
+  hash: string;
+  byteLength: number;
+};
+
+type WorkspaceSnapshot = {
+  files: Map<string, WorkspaceFileFingerprint>;
+  complete: boolean;
+  warnings: string[];
+};
+
+type FinalAnswerReview = {
+  content: string;
+  warnings: string[];
 };
 
 export type AICommandRunner = (binary: string, args: string[], options: AICommandOptions) => Promise<AICommandResult>;
@@ -59,20 +78,83 @@ export type AIWorkspace = {
   root: string;
 };
 
+export type CodexMcpDisableSpec = {
+  name: string;
+  transport: "stdio" | "http";
+};
+
+const CLI_TIMEOUT_MS = 120_000;
+const CLI_MAX_BUFFER = 1024 * 1024;
 const WINDOWS_CMD_SHIM_MAX_BYTES = 32 * 1024;
 const TRUSTED_WINDOWS_CMD_PACKAGES: Readonly<Record<string, string>> = {
   codex: "/node_modules/@openai/codex/",
   claude: "/node_modules/@anthropic-ai/claude-code/",
 };
+const WORKSPACE_SNAPSHOT_MAX_FILES = 10_000;
+const WORKSPACE_SNAPSHOT_MAX_BYTES = 50 * 1024 * 1024;
+const WORKSPACE_SNAPSHOT_MAX_FILE_BYTES = 8 * 1024 * 1024;
+const WORKSPACE_SNAPSHOT_MAX_MS = 5_000;
+const WORKSPACE_SNAPSHOT_SKIPPED_DIRECTORIES = new Set([".git", "node_modules", "dist", "dist-server", "coverage"]);
+const CLAUDE_SECRET_ENV_KEYS = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"] as const;
+const CLAUDE_AUTH_ENV_KEYS = [...CLAUDE_SECRET_ENV_KEYS, "CLAUDE_CONFIG_DIR"] as const;
+const CLAUDE_CURRENT_REPO_TOOLS = "Bash,Glob,Grep,Read,Edit,Write";
+const CODEX_CURRENT_REPO_PERMISSION_FILESYSTEM = '{":minimal"="read",":workspace_roots"={"."="write",".git"="read",".git/**"="read",".codex"="read",".codex/**"="read",".agents"="read",".agents/**"="read"}}';
+const CODEX_DISABLED_FEATURES = [
+  "apps",
+  "browser_use",
+  "computer_use",
+  "hooks",
+  "image_generation",
+  "in_app_browser",
+  "multi_agent",
+  "plugins",
+  "remote_plugin",
+] as const;
 
 export async function requestRepoWriteAIChatCompletion(request: RepoWriteChatRequest): Promise<{ content: string; status: AIConnectionStatus; run: AIChatRunSummary }> {
-  if (request.target.kind === "codexCli") {
-    throw new HttpError(409, "Codex CLI Current repo write is unavailable because Reader-Wiki cannot prove an all-tools-disabled structured planner boundary on every supported platform.");
+  if (request.target.kind !== "codexCli" && request.target.kind !== "claudeCli") {
+    throw new HttpError(500, "Provider Current repo write must use the Reader-Wiki server edit protocol and cannot be routed through a CLI adapter.");
   }
-  if (request.target.kind === "claudeCli") {
-    throw new HttpError(409, "Claude Code CLI Current repo write is unavailable because this build has not integrated and proven its no-tool structured planner with isolated persistent auth.");
+  const runner = request.runner || runAICommand;
+  const workspace = await resolveAIWorkspace(request.repo);
+  const before = await collectWorkspaceSnapshot(workspace.root);
+  const prompt = buildRepoWritePrompt(request.context, request.messages, request.attachments || [], request.modelBehavior);
+  const entry = request.target.entry;
+  const substrate = request.target.kind;
+  let resultText = "";
+  let executionError: unknown;
+  try {
+    resultText = substrate === "codexCli"
+      ? await runCodexChat(runner, workspace.root, prompt, request.signal)
+      : await runClaudeChat(runner, workspace.root, prompt, request.signal);
+  } catch (error) {
+    executionError = error;
   }
-  throw new HttpError(500, "Provider Current repo write must use the Reader-Wiki server edit protocol and cannot be routed through a CLI adapter.");
+
+  const after = await collectWorkspaceSnapshot(workspace.root).catch((): WorkspaceSnapshot => ({
+    files: new Map(),
+    complete: false,
+    warnings: ["Repository change audit is unverified because the postflight workspace snapshot failed."],
+  }));
+  const changedPaths = diffWorkspaceSnapshots(before, after);
+  const finalAnswer = sanitizeFinalAnswerText(sanitizeCliText(resultText).trim());
+  const warnings = runWarnings(changedPaths, before, after, finalAnswer.warnings);
+  const run: AIChatRunSummary = {
+    accessMode: "repoWrite",
+    entry,
+    substrate,
+    auditState: before.complete && after.complete ? "verified" : "unverified",
+    changedPaths,
+    repairs: [],
+    warnings,
+  };
+  if (executionError) {
+    const httpError = userFacingCliError(entry, executionError);
+    const processTreeUnverified = Boolean(httpError.details && typeof httpError.details === "object" && (httpError.details as { processTreeUnverified?: unknown }).processTreeUnverified === true);
+    throw new HttpError(httpError.status, httpError.message, { run, ...(processTreeUnverified ? { processTreeUnverified: true } : {}) });
+  }
+  if (!finalAnswer.content) throw new HttpError(502, "CLI adapter returned an empty response.", { run });
+  return { content: finalAnswer.content, status: status("ready", "CLI response received."), run };
 }
 
 export async function runAICommand(binary: string, args: string[], options: AICommandOptions): Promise<AICommandResult> {
@@ -104,7 +186,7 @@ export async function runAICommand(binary: string, args: string[], options: AICo
       outputBytes += Math.min(bytes.byteLength, remaining);
       if (target === "stdout") stdout += retained;
       else stderr += retained;
-      if (bytes.byteLength > remaining) terminate(new HttpError(502, "CLI output exceeded the Reader-Wiki byte limit."));
+      if (bytes.byteLength > remaining) terminate(new HttpError(502, "The CLI returned more information than Reader-Wiki can display safely. Ask for a smaller result and try again."));
     };
     const onStdout = (value: Buffer | string) => appendOutput("stdout", value);
     const onStderr = (value: Buffer | string) => appendOutput("stderr", value);
@@ -115,14 +197,13 @@ export async function runAICommand(binary: string, args: string[], options: AICo
       terminate(new HttpError(502, error.code === "EPIPE" ? "CLI closed its input before the request was sent." : "CLI input failed."));
     });
     child.once("error", (error) => {
-      if (!terminationError) finishReject(new HttpError(502, sanitizeCliText(error.message) || "CLI adapter failed."));
+      if (!terminationError) finishReject(new HttpError(502, userFacingCliFailure(binary, error)));
     });
     child.once("close", (code) => {
       if (terminationError || settled) return;
       const result = { stdout, stderr };
       if (code !== 0) {
-        const output = sanitizeCliText([stdout, stderr, `CLI exited with code ${code ?? "unknown"}.`].filter(Boolean).join("\n"));
-        finishReject(new HttpError(502, output || "CLI adapter failed."));
+        finishReject(new HttpError(502, userFacingCliFailure(binary, [stdout, stderr].filter(Boolean).join("\n"))));
         return;
       }
       finishResolve(result);
@@ -137,11 +218,11 @@ export async function runAICommand(binary: string, args: string[], options: AICo
       child.stderr.resume();
       void terminateChildTree(child).then(
         () => finishReject(error),
-        () => finishReject(new HttpError(error.status, `${error.message} Process tree termination could not be verified.`, { processTreeUnverified: true })),
+        () => finishReject(new HttpError(error.status, "Reader-Wiki could not confirm that the CLI process stopped. Close the CLI before trying again.", { processTreeUnverified: true })),
       );
     };
     const abort = () => terminate(new HttpError(499, "CLI request was canceled."));
-    const timeout = setTimeout(() => terminate(new HttpError(504, "CLI request timed out.")), options.timeoutMs);
+    const timeout = setTimeout(() => terminate(new HttpError(504, "The CLI did not finish before the time limit. Try a smaller request or try again.")), options.timeoutMs);
     const cleanup = () => {
       clearTimeout(timeout);
       options.signal?.removeEventListener("abort", abort);
@@ -366,6 +447,86 @@ export async function resolveAIWorkspace(repo: RepositoryConfig): Promise<AIWork
   return { repoId: repo.id, root };
 }
 
+export function codexCurrentRepoArgs(profileName = `reader_wiki_${randomUUID().replaceAll("-", "")}`, disabledMcpServers: readonly CodexMcpDisableSpec[] = []): string[] {
+  if (!/^reader_wiki_[a-z0-9_]+$/.test(profileName)) throw new HttpError(500, "Codex Current repo permission profile name is invalid.");
+  const args = [
+    "--strict-config",
+    "--ignore-user-config",
+    "-c",
+    "approval_policy=\"never\"",
+    "-c",
+    `default_permissions="${profileName}"`,
+    "-c",
+    `permissions.${profileName}.filesystem=${CODEX_CURRENT_REPO_PERMISSION_FILESYSTEM}`,
+    "-c",
+    `permissions.${profileName}.network.enabled=false`,
+    "-c",
+    "web_search=\"disabled\"",
+  ];
+  for (const { name, transport } of disabledMcpServers) {
+    if (!name || name.length > 256 || /[\u0000-\u001f\u007f]/.test(name)) {
+      throw new HttpError(502, "Codex MCP isolation preflight returned an invalid server name.");
+    }
+    const disabledTransport = transport === "stdio"
+      ? '{enabled=false,command="reader-wiki-disabled-mcp",args=[]}'
+      : '{enabled=false,url="http://127.0.0.1/reader-wiki-disabled-mcp"}';
+    args.push("-c", `mcp_servers.${JSON.stringify(name)}=${disabledTransport}`);
+  }
+  for (const feature of CODEX_DISABLED_FEATURES) args.push("--disable", feature);
+  return args;
+}
+
+export function codexMcpListArgs(): string[] {
+  return ["mcp", "list", "--json"];
+}
+
+export function parseCodexMcpServers(stdout: string): CodexMcpDisableSpec[] {
+  let data: unknown;
+  try {
+    data = JSON.parse(stdout);
+  } catch {
+    throw new HttpError(502, "Codex MCP isolation preflight returned invalid JSON.");
+  }
+  if (!Array.isArray(data)) throw new HttpError(502, "Codex MCP isolation preflight returned an invalid server list.");
+  const servers = data.map((entry): CodexMcpDisableSpec => {
+    const name = entry && typeof entry === "object" ? (entry as { name?: unknown }).name : undefined;
+    if (typeof name !== "string" || !name || name.length > 256 || /[\u0000-\u001f\u007f]/.test(name)) {
+      throw new HttpError(502, "Codex MCP isolation preflight returned an invalid server name.");
+    }
+    const transportType = (entry as { transport?: { type?: unknown } }).transport?.type;
+    if (transportType !== "stdio" && transportType !== "streamable_http" && transportType !== "sse") {
+      throw new HttpError(502, "Codex MCP isolation preflight returned an invalid transport.");
+    }
+    return { name, transport: transportType === "stdio" ? "stdio" : "http" };
+  });
+  return Array.from(new Map(servers.map((server) => [server.name, server])).values()).sort((left, right) => left.name.localeCompare(right.name));
+}
+
+export async function probeCodexProjectMcpServers(runner: AICommandRunner, cwd: string, signal?: AbortSignal): Promise<CodexMcpDisableSpec[]> {
+  const probeHome = await mkdtemp(path.join(tmpdir(), "reader-wiki-codex-config-probe-"));
+  try {
+    await chmod(probeHome, 0o700);
+    await writeFile(path.join(probeHome, "config.toml"), [
+      `[projects.${JSON.stringify(cwd)}]`,
+      "trust_level = \"trusted\"",
+      "",
+    ].join("\n"), { encoding: "utf8", mode: 0o600 });
+    const result = await runner("codex", codexMcpListArgs(), {
+      cwd,
+      env: safeCliEnv("codexCli", { CODEX_HOME: probeHome }),
+      timeoutMs: 30_000,
+      maxBuffer: 256 * 1024,
+      signal,
+    });
+    return parseCodexMcpServers(result.stdout);
+  } catch (error) {
+    if (error instanceof HttpError && error.status === 499) throw error;
+    throw new HttpError(502, "Codex project MCP isolation preflight failed.");
+  } finally {
+    await rm(probeHome, { recursive: true, force: true });
+  }
+}
+
 export function safeCliEnv(entry: AIEntryKind, extra: NodeJS.ProcessEnv = {}, platform: NodeJS.Platform = process.platform): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   const allowedKeys = [
@@ -386,12 +547,318 @@ export function safeCliEnv(entry: AIEntryKind, extra: NodeJS.ProcessEnv = {}, pl
   if ((entry === "codexCli" || entry === "claudeCli") && process.env.CODEX_HOME) {
     env.CODEX_HOME = process.env.CODEX_HOME;
   }
+  if (entry === "claudeCli") {
+    for (const key of CLAUDE_AUTH_ENV_KEYS) {
+      if (process.env[key]) env[key] = process.env[key];
+    }
+  }
   env.READER_WIKI_AI_CLI = "1";
   return { ...env, ...extra };
 }
 
+function buildRepoWritePrompt(context: AIChatContext, messages: AIChatMessage[], attachments: AIChatAttachment[], modelBehavior: AIModelBehavior | undefined): string {
+  const runtime = buildAIChatRuntimePrompt(context, attachments, modelBehavior);
+  const transcript = buildConversationTranscript(messages);
+  return [
+    runtime.systemPrompt,
+    runtime.contextPrompt,
+    transcript ? `Conversation:\n${transcript}` : "Conversation: [no prior messages]",
+    [
+      "Reader-Wiki CLI work order:",
+      "- Use the CLI's native repository tools to complete the latest user request.",
+      "- The active repository root is the only writable workspace for this run.",
+      "- Reader-Wiki does not impose a file-count, directory-count, or edit-operation-count limit on this CLI run.",
+      "- Inspect, create, update, rename, or delete repository files and directories as needed for the request, subject to the active repository boundary.",
+      "- Report the result concisely with repository-relative paths.",
+    ].join("\n"),
+  ].filter(Boolean).join("\n\n");
+}
+
+function claudeNonInteractiveBaseArgs(): string[] {
+  return [
+    "-p",
+    "--output-format",
+    "json",
+    "--no-session-persistence",
+    "--safe-mode",
+    "--no-chrome",
+    "--disable-slash-commands",
+    "--strict-mcp-config",
+    "--mcp-config",
+    "{\"mcpServers\":{}}",
+    "--setting-sources",
+    "",
+    "--settings",
+    claudeCurrentRepoSettings(),
+  ];
+}
+
+export function claudeAuthenticationProbeArgs(): string[] {
+  return [
+    ...claudeNonInteractiveBaseArgs(),
+    "--tools",
+    "",
+    "--permission-mode",
+    "plan",
+  ];
+}
+
+async function runCodexChat(runner: AICommandRunner, cwd: string, prompt: string, signal?: AbortSignal): Promise<string> {
+  const disabledMcpServers = await probeCodexProjectMcpServers(runner, cwd, signal);
+  const result = await runner("codex", [
+    "exec",
+    ...codexCurrentRepoArgs(undefined, disabledMcpServers),
+    "--ephemeral",
+    "--skip-git-repo-check",
+    "--json",
+    "-C",
+    cwd,
+    "-",
+  ], {
+    cwd,
+    env: safeCliEnv("codexCli"),
+    input: prompt,
+    timeoutMs: CLI_TIMEOUT_MS,
+    maxBuffer: CLI_MAX_BUFFER,
+    signal,
+  });
+  return parseCodexJsonl(result.stdout);
+}
+
+async function runClaudeChat(runner: AICommandRunner, cwd: string, prompt: string, signal?: AbortSignal): Promise<string> {
+  const result = await runner("claude", [
+    ...claudeNonInteractiveBaseArgs(),
+    "--tools",
+    CLAUDE_CURRENT_REPO_TOOLS,
+    "--permission-mode",
+    "acceptEdits",
+  ], {
+    cwd,
+    env: safeCliEnv("claudeCli"),
+    input: prompt,
+    timeoutMs: CLI_TIMEOUT_MS,
+    maxBuffer: CLI_MAX_BUFFER,
+    signal,
+  });
+  return parseClaudeJson(result.stdout);
+}
+
+export function claudeCurrentRepoSandboxSupported(platform: NodeJS.Platform = process.platform): boolean {
+  return platform !== "win32";
+}
+
+export function claudeCurrentRepoSettings(): string {
+  return JSON.stringify({
+    permissions: {
+      additionalDirectories: [],
+      disableBypassPermissionsMode: "disable",
+    },
+    sandbox: {
+      enabled: true,
+      failIfUnavailable: true,
+      allowUnsandboxedCommands: false,
+      autoAllowBashIfSandboxed: true,
+      excludedCommands: [],
+      filesystem: {
+        allowWrite: [],
+      },
+    },
+  });
+}
+
+function parseCodexJsonl(stdout: string): string {
+  let last = "";
+  for (const line of stdout.split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    try {
+      const event = JSON.parse(line) as { type?: string; item?: { type?: string; text?: string } };
+      if (event.type === "item.completed" && event.item?.type === "agent_message" && typeof event.item.text === "string") {
+        last = event.item.text;
+      }
+    } catch {
+      // Codex runs with --json. Ignore non-protocol output instead of exposing CLI logs as the final answer.
+    }
+  }
+  if (!last.trim()) throw new HttpError(502, "Codex CLI did not return a usable natural-language response. Try the request again.");
+  return last;
+}
+
+function parseClaudeJson(stdout: string): string {
+  let data: { is_error?: boolean; result?: string };
+  try {
+    data = JSON.parse(stdout || "{}") as { is_error?: boolean; result?: string };
+  } catch {
+    throw new HttpError(502, "Claude Code CLI returned invalid JSON output.");
+  }
+  if (data.is_error) throw new HttpError(502, userFacingCliFailure("claude", data.result || "Claude Code CLI request failed."));
+  return data.result || "";
+}
+
+function userFacingCliError(entry: AIEntryKind, error: unknown): HttpError {
+  const statusCode = error instanceof HttpError ? error.status : 502;
+  const details = error instanceof HttpError ? error.details : undefined;
+  return new HttpError(statusCode, userFacingCliFailure(entry, error, statusCode), details);
+}
+
+function userFacingCliFailure(entryOrBinary: AIEntryKind | string, error: unknown, statusCode = 502): string {
+  const label = cliDisplayName(entryOrBinary);
+  const raw = error instanceof Error ? error.message : String(error || "");
+  const normalized = raw.toLowerCase();
+  if (statusCode === 499 || /\b(?:cancel(?:ed|led)?|abort(?:ed)?)\b/.test(normalized)) {
+    return "AI Chat request was canceled.";
+  }
+  if (/process tree|could not confirm that the cli process stopped|termination could not be verified/.test(normalized)) {
+    return "Reader-Wiki could not confirm that the CLI process stopped. Close the CLI before trying again.";
+  }
+  if (statusCode === 504 || /timed? out|time limit|timeout/.test(normalized)) {
+    return `${label} did not finish before the time limit. Try a smaller request or try again.`;
+  }
+  if (/invalid api key|not logged in|authentication|credential|sign.?in|unauthorized|\b401\b/.test(normalized)) {
+    return `${label} could not authenticate. Open Settings, complete CLI sign-in, and check readiness again.`;
+  }
+  if (/output exceeded|byte limit|more information than reader-wiki|response.*too large/.test(normalized)) {
+    return `${label} returned more information than Reader-Wiki can display safely. Ask for a smaller result and try again.`;
+  }
+  if (/invalid json|usable natural-language response|empty response|did not return.*response/.test(normalized)) {
+    return `${label} did not return a usable natural-language response. Try the request again.`;
+  }
+  if (/enoent|not found|could not be resolved|cannot find|failed to spawn|command type is not supported|unsupported windows.*shim/.test(normalized)) {
+    return `${label} could not start. Check that it is installed and available to Reader-Wiki, then check readiness again.`;
+  }
+  if (/permission|sandbox|access denied|eperm|eacces/.test(normalized)) {
+    return `${label} could not complete the request within the Current repo permissions. Check readiness and try again.`;
+  }
+  if (/closed its input|input failed/.test(normalized)) {
+    return `${label} stopped before it received the request. Check readiness and try again.`;
+  }
+  return `${label} could not complete the request. Check readiness and try again.`;
+}
+
+function cliDisplayName(entryOrBinary: AIEntryKind | string): string {
+  if (entryOrBinary === "codex" || entryOrBinary === "codexCli") return "Codex CLI";
+  if (entryOrBinary === "claude" || entryOrBinary === "claudeCli") return "Claude Code CLI";
+  return "The CLI";
+}
+
+async function collectWorkspaceSnapshot(root: string): Promise<WorkspaceSnapshot> {
+  const files = new Map<string, WorkspaceFileFingerprint>();
+  const warnings: string[] = [];
+  const startedAt = Date.now();
+  let totalBytes = 0;
+  let complete = true;
+  let stop = false;
+
+  const markIncomplete = (message: string) => {
+    complete = false;
+    warnings.push(message);
+  };
+  const visit = async (absoluteDirectory: string, relativeDirectory: string): Promise<void> => {
+    if (stop) return;
+    if (Date.now() - startedAt > WORKSPACE_SNAPSHOT_MAX_MS) {
+      stop = true;
+      markIncomplete("Repository change audit is unverified because its time budget was reached; CLI execution remains enabled.");
+      return;
+    }
+    let entries;
+    try {
+      entries = await readdir(absoluteDirectory, { withFileTypes: true });
+    } catch {
+      markIncomplete(`Repository change audit is unverified for ${relativeDirectory || "."}: the directory could not be read.`);
+      return;
+    }
+    entries.sort((left, right) => left.name.localeCompare(right.name));
+    for (const entry of entries) {
+      if (stop) break;
+      const relativePath = relativeDirectory ? `${relativeDirectory}/${entry.name}` : entry.name;
+      const absolutePath = path.join(absoluteDirectory, entry.name);
+      if (entry.isSymbolicLink()) {
+        markIncomplete(`Repository change audit skipped symbolic link ${relativePath}.`);
+        continue;
+      }
+      if (entry.isDirectory()) {
+        if (WORKSPACE_SNAPSHOT_SKIPPED_DIRECTORIES.has(entry.name)) {
+          if (entry.name !== ".git") markIncomplete(`Repository change audit skipped generated directory ${relativePath}.`);
+          continue;
+        }
+        await visit(absolutePath, relativePath);
+        continue;
+      }
+      if (!entry.isFile()) {
+        markIncomplete(`Repository change audit skipped non-regular path ${relativePath}.`);
+        continue;
+      }
+      if (files.size >= WORKSPACE_SNAPSHOT_MAX_FILES) {
+        stop = true;
+        markIncomplete("Repository change audit is unverified because its file scan budget was reached; CLI execution remains enabled.");
+        break;
+      }
+      try {
+        const fileStat = await stat(absolutePath);
+        if (!fileStat.isFile()) {
+          markIncomplete(`Repository change audit skipped non-regular path ${relativePath}.`);
+          continue;
+        }
+        if (fileStat.size > WORKSPACE_SNAPSHOT_MAX_FILE_BYTES) {
+          markIncomplete(`Repository change audit hash is unverified for ${relativePath}: the file exceeds the per-file audit budget.`);
+          files.set(relativePath, { hash: `unverified:${fileStat.size}:${fileStat.mtimeMs}`, byteLength: fileStat.size });
+          continue;
+        }
+        if (totalBytes + fileStat.size > WORKSPACE_SNAPSHOT_MAX_BYTES) {
+          stop = true;
+          markIncomplete("Repository change audit is unverified because its byte scan budget was reached; CLI execution remains enabled.");
+          break;
+        }
+        const bytes = await readFile(absolutePath);
+        totalBytes += bytes.byteLength;
+        files.set(relativePath, { hash: createHash("sha256").update(bytes).digest("hex"), byteLength: bytes.byteLength });
+      } catch {
+        markIncomplete(`Repository change audit is unverified for ${relativePath}: the file changed or could not be read during the scan.`);
+      }
+    }
+  };
+
+  await visit(root, "");
+  return { files, complete, warnings: Array.from(new Set(warnings)) };
+}
+
+function diffWorkspaceSnapshots(before: WorkspaceSnapshot, after: WorkspaceSnapshot): AIChangedPath[] {
+  const changed = new Map<string, AIChangedPath>();
+  for (const [relativePath, fingerprint] of before.files) {
+    const next = after.files.get(relativePath);
+    if (!next) changed.set(relativePath, { path: relativePath, status: "deleted" });
+    else if (next.hash !== fingerprint.hash || next.byteLength !== fingerprint.byteLength) changed.set(relativePath, { path: relativePath, status: "changed" });
+  }
+  for (const relativePath of after.files.keys()) {
+    if (!before.files.has(relativePath)) changed.set(relativePath, { path: relativePath, status: "new" });
+  }
+  return Array.from(changed.values()).sort((left, right) => left.path.localeCompare(right.path));
+}
+
+function sanitizeFinalAnswerText(content: string): FinalAnswerReview {
+  const warnings: string[] = [];
+  const leakPattern = /<\|(?:channel|message|constrain)\|>|functions\.exec_command|functions\.[A-Za-z0-9_]+\s*<\|/;
+  if (!leakPattern.test(content)) return { content, warnings };
+  const tokenIndex = content.search(leakPattern);
+  const sanitized = sanitizeCliText(content.slice(0, tokenIndex >= 0 ? tokenIndex : 0)).trim();
+  warnings.push("AI Chat final answer contained tool-call markup; Reader-Wiki removed it before display.");
+  return { content: sanitized || "AI Chat completed. Tool-call markup was removed from the final answer.", warnings };
+}
+
+function runWarnings(changedPaths: AIChangedPath[], before: WorkspaceSnapshot, after: WorkspaceSnapshot, ...warningGroups: string[][]): string[] {
+  const warnings = [...before.warnings, ...after.warnings, ...warningGroups.flat()];
+  if (!changedPaths.length && !(before.complete && after.complete)) {
+    warnings.push("Repository changes are unverified because the bounded workspace audit was incomplete.");
+  }
+  return Array.from(new Set(warnings));
+}
+
 export function sanitizeCliText(value: string): string {
-  return value
+  let sanitized = value;
+  for (const key of CLAUDE_SECRET_ENV_KEYS) {
+    const secret = process.env[key];
+    if (secret && secret.length >= 8) sanitized = sanitized.split(secret).join("[redacted]");
+  }
+  return sanitized
     .replace(new RegExp(`"${["sess", "ion_id"].join("")}"\\s*:\\s*"[^"]*"`, "g"), `"${["sess", "ion_id"].join("")}":"[redacted]"`)
     .replace(/"uuid"\s*:\s*"[^"]*"/g, "\"uuid\":\"[redacted]\"")
     .replace(/Command failed: (codex|claude)[^\n]*/g, "Command failed: CLI invocation")
@@ -400,7 +867,18 @@ export function sanitizeCliText(value: string): string {
     .replace(/\/private\/tmp\/[^\s]+/g, "[local-temp]")
     .replace(/\/Users\/[^/\s]+/g, "[local-home]")
     .replace(/sk-[A-Za-z0-9_-]{8,}/g, "[redacted]")
-    .replace(/(READER_WIKI_AI_API_KEY|OPENAI_API_KEY|ANTHROPIC_API_KEY|CODEX_API_KEY)=\S+/g, "$1=[redacted]")
+    .replace(/(READER_WIKI_AI_API_KEY|OPENAI_API_KEY|ANTHROPIC_API_KEY|ANTHROPIC_AUTH_TOKEN|CLAUDE_CODE_OAUTH_TOKEN|CODEX_API_KEY)=\S+/g, "$1=[redacted]")
     .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, "[redacted-email]")
     .slice(0, 12000);
+}
+
+function status(state: AIConnectionStatus["state"], message: string): AIConnectionStatus {
+  return {
+    state,
+    code: state === "ready" ? "success" : "provider_http_error",
+    severity: state === "ready" ? "success" : "error",
+    message,
+    nextAction: state === "ready" ? "Continue the conversation or check readiness again if CLI settings change." : "Check CLI readiness before trying again.",
+    checkedAt: new Date().toISOString(),
+  };
 }

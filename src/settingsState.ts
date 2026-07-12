@@ -249,6 +249,9 @@ export function derivedAIStatus(entry: AIEntrySettings | null): AIConnectionStat
     return aiStatus("notConfigured", "not_configured", "info", "No active AI Entry is selected.", "Select one entry before running checks or sending AI Chat.");
   }
   if (isCliSettings(entry)) {
+    if (aiReady(entry)) {
+      return aiStatus("ready", "success", "success", entry.readinessMessage || "CLI Current repo execution is ready.", "Use this entry for AI Chat or check again.", entry.lastCheckedAt || "");
+    }
     if (entry.authState === "configured") {
       return aiStatus("configured", "wrapper_not_ready", "warning", entry.readinessMessage || "CLI auth is configured, but the repo-scoped write wrapper is not confirmed.", "Run readiness check for this CLI entry.", entry.lastCheckedAt || "");
     }
@@ -455,10 +458,18 @@ function normalizeAIEntryKind(entry: unknown): AIEntryKind {
 
 function modelBehaviorCapabilityForEntry(entry: AIEntrySettings): AIModelBehaviorCapability {
   if (isCliSettings(entry)) {
+    if (entry.entry === "codexCli") {
+      return {
+        kind: "intelligence",
+        label: "Codex intelligence",
+        description: "Choose the response depth used by Codex CLI.",
+        levels: ["low", "medium", "high", "xhigh"],
+      };
+    }
     return {
       kind: "none",
-      label: "CLI diagnostics only",
-      description: "This CLI entry is fail-closed for AI Chat, so Reader-Wiki does not apply a model behavior override.",
+      label: "Claude Code default",
+      description: "Claude Code CLI uses its configured default model behavior.",
     };
   }
 

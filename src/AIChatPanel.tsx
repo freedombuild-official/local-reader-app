@@ -91,12 +91,31 @@ export function AIChatPanel({ aiSettings, session, onSessionChange, modelBehavio
     const controller = abortRef.current;
     if (!controller) return;
     const runId = activeRunIdRef.current;
+    const requestKey = activeRequestKeyRef.current;
     abortRef.current = null;
     activeRunIdRef.current = "";
+    activeRequestKeyRef.current = "";
+    activeRepoWriteRequestRef.current = false;
     cancelRequestedRef.current = false;
     controller.abort();
     if (runId) void cancelAIChatRun(runId).catch(() => undefined);
     setCanceling(false);
+    onSessionChangeRef.current((current) => {
+      if (!requestKey || current.requestKey !== requestKey) return current;
+      const lastMessage = current.messages[current.messages.length - 1];
+      const next = lastMessage?.role === "assistant"
+        ? replaceLastAssistant(current, [lastMessage.content, "AI Chat request canceled because the Current repo changed."].filter(Boolean).join("\n\n"))
+        : current;
+      return {
+        ...next,
+        pending: false,
+        error: "",
+        requestKey: "",
+        refreshingRepository: false,
+        repositoryRefreshError: "",
+        suppressRequestRetry: true,
+      };
+    });
   }, [activeRepoIdentity]);
 
   useEffect(() => {
@@ -217,22 +236,21 @@ export function AIChatPanel({ aiSettings, session, onSessionChange, modelBehavio
             return;
           }
           if (event.type === "delta") {
-            updateSessionAndFollow((current) => appendAssistantDelta(current, event.content));
+            updateSessionAndFollow((current) => current.requestKey === requestKey ? appendAssistantDelta(current, event.content) : current);
             return;
           }
           if (event.type === "done") {
             repositoryMayHaveChanged = repositoryMayHaveChanged || event.run.changedPaths.length > 0 || event.run.auditState === "unverified";
-            updateSessionAndFollow((current) => replaceLastAssistant(current, appendRunSummary(event.message.content, event.run)));
+            updateSessionAndFollow((current) => current.requestKey === requestKey ? replaceLastAssistant(current, event.message.content) : current);
             return;
           }
           if (event.type === "error") {
             repositoryMayHaveChanged = repositoryMayHaveChanged || repoWriteRequest || Boolean(event.details?.run && (event.details.run.changedPaths.length > 0 || event.details.run.auditState === "unverified"));
+            const message = describeAIChatFailure(event.error, event.details);
             updateSessionAndFollow((current) => current.requestKey === requestKey
               ? {
-                  ...(event.details?.run
-                    ? replaceLastAssistant(current, appendRunSummary(event.error, event.details.run))
-                    : replaceLastAssistant(current, event.error)),
-                  error: event.error,
+                  ...replaceLastAssistant(current, message),
+                  error: message,
                   suppressRequestRetry: repositoryMayHaveChanged,
                 }
               : current);
@@ -242,7 +260,7 @@ export function AIChatPanel({ aiSettings, session, onSessionChange, modelBehavio
       );
     } catch (nextError) {
       if (activeRepoIdentityRef.current === requestRepoIdentity && targetIdentityRef.current === requestTargetIdentity) {
-        const message = controller.signal.aborted ? "AI Chat request canceled." : nextError instanceof Error ? nextError.message : String(nextError);
+        const message = controller.signal.aborted ? "The AI Chat request was canceled." : describeAIChatFailure(nextError);
         if (nextError instanceof AIChatRequestError && nextError.code === "readiness_renewal_failed" && nextError.entry) {
           onReadinessFailure(nextError.entry, message);
         }
@@ -270,10 +288,10 @@ export function AIChatPanel({ aiSettings, session, onSessionChange, modelBehavio
       updateCurrentRequest((current) => ({ ...current, refreshingRepository: true }));
       try {
         await onRepositoryChanged(activeRepoId);
-      } catch (refreshError) {
+      } catch {
         updateCurrentRequest((current) => ({
           ...current,
-          repositoryRefreshError: `The repository may have changed, but Reader-Wiki could not refresh the viewer: ${refreshError instanceof Error ? refreshError.message : String(refreshError)}`,
+          repositoryRefreshError: describeRepositoryRefreshFailure(false),
         }));
       } finally {
         updateCurrentRequest((current) => ({ ...current, pending: false, refreshingRepository: false }));
@@ -297,10 +315,10 @@ export function AIChatPanel({ aiSettings, session, onSessionChange, modelBehavio
     }));
     try {
       await onRepositoryChanged(repoId);
-    } catch (refreshError) {
+    } catch {
       updateCurrentRefresh((current) => ({
         ...current,
-        repositoryRefreshError: `Reader-Wiki could not refresh the viewer: ${refreshError instanceof Error ? refreshError.message : String(refreshError)}`,
+        repositoryRefreshError: describeRepositoryRefreshFailure(true),
       }));
     } finally {
       updateCurrentRefresh((current) => ({ ...current, pending: false, refreshingRepository: false }));
@@ -324,11 +342,11 @@ export function AIChatPanel({ aiSettings, session, onSessionChange, modelBehavio
   async function requestServerCancellation(runId: string, controller: AbortController) {
     try {
       await cancelAIChatRun(runId);
-    } catch (error) {
+    } catch {
       if (abortRef.current !== controller) return;
       setCanceling(false);
       cancelRequestedRef.current = false;
-      updateSession((current) => ({ ...current, error: error instanceof Error ? error.message : String(error) }));
+      updateSession((current) => ({ ...current, error: "Reader-Wiki could not confirm cancellation. The CLI may still be running, so close it before continuing." }));
     }
   }
 
@@ -610,16 +628,55 @@ function replaceLastAssistant(session: AIChatSessionState, content: string): AIC
   };
 }
 
-function appendRunSummary(content: string, run: { auditState: "verified" | "unverified"; readPaths?: string[]; changedPaths: Array<{ path: string; status: string }>; repairs?: string[]; warnings: string[] }): string {
-  const reads = run.readPaths?.length ? ["Provider-visible read paths:", ...run.readPaths.map((item) => `- ${item}`)].join("\n") : "";
-  const changed = run.changedPaths.length
-    ? ["Changed paths:", ...run.changedPaths.map((item) => `- ${item.status}: ${item.path}`)].join("\n")
-    : run.auditState === "verified"
-      ? "No repository changes."
-      : "Repository changes unverified.";
-  const repairs = run.repairs?.length ? ["Repairs:", ...run.repairs.map((repair) => `- ${repair}`)].join("\n") : "";
-  const warnings = run.warnings.length ? ["Warnings:", ...run.warnings.map((warning) => `- ${warning}`)].join("\n") : "";
-  return [content, reads, changed, repairs, warnings].filter(Boolean).join("\n\n");
+function describeAIChatFailure(error: unknown, details?: unknown): string {
+  const detail = failureDetail(details);
+  const requestError = error instanceof AIChatRequestError ? error : null;
+  const code = detail.code || requestError?.code || "";
+  if (code === "guarded_rollback_incomplete" || detail.rollbackState === "unverified") {
+    return "The edit could not be completed, and Reader-Wiki could not confirm that every partial change was restored. Review the Current repo before continuing.";
+  }
+  if (detail.processTreeUnverified) {
+    return "AI Chat stopped unexpectedly, and Reader-Wiki could not confirm that the CLI process ended. Close the CLI before continuing.";
+  }
+  if (code === "readiness_renewal_failed") {
+    return "AI Chat authorization expired. Check the active AI Entry in Settings before trying again.";
+  }
+  if (requestError?.status === 401 || requestError?.status === 403) {
+    return "AI Chat could not authenticate the active AI Entry. Check its sign-in or credentials in Settings before trying again.";
+  }
+  const rawMessage = error instanceof Error ? error.message : typeof error === "string" ? error : "";
+  if (/\bcancel(?:ed|led|lation)\b/i.test(rawMessage)) return "The AI Chat request was canceled.";
+  if (detail.run?.auditState === "unverified") {
+    return "AI Chat could not complete the request, and the Current repo may have changed. Review the repository before continuing.";
+  }
+  return "AI Chat could not complete the request. Check the active AI Entry and try again.";
+}
+
+function describeRepositoryRefreshFailure(retry: boolean): string {
+  return retry
+    ? "Reader-Wiki still could not refresh the Current repo. Try the repository refresh again."
+    : "The request finished, but Reader-Wiki could not refresh the Current repo. Retry the repository refresh.";
+}
+
+function failureDetail(value: unknown): {
+  code: string;
+  rollbackState: string;
+  processTreeUnverified: boolean;
+  run?: { auditState?: "verified" | "unverified" };
+} {
+  if (!value || typeof value !== "object") return { code: "", rollbackState: "", processTreeUnverified: false };
+  const detail = value as {
+    code?: unknown;
+    rollbackState?: unknown;
+    processTreeUnverified?: unknown;
+    run?: { auditState?: "verified" | "unverified" };
+  };
+  return {
+    code: typeof detail.code === "string" ? detail.code : "",
+    rollbackState: typeof detail.rollbackState === "string" ? detail.rollbackState : "",
+    processTreeUnverified: detail.processTreeUnverified === true,
+    run: detail.run,
+  };
 }
 
 function renderAIMessage(content: string): string {

@@ -18,6 +18,7 @@ import {
   ListCollapse,
   MessageSquare,
   Package,
+  Plus,
   RadioTower,
   RefreshCw,
   ScrollText,
@@ -29,7 +30,7 @@ import {
 } from "lucide-react";
 import { fetchFile, fetchHttpDeliveryStatus, fetchRepos, fetchTree, imageFileUrl, openRepository, pdfFileUrl, startHttpDelivery, stopHttpDelivery } from "./api";
 import type { AIChatContextChip, AIChatSessionState, AIEntryKind, DiffStatus, FileResponse, HttpDeliveryItemStatus, HttpDeliveryStatus, RepoListItem, RepoSyncStatus, TreeNode, TreeSnapshot } from "./types";
-import { activeAIChatTarget, activeAIModelBehavior, defaultAISettings, defaultBasicSettings, invalidateAIReadiness, loadBasicSettings, normalizeReaderFontScale, persistBasicSettings, updateAIEntryStatus, type AISettingsState, type BasicSettings, type ReaderFontScale } from "./settingsState";
+import { activeAIChatTarget, activeAIModelBehavior, defaultAISettings, defaultBasicSettings, loadBasicSettings, normalizeReaderFontScale, persistBasicSettings, updateAIEntryStatus, type AISettingsState, type BasicSettings, type ReaderFontScale } from "./settingsState";
 import { injectMarkdownCodeToolbarButtons, installCodeBlockRule } from "../shared/markdownCodeBlocks";
 import { installTableScrollRule } from "../shared/markdownTableScroll";
 import { installTaskListRule } from "../shared/markdownTaskLists";
@@ -102,22 +103,6 @@ const defaultAIChatSession: AIChatSessionState = {
   dismissedRulePathKeys: [],
 };
 
-function aiSettingsSessionIdentity(settings: AISettingsState): string {
-  const activeEntry = settings.activeEntry;
-  if (!activeEntry) return "none";
-  const entry = settings.entries[activeEntry];
-  if (!("model" in entry)) return activeEntry;
-  return JSON.stringify({
-    entry: activeEntry,
-    provider: entry.provider || "",
-    runtime: entry.runtime || "",
-    model: entry.model,
-    baseUrl: entry.baseUrl,
-    apiFormat: entry.apiFormat,
-    credential: entry.credential || "",
-    executionMode: entry.executionMode === "repoWrite" ? "repoWrite" : "readOnly",
-  });
-}
 const memoMarkdown = new MarkdownIt({ html: false, linkify: true });
 installTableScrollRule(memoMarkdown);
 installCodeBlockRule(memoMarkdown);
@@ -141,6 +126,7 @@ export function App() {
   const [activeTabByRepo, setActiveTabByRepo] = useState<ActiveTabByRepo>({});
   const [rightPanelMode, setRightPanelMode] = useState<RightPanelMode>("outline");
   const [aiChatSession, setAIChatSession] = useState<AIChatSessionState>(defaultAIChatSession);
+  const [aiChatSessionKey, setAIChatSessionKey] = useState(0);
   const [memoText, setMemoText] = useState("");
   const [memoMode, setMemoMode] = useState<MemoMode>("raw");
   const [loading, setLoading] = useState(true);
@@ -234,13 +220,12 @@ export function App() {
 
   const resetAIChatSession = useCallback(() => {
     setAIChatSession(defaultAIChatSession);
+    setAIChatSessionKey((current) => current + 1);
   }, []);
 
   const updateAISettingsFromSettings = useCallback((settings: AISettingsState) => {
-    const targetChanged = aiSettingsSessionIdentity(aiSettings) !== aiSettingsSessionIdentity(settings);
     setAISettings(settings);
-    if (targetChanged) resetAIChatSession();
-  }, [aiSettings, resetAIChatSession]);
+  }, []);
 
   const openSettings = useCallback((category: SettingsCategory = "basic") => {
     setSettingsCategory(category);
@@ -329,7 +314,6 @@ export function App() {
 
   const selectRepo = useCallback(
     async (repo: RepoListItem) => {
-      const identityChanged = activeRepoIdRef.current !== repo.id || activeRepoRevisionRef.current !== repo.revision;
       const loadToken = repoLoadTokenRef.current + 1;
       repoLoadTokenRef.current = loadToken;
       repoReloadTokenRef.current += 1;
@@ -337,10 +321,6 @@ export function App() {
       activeRepoRevisionRef.current = repo.revision;
       setRepositoryReloadingRepoId("");
       setActiveRepoId(repo.id);
-      if (identityChanged) {
-        setAISettings((current) => invalidateAIReadiness(current));
-        resetAIChatSession();
-      }
       setTreeCache({});
       setExpanded(new Set([""]));
       setError("");
@@ -376,7 +356,7 @@ export function App() {
         setError(message);
       }
     },
-    [activeTabByRepo, openFile, refreshFileTab, resetAIChatSession, tabsByRepo],
+    [activeTabByRepo, openFile, refreshFileTab, tabsByRepo],
   );
 
   const reloadActiveRepositoryView = useCallback(async () => {
@@ -492,15 +472,13 @@ export function App() {
       setExpanded(new Set([""]));
       setTabsByRepo((current) => ({ ...current, [activeRepoId]: [] }));
       setActiveTabByRepo((current) => ({ ...current, [activeRepoId]: "" }));
-      resetAIChatSession();
-      setAISettings((current) => invalidateAIReadiness(current));
       await selectRepo(nextActiveRepo);
       return;
     }
     if (!stillActive && nextRepos[0]) {
       await selectRepo(nextRepos[0]);
     }
-  }, [activeRepoId, repos, resetAIChatSession, selectRepo]);
+  }, [activeRepoId, repos, selectRepo]);
 
   useEffect(() => {
     let cancelled = false;
@@ -835,7 +813,7 @@ export function App() {
       <aside className="sidebar" aria-label="Repositories and files">
         <header className="sidebar-header">
           <h1>Reader-Wiki</h1>
-          <p>Local repository reader with guarded AI edits</p>
+          <p>Local repository reader with optional AI Chat</p>
         </header>
         {loading ? <p className="state-text">Loading repositories...</p> : null}
         <label className="repo-picker-label" htmlFor="repo-picker">
@@ -1029,7 +1007,9 @@ export function App() {
         onMemoModeChange={setMemoMode}
         aiSettings={aiSettings}
         aiChatSession={aiChatSession}
+        aiChatSessionKey={aiChatSessionKey}
         onAIChatSessionChange={updateAIChatSession}
+        onNewAIChat={resetAIChatSession}
         onAIReadinessFailure={handleAIReadinessFailure}
         onRepositoryChanged={refreshRepositoryAfterAIWrite}
         aiModelBehavior={aiModelBehavior}
@@ -1724,7 +1704,7 @@ function HttpDeliveryPanel({ status, stoppingItemIds, error, onStop }: {
   );
 }
 
-function RightPanel({ mode, onModeChange, file, outline, onHeadingSelect, memoText, memoMode, onMemoTextChange, onMemoModeChange, aiSettings, aiChatSession, onAIChatSessionChange, onAIReadinessFailure, onRepositoryChanged, aiModelBehavior, activeRepoId, activeRepoRevision, rootTreeNodes, onOpenSettings }: {
+function RightPanel({ mode, onModeChange, file, outline, onHeadingSelect, memoText, memoMode, onMemoTextChange, onMemoModeChange, aiSettings, aiChatSession, aiChatSessionKey, onAIChatSessionChange, onNewAIChat, onAIReadinessFailure, onRepositoryChanged, aiModelBehavior, activeRepoId, activeRepoRevision, rootTreeNodes, onOpenSettings }: {
   mode: RightPanelMode;
   onModeChange: (mode: RightPanelMode) => void;
   file: FileResponse | null;
@@ -1736,7 +1716,9 @@ function RightPanel({ mode, onModeChange, file, outline, onHeadingSelect, memoTe
   onMemoModeChange: (mode: MemoMode) => void;
   aiSettings: AISettingsState;
   aiChatSession: AIChatSessionState;
+  aiChatSessionKey: number;
   onAIChatSessionChange: (updater: (session: AIChatSessionState) => AIChatSessionState) => void;
+  onNewAIChat: () => void;
   onAIReadinessFailure: (entry: AIEntryKind, message: string) => void;
   onRepositoryChanged: (repoId: string) => Promise<boolean>;
   aiModelBehavior: ReturnType<typeof activeAIModelBehavior>;
@@ -1789,6 +1771,14 @@ function RightPanel({ mode, onModeChange, file, outline, onHeadingSelect, memoTe
           ))}
         </div>
       </header>
+      {mode === "aiChat" ? (
+        <div className="ai-chat-session-header" role="toolbar" aria-label="AI Chat session actions">
+          <button type="button" className="ai-chat-new-button" onClick={onNewAIChat}>
+            <Plus aria-hidden="true" focusable="false" />
+            新規チャット
+          </button>
+        </div>
+      ) : null}
       {mode === "outline" ? (
         <OutlinePanel file={file} outline={outline} onHeadingSelect={onHeadingSelect} />
       ) : mode === "memo" ? (
@@ -1803,6 +1793,7 @@ function RightPanel({ mode, onModeChange, file, outline, onHeadingSelect, memoTe
         >
           <Suspense fallback={<p className="state-text">Loading AI Chat...</p>}>
             <LazyAIChatPanel
+              key={aiChatSessionKey}
               aiSettings={aiSettings}
               session={aiChatSession}
               onSessionChange={onAIChatSessionChange}

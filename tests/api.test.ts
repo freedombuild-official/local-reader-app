@@ -5,7 +5,7 @@ import { JSDOM } from "jsdom";
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { type Server } from "node:http";
-import { chmod, mkdir, mkdtemp, readFile, unlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, realpath, rm, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -526,7 +526,7 @@ describe("api", () => {
         run?: { accessMode?: string; changedPaths?: Array<{ path?: string; status?: string }>; substrate?: string; entry?: string };
       };
       expect(chat.message?.content).toContain("active file");
-      expect(chat.context?.systemPromptVersion).toBe("2.2.0");
+      expect(chat.context?.systemPromptVersion).toBe("2.3.0");
       expect(chat.context?.primaryItems?.[0]).toMatchObject({ path: "README.md", contentIncluded: true });
       expect(chat.context?.ruleItems?.[0]).toMatchObject({ path: "AGENTS.md", content: expect.stringContaining("Use project rules") });
       expect(chat.run).toMatchObject({
@@ -820,25 +820,37 @@ describe("api", () => {
     }
   });
 
-  it("keeps Codex CLI and Claude Code CLI diagnostics-only and fail-closed for Current repo write", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "reader-wiki-cli-fail-closed-"));
-    await writeFile(path.join(root, "README.md"), "# CLI diagnostics only\n");
+  it("runs Codex CLI and Claude Code CLI directly in the Current repo after readiness", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "reader-wiki-cli-direct-"));
+    await writeFile(path.join(root, "README.md"), "# CLI direct execution\n");
     const configPath = path.join(root, "repositories.yaml");
     await writeFile(configPath, `repositories:\n  - id: docs\n    label: Docs\n    root: ${root}\n    defaultPath: README.md\n`);
-    const calls: Array<{ binary: string; args: string[]; input: string }> = [];
+    const calls: Array<{ binary: string; args: string[]; input: string; cwd: string }> = [];
     const runner: AICommandRunner = async (binary, args, options) => {
-      calls.push({ binary, args, input: options.input || "" });
+      calls.push({ binary, args, input: options.input || "", cwd: options.cwd });
       if (binary === "codex") {
         if (args.includes("--version")) return { stdout: "codex-cli 0.144.1\n", stderr: "" };
         if (args.includes("login")) return { stdout: "Logged in using ChatGPT\n", stderr: "" };
-        if (args.includes("--help")) return { stdout: "codex exec help\n", stderr: "" };
+        if (args.includes("--help")) return { stdout: "--strict-config --disable --config --cd --ignore-user-config --skip-git-repo-check --ephemeral --json\n", stderr: "" };
+        if (args.includes("mcp")) return { stdout: '[{"name":"project-tools","transport":{"type":"stdio"}}]', stderr: "" };
+        if (options.input) {
+          await mkdir(path.join(options.cwd, "codex", "nested"), { recursive: true });
+          await writeFile(path.join(options.cwd, "codex", "nested", "result.md"), "# Codex result\n");
+          return { stdout: '{"type":"item.completed","item":{"type":"agent_message","text":"Codex updated the Current repo."}}\n', stderr: "" };
+        }
       }
       if (binary === "claude") {
         if (args.includes("--version")) return { stdout: "2.1.199 (Claude Code)\n", stderr: "" };
         if (args.includes("auth")) return { stdout: '{"loggedIn":true}\n', stderr: "" };
-        if (args.includes("--help")) return { stdout: "--print --output-format --tools --permission-mode --safe-mode --no-session-persistence\n", stderr: "" };
+        if (args.includes("--help")) return { stdout: `${"diagnostic filler ".repeat(900)} --print --output-format --tools --permission-mode --safe-mode --no-chrome --disable-slash-commands --strict-mcp-config --mcp-config --setting-sources --settings --no-session-persistence\n`, stderr: "" };
+        if (args[args.indexOf("--tools") + 1] === "") return { stdout: JSON.stringify({ is_error: false, result: "READY" }), stderr: "" };
+        if (options.input) {
+          await mkdir(path.join(options.cwd, "claude", "nested"), { recursive: true });
+          await writeFile(path.join(options.cwd, "claude", "nested", "result.md"), "# Claude result\n");
+          return { stdout: JSON.stringify({ is_error: false, result: "Claude updated the Current repo." }), stderr: "" };
+        }
       }
-      throw new Error("Unexpected CLI diagnostic command");
+      throw new Error("Unexpected CLI command");
     };
     const app = express();
     app.use("/api", createApiRouter(configPath, undefined, { aiCommandRunner: runner }));
@@ -854,26 +866,150 @@ describe("api", () => {
           checks?: Array<{ label?: string; status?: string }>;
         };
         expect(readiness).toMatchObject({
-          ready: false,
-          status: { state: "failed", code: "wrapper_not_ready" },
-          settings: { authState: "configured", readOnlyWrapperState: "notReady", executionMode: "unknown" },
+          ready: true,
+          status: { state: "ready", code: "success" },
+          settings: { authState: "configured", readOnlyWrapperState: "ready", executionMode: "repoWrite" },
         });
         expect(readiness.checks).toEqual(expect.arrayContaining([
-          expect.objectContaining({ label: entry === "codexCli" ? "Current repo-only write boundary" : "Repo-scoped write wrapper", status: "error" }),
+          expect.objectContaining({ label: "Current repo CLI execution", status: "ready" }),
         ]));
-        const staleReadyStatus = { state: "ready", code: "success", severity: "success", message: "Stale browser success.", checkedAt: "2026-07-11T00:00:00.000Z" };
         const chatResponse = await postJson(`${server.url}/api/ai/chat`, {
-          target: { kind: entry, entry, status: staleReadyStatus },
-          messages: [{ role: "user", content: "Edit the Current repo." }],
-          context: { repoId: "docs", primaryPaths: [] },
+          target: { kind: entry, entry, status: readiness.status },
+          messages: [{ role: "user", content: "Create a nested result file in the Current repo." }],
+          context: { repoId: "docs", primaryPaths: entry === "codexCli" ? [{ path: "repositories.yaml", includeContent: true, source: "manual" }] : [] },
         });
-        expect(chatResponse.status).toBe(409);
-        await expect(chatResponse.json()).resolves.toMatchObject({ details: { code: "readiness_renewal_failed", entry } });
+        expect(chatResponse.status).toBe(200);
+        await expect(chatResponse.json()).resolves.toMatchObject({
+          message: { content: expect.stringContaining(entry === "codexCli" ? "Codex" : "Claude") },
+          run: {
+            accessMode: "repoWrite",
+            entry,
+            substrate: entry,
+            changedPaths: [{ path: `${entry === "codexCli" ? "codex" : "claude"}/nested/result.md`, status: "new" }],
+          },
+        });
+        const chatCall = calls.find((call) => {
+          if (call.binary !== (entry === "codexCli" ? "codex" : "claude") || !call.input) return false;
+          return entry === "codexCli" || call.args[call.args.indexOf("--tools") + 1] !== "";
+        });
+        expect(chatCall?.cwd).toBe(await realpath(root));
+        if (entry === "codexCli") {
+          expect(chatCall?.args).toEqual(expect.arrayContaining(["--strict-config", "--ignore-user-config", "-C", await realpath(root)]));
+          expect(chatCall?.args.some((argument) => /^default_permissions="reader_wiki_[a-f0-9]{32}"$/.test(argument))).toBe(true);
+          expect(chatCall?.args).toContain('mcp_servers."project-tools"={enabled=false,command="reader-wiki-disabled-mcp",args=[]}');
+          expect(chatCall?.args).not.toContain("--add-dir");
+        } else {
+          expect(chatCall?.args).toEqual(expect.arrayContaining(["--setting-sources", "", "--tools", "Bash,Glob,Grep,Read,Edit,Write", "--permission-mode", "acceptEdits"]));
+          expect(chatCall?.args).not.toContain("--max-budget-usd");
+        }
       }
-      expect(calls).toHaveLength(12);
-      expect(calls.every((call) => call.input === "")).toBe(true);
+      expect(calls).toHaveLength(11);
     } finally {
       await server.close();
+    }
+  });
+
+  it("keeps raw CLI failure output out of the AI Chat stream", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "reader-wiki-cli-natural-error-api-"));
+    await writeFile(path.join(root, "README.md"), "# Natural CLI error\n");
+    const configPath = path.join(root, "repositories.yaml");
+    await writeFile(configPath, `repositories:\n  - id: docs\n    label: Docs\n    root: ${root}\n    defaultPath: README.md\n`);
+    const runner: AICommandRunner = async (_binary, args, options) => {
+      if (args.includes("--version")) return { stdout: "codex-cli 0.144.1\n", stderr: "" };
+      if (args.includes("login")) return { stdout: "Logged in using ChatGPT\n", stderr: "" };
+      if (args.includes("--help")) return { stdout: "--strict-config --disable --config --cd --ignore-user-config --skip-git-repo-check --ephemeral --json\n", stderr: "" };
+      if (args.includes("mcp")) return { stdout: "[]", stderr: "" };
+      if (options.input) throw new Error("RAW_STDOUT_SENTINEL RAW_STDERR_SENTINEL CLI exited with code 17");
+      throw new Error("Unexpected CLI command");
+    };
+    const app = express();
+    app.use("/api", createApiRouter(configPath, undefined, { aiCommandRunner: runner }));
+    const server = await listen(app);
+    try {
+      const readinessResponse = await postJson(`${server.url}/api/ai/entry-readiness`, { entry: "codexCli", repoId: "docs" });
+      const readiness = await readinessResponse.json() as { status: { state?: string; code?: string } };
+      expect(readiness).toMatchObject({ status: { state: "ready", code: "success" } });
+      const streamResponse = await postJson(`${server.url}/api/ai/chat/stream`, {
+        target: { kind: "codexCli", entry: "codexCli", status: readiness.status },
+        messages: [{ role: "user", content: "Complete the request." }],
+        context: { repoId: "docs", primaryPaths: [] },
+      });
+      expect(streamResponse.status).toBe(200);
+      const events = await readJsonLines(streamResponse);
+      expect(events.at(-1)).toMatchObject({
+        type: "error",
+        error: "Codex CLI could not complete the request. Check readiness and try again.",
+        details: { run: { accessMode: "repoWrite", entry: "codexCli", substrate: "codexCli" } },
+      });
+      expect(JSON.stringify(events)).not.toContain("RAW_STDOUT_SENTINEL");
+      expect(JSON.stringify(events)).not.toContain("RAW_STDERR_SENTINEL");
+      expect(JSON.stringify(events)).not.toContain("code 17");
+    } finally {
+      await server.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reuses Claude authentication readiness across repo switches and follow-up edits", async () => {
+    const firstRoot = await mkdtemp(path.join(tmpdir(), "reader-wiki-claude-lease-first-"));
+    const secondRoot = await mkdtemp(path.join(tmpdir(), "reader-wiki-claude-lease-second-"));
+    await writeFile(path.join(firstRoot, "README.md"), "# First repo\n");
+    await writeFile(path.join(secondRoot, "README.md"), "# Second repo\n");
+    const configPath = path.join(firstRoot, "repositories.yaml");
+    await writeFile(configPath, [
+      "repositories:",
+      "  - id: first",
+      "    label: First",
+      `    root: ${firstRoot}`,
+      "    defaultPath: README.md",
+      "  - id: second",
+      "    label: Second",
+      `    root: ${secondRoot}`,
+      "    defaultPath: README.md",
+      "",
+    ].join("\n"));
+    const calls: Array<{ args: string[]; cwd: string; input: string }> = [];
+    let chatRuns = 0;
+    const runner: AICommandRunner = async (binary, args, options) => {
+      expect(binary).toBe("claude");
+      calls.push({ args, cwd: options.cwd, input: options.input || "" });
+      if (args.includes("--version")) return { stdout: "2.1.206 (Claude Code)\n", stderr: "" };
+      if (args.includes("auth")) return { stdout: '{"loggedIn":true}\n', stderr: "" };
+      if (args.includes("--help")) {
+        return { stdout: "--print --output-format --tools --permission-mode --safe-mode --no-chrome --disable-slash-commands --strict-mcp-config --mcp-config --setting-sources --settings --no-session-persistence\n", stderr: "" };
+      }
+      if (args[args.indexOf("--tools") + 1] === "") return { stdout: JSON.stringify({ is_error: false, result: "READY" }), stderr: "" };
+      chatRuns += 1;
+      await mkdir(path.join(options.cwd, "claude"), { recursive: true });
+      await writeFile(path.join(options.cwd, "claude", "result.md"), `# Run ${chatRuns}\n`);
+      return { stdout: JSON.stringify({ is_error: false, result: `Claude completed run ${chatRuns}.` }), stderr: "" };
+    };
+    const app = express();
+    app.use("/api", createApiRouter(configPath, undefined, { aiCommandRunner: runner }));
+    const server = await listen(app);
+    try {
+      const readinessResponse = await postJson(`${server.url}/api/ai/entry-readiness`, { entry: "claudeCli", repoId: "first" });
+      expect(readinessResponse.status).toBe(200);
+      const readiness = await readinessResponse.json() as { ready?: boolean; status: { state?: string; code?: string } };
+      expect(readiness).toMatchObject({ ready: true, status: { state: "ready", code: "success" } });
+      const request = {
+        target: { kind: "claudeCli", entry: "claudeCli", status: readiness.status },
+        messages: [{ role: "user", content: "Update the result in the newly selected Current repo." }],
+        context: { repoId: "second", primaryPaths: [] },
+      };
+      expect((await postJson(`${server.url}/api/ai/chat`, request)).status).toBe(200);
+      expect((await postJson(`${server.url}/api/ai/chat`, request)).status).toBe(200);
+      expect(chatRuns).toBe(2);
+      expect(calls.filter((call) => call.args.includes("auth"))).toHaveLength(1);
+      expect(calls.filter((call) => call.args[call.args.indexOf("--tools") + 1] === "")).toHaveLength(1);
+      const editingCalls = calls.filter((call) => call.args.includes("Bash,Glob,Grep,Read,Edit,Write"));
+      expect(editingCalls).toHaveLength(2);
+      const secondCanonicalRoot = await realpath(secondRoot);
+      expect(editingCalls.every((call) => call.cwd === secondCanonicalRoot)).toBe(true);
+    } finally {
+      await server.close();
+      await rm(firstRoot, { recursive: true, force: true });
+      await rm(secondRoot, { recursive: true, force: true });
     }
   });
 
@@ -1010,13 +1146,14 @@ describe("api", () => {
     }
   });
 
-  it("does not explicitly forward credential-like environment variables to CLI adapters", () => {
+  it("forwards only Claude CLI auth environment to Claude while keeping provider credentials isolated", () => {
     const original = {
       CODEX_API_KEY: process.env.CODEX_API_KEY,
       OPENAI_API_KEY: process.env.OPENAI_API_KEY,
       ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
       ANTHROPIC_AUTH_TOKEN: process.env.ANTHROPIC_AUTH_TOKEN,
       CLAUDE_CODE_OAUTH_TOKEN: process.env.CLAUDE_CODE_OAUTH_TOKEN,
+      CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR,
     };
     try {
       process.env.CODEX_API_KEY = "codex-api-key-test-value";
@@ -1024,12 +1161,17 @@ describe("api", () => {
       process.env.ANTHROPIC_API_KEY = "anthropic-api-key-test-value";
       process.env.ANTHROPIC_AUTH_TOKEN = "anthropic-auth-redacted-value";
       process.env.CLAUDE_CODE_OAUTH_TOKEN = "claude-code-oauth-redacted-value";
+      process.env.CLAUDE_CONFIG_DIR = path.join(tmpdir(), "reader-wiki-test-claude-config");
       process.env.CODEX_HOME = path.join(tmpdir(), "reader-wiki-default-codex-home");
       expect(safeCliEnv("codexCli")).not.toHaveProperty("CODEX_API_KEY");
       expect(safeCliEnv("codexCli")).not.toHaveProperty("OPENAI_API_KEY");
-      expect(safeCliEnv("claudeCli")).not.toHaveProperty("ANTHROPIC_API_KEY");
-      expect(safeCliEnv("claudeCli")).not.toHaveProperty("ANTHROPIC_AUTH_TOKEN");
-      expect(safeCliEnv("claudeCli")).not.toHaveProperty("CLAUDE_CODE_OAUTH_TOKEN");
+      expect(safeCliEnv("codexCli")).not.toHaveProperty("ANTHROPIC_API_KEY");
+      expect(safeCliEnv("claudeCli")).toMatchObject({
+        ANTHROPIC_API_KEY: "anthropic-api-key-test-value",
+        ANTHROPIC_AUTH_TOKEN: "anthropic-auth-redacted-value",
+        CLAUDE_CODE_OAUTH_TOKEN: "claude-code-oauth-redacted-value",
+        CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR,
+      });
       expect(safeCliEnv("aiApi")).not.toHaveProperty("CODEX_HOME");
       expect(safeCliEnv("aiApi", { CODEX_HOME: "/tmp/reader-wiki-isolated", READER_WIKI_AI_API_KEY: "credential-value" })).toMatchObject({ CODEX_HOME: "/tmp/reader-wiki-isolated", READER_WIKI_AI_API_KEY: "credential-value" });
     } finally {
@@ -1067,7 +1209,7 @@ describe("api", () => {
       const body = await response.json() as { error?: string };
       expect(body.error).toContain("auth");
       expect(calls.some((call) => call.input.includes("CLI Not Ready"))).toBe(false);
-      expect(calls).toHaveLength(3);
+      expect(calls).toHaveLength(4);
       expect(calls.every((call) => call.input === "")).toBe(true);
     } finally {
       await server.close();

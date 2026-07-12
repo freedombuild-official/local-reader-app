@@ -372,7 +372,6 @@ export function SettingsView({
             settings={aiDraft}
             status={providerStatus}
             testingEntry={testingEntry}
-            repositories={repoDraft}
             dirty={aiDirty}
             onChange={commitAISettings}
             onTestEntry={(entry, settingsSnapshot) => void testEntry(entry, settingsSnapshot)}
@@ -598,7 +597,6 @@ function AIChatSettingsPanel({
   settings,
   status,
   testingEntry,
-  repositories,
   dirty,
   onChange,
   onTestEntry,
@@ -606,7 +604,6 @@ function AIChatSettingsPanel({
   settings: AISettingsState;
   status: AIConnectionStatus;
   testingEntry: AIEntryKind | null;
-  repositories: RepositoryConfigEntryDraft[];
   dirty: boolean;
   onChange: (settings: AISettingsState) => void;
   onTestEntry: (entry: AIEntryKind, settingsSnapshot?: AISettingsState) => void;
@@ -620,6 +617,7 @@ function AIChatSettingsPanel({
   const behaviorCapability = activeEntry ? aiModelBehaviorCapability(settings, activeEntry) : null;
 
   function setActiveEntry(entry: AIEntryKind) {
+    if (!isCliEntryKind(entry)) return;
     const nextSettings = { ...settings, activeEntry: entry };
     onChange(nextSettings);
     onTestEntry(entry, nextSettings);
@@ -658,6 +656,7 @@ function AIChatSettingsPanel({
               settings={aiEntrySettings(settings, entry)}
               status={effectiveAIStatus(settings, entry)}
               active={settings.activeEntry === entry}
+              available={isCliEntryKind(entry)}
               onSetActive={() => setActiveEntry(entry)}
               onClearActive={clearActiveEntry}
             />
@@ -671,7 +670,7 @@ function AIChatSettingsPanel({
               entry="codexCli"
               title={entryLabel("codexCli")}
               subtitle="Existing CLI readiness"
-              note="Checks installation and sign-in, then fails closed because this build cannot prove an all-tools-disabled Codex planner boundary on every supported platform. No login or browser flow is started here."
+              note="Checks the installed CLI, persistent sign-in, and Current repo execution readiness. No login or browser flow is started here."
               configured={configured}
               lastCheckedAt={settings.lastCheckedAtByEntry.codexCli}
               status={effectiveAIStatus(settings, "codexCli")}
@@ -693,7 +692,7 @@ function AIChatSettingsPanel({
               entry="claudeCli"
               title={entryLabel("claudeCli")}
               subtitle="Existing CLI readiness"
-              note="Checks installation and sign-in, then fails closed because the no-tool structured Claude planner has not been integrated and proven with isolated persistent auth in this build."
+              note="Checks the installed CLI, persistent sign-in, and Current repo execution readiness. No login or browser flow is started here."
               configured={configured}
               lastCheckedAt={settings.lastCheckedAtByEntry.claudeCli}
               status={effectiveAIStatus(settings, "claudeCli")}
@@ -766,24 +765,6 @@ function AIChatSettingsPanel({
           />
         </SettingsCard>
       ) : null}
-      <SettingsCard title="Access policy" eyebrow="AI Chat" status="Context-only or Current repo write">
-        <div className="policy-grid">
-          <div className="policy-item ready">
-            <strong>Bounded repository context</strong>
-            <small>Context-only receives selected context. Current repo write also receives a bounded path manifest and only the additional text files it requests through Reader-Wiki; provider-visible read paths are reported after the run.</small>
-          </div>
-          <div className="policy-item">
-            <strong>Current repo write</strong>
-            <small>Choosing this mode and sending an explicit edit request authorizes one guarded run. Deletion additionally requires one exact DELETE: relative/path line per file. The server validates hashes, paths, symlinks, excludes, protected metadata, limits, staging, rollback, and postflight before reporting changes.</small>
-          </div>
-          <div className="policy-item">
-            <strong>Guarded execution</strong>
-            <small>The provider receives no shell or filesystem tool. No Git commit, remote operation, auth flow, model download, plugin run, or app terminal UI is started.</small>
-          </div>
-        </div>
-        <div className="subsection-title">Repository Access</div>
-        <RepositoryAccessList repositories={repositories} />
-      </SettingsCard>
     </section>
   );
 }
@@ -1114,6 +1095,7 @@ function AIEntryCard({
   settings,
   status,
   active,
+  available,
   onSetActive,
   onClearActive,
 }: {
@@ -1121,6 +1103,7 @@ function AIEntryCard({
   settings: AIEntrySettings;
   status: AIConnectionStatus;
   active: boolean;
+  available: boolean;
   onSetActive: () => void;
   onClearActive: () => void;
 }) {
@@ -1139,8 +1122,8 @@ function AIEntryCard({
         <span className={active ? "ready" : ""}>{active ? "Active" : "Inactive"}</span>
         <span className={status.state === "ready" ? "ready" : status.state === "failed" ? "error" : ""}>{aiEntryStatusLabel(entry, status)}</span>
       </div>
-      <button type="button" className="secondary-button" onClick={active ? onClearActive : onSetActive}>
-        {active ? "Clear active entry" : "Set active"}
+      <button type="button" className="secondary-button" disabled={!available} onClick={active ? onClearActive : onSetActive}>
+        {available ? active ? "Clear active entry" : "Set active" : "Comming soon"}
       </button>
     </article>
   );
@@ -1221,10 +1204,10 @@ function entryIcon(entry: AIEntryKind): string {
 }
 
 function entryDescription(entry: AIEntryKind): string {
-  if (entry === "codexCli") return "Installed CLI diagnostics; Current repo write is fail-closed until an all-tools-disabled planner boundary is proven.";
-  if (entry === "claudeCli") return "Installed CLI diagnostics; the no-tool structured planner remains unavailable until isolated auth and conformance are proven.";
-  if (entry === "aiApi") return "Remote provider with context-only or server-validated Current repo text edits.";
-  return "Loopback local provider with context-only or server-validated Current repo text edits.";
+  if (entry === "codexCli") return "Installed Codex CLI entry for the Current repo.";
+  if (entry === "claudeCli") return "Installed Claude Code CLI entry for the Current repo.";
+  if (entry === "aiApi") return "Remote AI provider entry.";
+  return "Local AI runtime entry.";
 }
 
 function Field({ label, value, onChange, wide = false }: { label: string; value: string; onChange: (value: string) => void; wide?: boolean }) {
@@ -1267,23 +1250,6 @@ function ValidationRow({ item }: { item: RepositoryConfigValidation["checks"][nu
         <strong>{item.label}</strong>
         <small>{item.message}</small>
       </div>
-    </div>
-  );
-}
-
-function RepositoryAccessList({ repositories }: { repositories: RepositoryConfigEntryDraft[] }) {
-  if (!repositories.length) return <p className="settings-message">No registered repositories are available for AI Chat access.</p>;
-  return (
-    <div className="repo-access-list" aria-label="Repository Access list">
-      {repositories.map((repo) => (
-        <div key={repo.id || repo.label} className="repo-access-row">
-          <div>
-            <span>{repo.label || repo.id || "Untitled repository"}</span>
-            <small>{repo.defaultPath ? `Default context path: ${repo.defaultPath}` : "No default context path"}</small>
-          </div>
-          <strong>Available</strong>
-        </div>
-      ))}
     </div>
   );
 }

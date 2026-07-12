@@ -812,6 +812,35 @@ main:is(.app-shell, .settings-shell) {
 .right-panel-tabs button { border: 0; border-left: 1px solid #c8d4d8; background: #fff; color: #405058; cursor: pointer; padding: 8px 10px; font-size: 12px; }
 .right-panel-tabs button:first-child { border-left: 0; }
 .right-panel-tabs button.active { background: #123e45; color: #fff; }
+.ai-chat-session-header {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: flex-start;
+  min-height: 38px;
+  max-height: 44px;
+  border-bottom: 1px solid #d8e1e4;
+  background: #f8fbfc;
+  padding: 5px 10px;
+}
+.ai-chat-new-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 26px;
+  border: 1px solid #c8d4d8;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #24333a;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 750;
+  padding: 4px 9px;
+}
+.ai-chat-new-button svg { width: 14px; height: 14px; }
+.ai-chat-new-button:hover { border-color: #aabcc2; background: #eef4f6; }
+.ai-chat-new-button:focus-visible { outline: 2px solid #287888; outline-offset: 2px; }
 .side-panel-body { flex: 1; min-height: 0; padding: var(--rw-side-panel-padding); overflow: auto; scrollbar-width: thin; }
 .side-panel-body.ai-chat-side-panel {
   display: grid;
@@ -2342,6 +2371,7 @@ main:is(.app-shell, .settings-shell) {
 .app-shell[data-color-mode="dark"] .workspace,
 .app-shell[data-color-mode="dark"] .viewer-header,
 .app-shell[data-color-mode="dark"] .right-panel-header,
+.app-shell[data-color-mode="dark"] .ai-chat-session-header,
 .app-shell[data-color-mode="dark"] .tree-sticky-scrollport,
 .app-shell[data-color-mode="dark"] .tree-sticky-row,
 .settings-shell[data-color-mode="dark"] .settings-rail,
@@ -2415,6 +2445,7 @@ main:is(.app-shell, .settings-shell) {
 .app-shell[data-color-mode="dark"] .mode-label,
 .app-shell[data-color-mode="dark"] .right-panel-tabs,
 .app-shell[data-color-mode="dark"] .right-panel-tabs button,
+.app-shell[data-color-mode="dark"] .ai-chat-new-button,
 .app-shell[data-color-mode="dark"] .memo-mode-toggle,
 .app-shell[data-color-mode="dark"] .memo-mode-toggle button,
 .app-shell[data-color-mode="dark"] .viewer-copy-button,

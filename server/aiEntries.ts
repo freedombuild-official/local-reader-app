@@ -1,6 +1,11 @@
+import { access, constants } from "node:fs/promises";
 import { HttpError } from "./errors.js";
 import {
+  claudeAuthenticationProbeArgs,
+  claudeCurrentRepoSandboxSupported,
+  codexCurrentRepoArgs,
   ensureSafeCwd,
+  probeCodexProjectMcpServers,
   resolveAIWorkspace,
   type AICommandRunner,
   runAICommand,
@@ -19,11 +24,12 @@ type ProbeOptions = {
   runner?: AICommandRunner;
   providerRequester?: GuardedProviderRequester;
   signal?: AbortSignal;
+  platform?: NodeJS.Platform;
 };
 
 export async function probeAIEntryReadiness(entry: AIEntryKind, options: ProbeOptions = {}): Promise<AIEntryReadiness> {
   if (entry === "codexCli") return probeCxReadiness(options.runner || runAICommand, options.repo, options.signal);
-  if (entry === "claudeCli") return probeClaudeReadiness(options.runner || runAICommand, options.repo, options.signal);
+  if (entry === "claudeCli") return probeClaudeReadiness(options.runner || runAICommand, options.repo, options.signal, options.platform || process.platform);
   if (entry === "aiApi") return probeProviderReadiness(options.provider, options.repo, options.signal, options.providerRequester);
   if (entry === "localAi") return probeLocalReadiness(options.provider, options.repo, options.signal, options.providerRequester);
   throw new HttpError(400, "Unknown AI entry.");
@@ -38,41 +44,84 @@ async function probeCxReadiness(runner: AICommandRunner, repo?: RepositoryConfig
   const probeCwd = await ensureSafeCwd();
   const version = await runProbe(runner, "codex", ["--version"], probeCwd, "codexCli", signal);
   const login = await runProbe(runner, "codex", ["login", "status"], probeCwd, "codexCli", signal);
-  const help = await runProbe(runner, "codex", ["exec", "--help"], probeCwd, "codexCli", signal);
+  const help = await runProbe(runner, "codex", ["exec", ...codexCurrentRepoArgs(), "--help"], probeCwd, "codexCli", signal);
+  const mcpList = await runCodexMcpProbe(runner, workspace.cwd, signal);
+  const helpText = probeCapabilityText(help);
   const binaryReady = version.ok;
   const authReady = login.ok && codexAuthConfigured(probeText(login));
-  const wrapperReady = false;
-  const workspaceReady = workspace.ready;
+  const wrapperReady = help.ok && codexHelpSupportsRepoWrite(helpText);
+  const mcpIsolationReady = mcpList.ok;
+  const workspaceReady = workspace.ready && workspace.repoScoped && workspace.writable;
   const checks = [
     check("binary", "Binary", binaryReady, binaryReady ? probeText(version).split(/\r?\n/)[0] || "Installed." : version.error),
     check("auth", "Existing CLI auth", authReady, authReady ? "Existing CLI auth is configured." : login.ok ? "Existing CLI auth was not confirmed." : login.error),
-    check("wrapper", "Current repo-only write boundary", wrapperReady, help.ok ? "Codex CLI Current repo write is fail-closed. Codex 0.144.1 has structured output and a read-only sandbox, but Reader-Wiki cannot prove that every built-in and extension tool is absent from a planner process on every supported platform." : help.error),
-    check("workspace", "Workspace", workspaceReady, workspace.message),
-    check("execution-policy", "Readiness execution policy", true, "Readiness inspects binary, auth, flags, and workspace without running an AI edit. It does not enable CLI write while the Current repo-only boundary is unprovable."),
+    check("wrapper", "Current repo CLI execution", wrapperReady, wrapperReady ? "Codex non-interactive Current repo permission-profile flags are available." : help.ok ? "Required Codex non-interactive workspace flags were not confirmed." : help.error),
+    check("mcp-isolation", "Project MCP isolation", mcpIsolationReady, mcpIsolationReady ? "Project MCP servers can be enumerated and disabled for the Codex run." : mcpList.error),
+    check("workspace", "Workspace", workspaceReady, workspace.repoScoped ? workspace.message : "Select a Current repo before checking CLI readiness."),
+    check("execution-policy", "Readiness execution policy", true, "Readiness inspects binary, existing auth, flags, and Current repo without running an AI request or editing files."),
   ];
   return cliReadinessResult("codexCli", "codex", binaryReady ? probeText(version).split(/\r?\n/)[0] || "" : "", authReady, checks);
 }
 
-async function probeClaudeReadiness(runner: AICommandRunner, repo?: RepositoryConfig, signal?: AbortSignal): Promise<AIEntryReadiness> {
+async function probeClaudeReadiness(runner: AICommandRunner, repo: RepositoryConfig | undefined, signal: AbortSignal | undefined, platform: NodeJS.Platform): Promise<AIEntryReadiness> {
   const workspace = await readinessWorkspace(repo);
   const probeCwd = await ensureSafeCwd();
   const version = await runProbe(runner, "claude", ["--version"], probeCwd, "claudeCli", signal);
   const auth = await runProbe(runner, "claude", ["auth", "status"], probeCwd, "claudeCli", signal);
   const help = await runProbe(runner, "claude", ["-p", "--help"], probeCwd, "claudeCli", signal);
-  const helpText = probeText(help);
+  const helpText = probeCapabilityText(help);
   const binaryReady = version.ok;
-  const authReady = auth.ok && claudeAuthConfigured(probeText(auth));
-  const capabilityPresent = help.ok && claudeHelpSupportsRepoWrite(helpText);
-  const wrapperReady = false;
-  const workspaceReady = workspace.ready;
+  const authConfigured = auth.ok && claudeAuthConfigured(probeText(auth));
+  const sandboxSupported = claudeCurrentRepoSandboxSupported(platform);
+  const wrapperFlagsReady = help.ok && claudeHelpSupportsRepoWrite(helpText);
+  const wrapperReady = wrapperFlagsReady && sandboxSupported;
+  const workspaceReady = workspace.ready && workspace.repoScoped && workspace.writable;
+  const shouldValidateAuthentication = authConfigured && wrapperReady && workspaceReady;
+  const authExecution = shouldValidateAuthentication
+    ? await runClaudeAuthenticationProbe(runner, workspace.cwd, signal)
+    : null;
+  const authReady = authConfigured && (!shouldValidateAuthentication || authExecution?.ok === true);
+  const authMessage = !authConfigured
+    ? auth.ok ? "Existing CLI auth was not confirmed." : auth.error
+    : !shouldValidateAuthentication
+      ? "Existing CLI auth is reported configured; model validation waits for the Current repo execution boundary to be ready."
+      : authExecution?.ok
+        ? "Existing CLI auth completed a no-tool model request."
+        : authExecution?.error || "Claude Code authentication probe failed.";
+  const wrapperMessage = !sandboxSupported
+    ? "Native Windows is not enabled for Claude Code CLI because its Bash sandbox cannot enforce the Current repo-only write boundary. Use macOS, Linux, or Claude Code in WSL2."
+    : wrapperFlagsReady
+      ? "Claude Code native repository tools, isolated settings, acceptEdits, and fail-closed sandbox flags are available."
+      : help.ok ? "Required Claude Code non-interactive edit flags were not confirmed." : help.error;
   const checks = [
     check("binary", "Binary", binaryReady, binaryReady ? probeText(version).split(/\r?\n/)[0] || "Installed." : version.error),
-    check("auth", "Existing CLI auth", authReady, authReady ? "Existing CLI auth is configured." : auth.ok ? "Existing CLI auth was not confirmed." : auth.error),
-    check("wrapper", "Repo-scoped write wrapper", wrapperReady, capabilityPresent ? "Claude Code exposes no-tool structured-output flags, but this build has not integrated and proven an isolated synthetic planner with persistent auth on every supported platform." : help.ok ? "Tool-restricted print flags were not confirmed." : help.error),
-    check("workspace", "Workspace", workspaceReady, workspace.message),
-    check("execution-policy", "Readiness execution policy", true, "Readiness does not run an AI edit and fails closed when Current repo confinement cannot be proven."),
+    check("auth", "Existing CLI auth", authReady, authMessage),
+    check("wrapper", "Current repo CLI execution", wrapperReady, wrapperMessage),
+    check("workspace", "Workspace", workspaceReady, workspace.repoScoped ? workspace.message : "Select a Current repo before checking CLI readiness."),
+    check("execution-policy", "Readiness execution policy", true, "Readiness sends one no-tool authentication prompt but cannot edit repository files."),
   ];
   return cliReadinessResult("claudeCli", "claude", binaryReady ? probeText(version).split(/\r?\n/)[0] || "" : "", authReady, checks);
+}
+
+async function runClaudeAuthenticationProbe(runner: AICommandRunner, cwd: string, signal?: AbortSignal): Promise<{ ok: true } | { ok: false; error: string }> {
+  try {
+    const result = await runner("claude", claudeAuthenticationProbeArgs(), {
+      cwd,
+      env: safeCliEnv("claudeCli"),
+      input: "Reply with exactly READY. Do not use tools.",
+      timeoutMs: 30_000,
+      maxBuffer: 256 * 1024,
+      signal,
+    });
+    const data = JSON.parse(result.stdout || "{}") as { is_error?: boolean; result?: unknown };
+    if (data.is_error || typeof data.result !== "string" || !data.result.trim()) {
+      return { ok: false, error: "Claude Code authentication probe did not return a model response." };
+    }
+    return { ok: true };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { ok: false, error: sanitizeCliText(message) || "Claude Code authentication probe failed." };
+  }
 }
 
 async function probeProviderReadiness(provider: AIProviderSettings | undefined, repo?: RepositoryConfig, signal?: AbortSignal, requester?: GuardedProviderRequester): Promise<AIEntryReadiness> {
@@ -132,16 +181,17 @@ async function probeLocalReadiness(provider: AIProviderSettings | undefined, rep
   return providerReadinessResult("localAi", provider, checks);
 }
 
-async function readinessWorkspace(repo: RepositoryConfig | undefined): Promise<{ cwd: string; ready: boolean; message: string; repoScoped: boolean }> {
+async function readinessWorkspace(repo: RepositoryConfig | undefined): Promise<{ cwd: string; ready: boolean; message: string; repoScoped: boolean; writable: boolean }> {
   if (!repo) {
-    return { cwd: await ensureSafeCwd(), ready: true, message: "Readiness checked without a selected repository.", repoScoped: false };
+    return { cwd: await ensureSafeCwd(), ready: true, message: "Readiness checked without a selected repository.", repoScoped: false, writable: false };
   }
   try {
     const workspace = await resolveAIWorkspace(repo);
-    return { cwd: workspace.root, ready: true, message: "Active repository root is available.", repoScoped: true };
+    await access(workspace.root, constants.W_OK);
+    return { cwd: workspace.root, ready: true, message: "Active repository root is available and writable by the Reader-Wiki process.", repoScoped: true, writable: true };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    return { cwd: await ensureSafeCwd(), ready: false, message: sanitizeCliText(message), repoScoped: false };
+    return { cwd: await ensureSafeCwd(), ready: false, message: sanitizeCliText(message), repoScoped: false, writable: false };
   }
 }
 
@@ -165,8 +215,44 @@ function probeText(result: { stdout: string; stderr: string }): string {
   return sanitizeCliText([result.stdout, result.stderr].filter(Boolean).join("\n"));
 }
 
+function probeCapabilityText(result: { stdout: string; stderr: string }): string {
+  return [result.stdout, result.stderr].filter(Boolean).join("\n");
+}
+
+function codexHelpSupportsRepoWrite(help: string): boolean {
+  return help.includes("--strict-config")
+    && help.includes("--disable")
+    && help.includes("--config")
+    && help.includes("--cd")
+    && help.includes("--ignore-user-config")
+    && help.includes("--skip-git-repo-check")
+    && help.includes("--ephemeral")
+    && help.includes("--json");
+}
+
+async function runCodexMcpProbe(runner: AICommandRunner, cwd: string, signal?: AbortSignal): Promise<{ ok: true } | { ok: false; error: string }> {
+  try {
+    await probeCodexProjectMcpServers(runner, cwd, signal);
+    return { ok: true };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { ok: false, error: sanitizeCliText(message) };
+  }
+}
+
 function claudeHelpSupportsRepoWrite(help: string): boolean {
-  return help.includes("--print") && help.includes("--output-format") && help.includes("--tools") && help.includes("--permission-mode") && help.includes("--safe-mode") && help.includes("--no-session-persistence");
+  return help.includes("--print")
+    && help.includes("--output-format")
+    && help.includes("--tools")
+    && help.includes("--permission-mode")
+    && help.includes("--safe-mode")
+    && help.includes("--no-chrome")
+    && help.includes("--disable-slash-commands")
+    && help.includes("--strict-mcp-config")
+    && help.includes("--mcp-config")
+    && help.includes("--setting-sources")
+    && help.includes("--settings")
+    && help.includes("--no-session-persistence");
 }
 
 function claudeAuthConfigured(stdout: string): boolean {
@@ -174,7 +260,9 @@ function claudeAuthConfigured(stdout: string): boolean {
     const data = JSON.parse(stdout) as { loggedIn?: boolean };
     return data.loggedIn === true;
   } catch {
-    return /logged.?in/i.test(stdout);
+    const normalized = stdout.trim();
+    if (/\bnot\s+logged\s+in\b/i.test(normalized) || /\blogged\s+out\b/i.test(normalized)) return false;
+    return /\blogged.?in\b/i.test(normalized);
   }
 }
 
@@ -185,15 +273,15 @@ function codexAuthConfigured(stdout: string): boolean {
 }
 
 function cliReadinessResult(entry: AICliEntryKind, binaryName: "codex" | "claude", version: string, authReady: boolean, checks: Check[]): AIEntryReadiness {
-  const ready = false;
-  const status = readinessStatus(false, checks, firstError(checks));
+  const ready = checks.every((item) => item.status === "ready");
+  const status = readinessStatus(ready, checks, ready ? `${entryLabel(entry)} Current repo execution is ready.` : firstError(checks));
   const settings: CliAIEntrySettings = {
     entry,
     binaryName,
     version,
     authState: authReady ? "configured" : "notConfigured",
-    readOnlyWrapperState: "notReady",
-    executionMode: "unknown",
+    readOnlyWrapperState: ready ? "ready" : "notReady",
+    executionMode: ready ? "repoWrite" : "unknown",
     lastCheckedAt: status.checkedAt,
     readinessMessage: status.message,
   };
@@ -257,7 +345,7 @@ function readinessStatus(ready: boolean, checks: Check[], message: string): AICo
           ? "substrate_missing"
           : "wrapper_not_ready";
   const nextAction = failed?.id === "auth"
-    ? "Complete persistent sign-in with the CLI outside Reader-Wiki, then check readiness again. Credential-like environment variables are not forwarded."
+    ? "Complete persistent sign-in or correct the CLI authentication environment outside Reader-Wiki, then check readiness again. Reader-Wiki does not display or store credential values."
     : failed?.id === "protocol"
       ? "Choose a model that returns the strict versioned Reader-Wiki JSON protocol, then check readiness again."
     : failed?.id === "workspace"

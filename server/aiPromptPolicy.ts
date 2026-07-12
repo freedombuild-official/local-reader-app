@@ -14,7 +14,7 @@ export type AIChatRuntimePrompt = {
 };
 
 const DEFAULT_PROMPT_PATH = path.join(process.cwd(), "prompts", "ai-chat-system.md");
-const DEFAULT_PROMPT_VERSION = "2.2.0";
+const DEFAULT_PROMPT_VERSION = "2.3.0";
 const MAX_ATTACHMENT_CONTEXT_CHARS = 12000;
 
 export function loadAIChatSystemPrompt(): AIChatSystemPrompt {

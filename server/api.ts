@@ -1,9 +1,10 @@
 import { createHash, randomUUID } from "node:crypto";
+import { access, constants } from "node:fs/promises";
 import path from "node:path";
 import { json as expressJson, type NextFunction, type Request, type Response, Router } from "express";
 import { HttpError, isHttpError } from "./errors.js";
 import { buildAIChatContextForRepository } from "./aiContext.js";
-import { requestRepoWriteAIChatCompletion, type AICommandRunner } from "./aiCliAdapters.js";
+import { requestRepoWriteAIChatCompletion, resolveAIWorkspace, type AICommandRunner } from "./aiCliAdapters.js";
 import { probeAIEntryReadiness } from "./aiEntries.js";
 import { aiChatSystemPromptPath } from "./aiPromptPolicy.js";
 import { assertGuardedRepoContextPaths, buildGuardedRepoPathPolicy, requestGuardedRepoWriteAIChatCompletion, sanitizeGuardedAIChatContext, type GuardedProviderRequester } from "./guardedRepoEdits.js";
@@ -73,7 +74,10 @@ export function createApiRouter(registryOrConfigPath: RepositoryRegistry | strin
   }
 
   async function ensureReadinessAttestation(target: AIChatExecutionTarget, repo: RepositoryConfig, revision: string, signal: AbortSignal): Promise<void> {
-    if (refreshReadinessAttestation(target, repo.id, revision)) return;
+    if (refreshReadinessAttestation(target, repo.id, revision)) {
+      if (isCliTarget(target)) await assertCliWorkspaceWritable(repo);
+      return;
+    }
     const provider = "provider" in target ? target.provider : undefined;
     const entry = targetEntry(target);
     const readiness = await probeAIEntryReadiness(entry, {
@@ -522,8 +526,12 @@ function isDirectProviderTarget(target: AIChatExecutionTarget): target is Extrac
   return target.kind === "codexBackedProvider" || target.kind === "codexBackedLocal";
 }
 
+function isCliTarget(target: AIChatExecutionTarget): target is Extract<AIChatExecutionTarget, { kind: "codexCli" | "claudeCli" }> {
+  return target.kind === "codexCli" || target.kind === "claudeCli";
+}
+
 function usesGuardedRepoContext(target: AIChatExecutionTarget): boolean {
-  return isDirectProviderTarget(target) ? providerExecutionMode(target.provider) === "repoWrite" : true;
+  return isDirectProviderTarget(target) && providerExecutionMode(target.provider) === "repoWrite";
 }
 
 function contextOnlyRunSummary(target: Extract<AIChatExecutionTarget, { kind: "codexBackedProvider" | "codexBackedLocal" }>): AIChatRunSummary {
@@ -562,7 +570,17 @@ function requestAbortScope(request: Request, response: Response): { signal: Abor
 
 function readinessAttestationKey(entry: AIEntryKind, repoId: string, revision: string, provider: AIProviderSettings | undefined): string {
   const fingerprint = createHash("sha256").update(JSON.stringify(providerAttestationSnapshot(provider))).digest("hex");
-  return `${entry}:${repoId}:${revision}:${fingerprint}`;
+  const scope = entry === "codexCli" || entry === "claudeCli" ? "cli-session" : `${repoId}:${revision}`;
+  return `${entry}:${scope}:${fingerprint}`;
+}
+
+async function assertCliWorkspaceWritable(repo: RepositoryConfig): Promise<void> {
+  const workspace = await resolveAIWorkspace(repo);
+  try {
+    await access(workspace.root, constants.W_OK);
+  } catch {
+    throw new HttpError(409, "The selected Current repo is not writable by the Reader-Wiki process.", { code: "workspace_not_ready" });
+  }
 }
 
 function providerAttestationSnapshot(provider: AIProviderSettings | undefined): Record<string, string> {
