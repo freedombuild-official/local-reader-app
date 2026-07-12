@@ -4,12 +4,25 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   loadRepositoryConfigState,
+  repositoryConfigPathFromEnv,
   saveRepositoryConfigDraft,
   validateRepositoryConfigDraft,
 } from "../server/repositoryConfig.js";
 import { loadConfigRepositories } from "../server/repositoryRegistry.js";
 
 describe("repository config safety", () => {
+  it("prefers the Local Reader App config variable and keeps the legacy fallback", () => {
+    const packageRoot = "/tmp/local-reader-app";
+    expect(repositoryConfigPathFromEnv(packageRoot, {
+      LOCAL_READER_APP_CONFIG: "/tmp/canonical.yaml",
+      READER_WIKI_CONFIG: "/tmp/legacy.yaml",
+    })).toBe("/tmp/canonical.yaml");
+    expect(repositoryConfigPathFromEnv(packageRoot, {
+      READER_WIKI_CONFIG: "/tmp/legacy.yaml",
+    })).toBe("/tmp/legacy.yaml");
+    expect(repositoryConfigPathFromEnv(packageRoot, {})).toBe(path.join(packageRoot, "repositories.yaml"));
+  });
+
   it("rejects regular-file, duplicate, and nested repository roots", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "reader-wiki-config-roots-"));
     const nested = path.join(root, "nested");

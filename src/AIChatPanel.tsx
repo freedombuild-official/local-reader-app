@@ -346,7 +346,7 @@ export function AIChatPanel({ aiSettings, session, onSessionChange, modelBehavio
       if (abortRef.current !== controller) return;
       setCanceling(false);
       cancelRequestedRef.current = false;
-      updateSession((current) => ({ ...current, error: "Reader-Wiki could not confirm cancellation. The CLI may still be running, so close it before continuing." }));
+      updateSession((current) => ({ ...current, error: "Local Reader App could not confirm cancellation. Close the CLI, review the Current repo, restart the Local Reader App server, and reload the page before continuing." }));
     }
   }
 
@@ -633,10 +633,10 @@ function describeAIChatFailure(error: unknown, details?: unknown): string {
   const requestError = error instanceof AIChatRequestError ? error : null;
   const code = detail.code || requestError?.code || "";
   if (code === "guarded_rollback_incomplete" || detail.rollbackState === "unverified") {
-    return "The edit could not be completed, and Reader-Wiki could not confirm that every partial change was restored. Review the Current repo before continuing.";
+    return "The edit could not be completed, and Local Reader App could not confirm that every partial change was restored. Review the Current repo before continuing.";
   }
   if (detail.processTreeUnverified) {
-    return "AI Chat stopped unexpectedly, and Reader-Wiki could not confirm that the CLI process ended. Close the CLI before continuing.";
+    return "AI Chat stopped unexpectedly, and Local Reader App could not confirm that the CLI process ended. Close the CLI, review the Current repo, restart the Local Reader App server, and reload the page before continuing.";
   }
   if (code === "readiness_renewal_failed") {
     return "AI Chat authorization expired. Check the active AI Entry in Settings before trying again.";
@@ -654,8 +654,8 @@ function describeAIChatFailure(error: unknown, details?: unknown): string {
 
 function describeRepositoryRefreshFailure(retry: boolean): string {
   return retry
-    ? "Reader-Wiki still could not refresh the Current repo. Try the repository refresh again."
-    : "The request finished, but Reader-Wiki could not refresh the Current repo. Retry the repository refresh.";
+    ? "Local Reader App still could not refresh the Current repo. Try the repository refresh again."
+    : "The request finished, but Local Reader App could not refresh the Current repo. Retry the repository refresh.";
 }
 
 function failureDetail(value: unknown): {

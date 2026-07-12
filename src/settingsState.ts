@@ -256,7 +256,7 @@ export function derivedAIStatus(entry: AIEntrySettings | null): AIConnectionStat
       return aiStatus("configured", "wrapper_not_ready", "warning", entry.readinessMessage || "CLI auth is configured, but the repo-scoped write wrapper is not confirmed.", "Run readiness check for this CLI entry.", entry.lastCheckedAt || "");
     }
     if (entry.authState === "notConfigured") {
-      return aiStatus("notConfigured", "cli_auth_missing", "warning", entry.readinessMessage || "CLI auth is not configured.", "Complete persistent sign-in with the CLI outside Reader-Wiki, then check readiness again.", entry.lastCheckedAt || "");
+      return aiStatus("notConfigured", "cli_auth_missing", "warning", entry.readinessMessage || "CLI auth is not configured.", "Complete persistent sign-in with the CLI outside Local Reader App, then check readiness again.", entry.lastCheckedAt || "");
     }
     return aiStatus("notConfigured", "needs_test", "info", entry.readinessMessage || "CLI readiness has not been checked.", "Run readiness check for this CLI entry.", entry.lastCheckedAt || "");
   }
@@ -495,7 +495,7 @@ function modelBehaviorCapabilityForEntry(entry: AIEntrySettings): AIModelBehavio
     return {
       kind: "none",
       label: "Model default",
-      description: "This local model does not advertise a Reader-Wiki behavior control.",
+      description: "This local model does not advertise a Local Reader App behavior control.",
     };
   }
   return {

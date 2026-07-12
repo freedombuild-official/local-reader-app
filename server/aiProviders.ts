@@ -57,7 +57,7 @@ class ProviderPolicyError extends Error {
 
 class ProviderResponseTooLargeError extends Error {
   constructor() {
-    super("Provider response exceeded the Reader-Wiki byte limit.");
+    super("Provider response exceeded the Local Reader App byte limit.");
     this.name = "ProviderResponseTooLargeError";
   }
 }
@@ -78,7 +78,7 @@ export async function testAIConnection(provider: AIProviderSettings, signal?: Ab
       if (modelVisibility) return modelVisibility;
       const content = await requestProviderText({
         provider,
-        messages: [{ role: "user", content: "Reply with Reader-Wiki ready." }],
+        messages: [{ role: "user", content: "Reply with Local Reader App ready." }],
         signal: timeoutSignal,
       });
       assertProviderContent(content);
@@ -607,7 +607,7 @@ async function testModelVisibility(provider: AIProviderSettings, signal: AbortSi
   const data = await readProviderJson<{ data?: Array<{ id?: string }> }>(response);
   const ids = (data.data || []).map((item) => item.id || "").filter(Boolean);
   if (ids.length && !ids.includes(provider.model)) {
-    return status("failed", "model_missing", "warning", "Model is not visible at this endpoint.", "Check the model name or load it in your local runtime outside Reader-Wiki.");
+    return status("failed", "model_missing", "warning", "Model is not visible at this endpoint.", "Check the model name or load it in your local runtime outside Local Reader App.");
   }
   return null;
 }
@@ -657,7 +657,7 @@ function safeProviderErrorStatus(error: unknown): AIConnectionStatus {
     return status("failed", "invalid_endpoint", "error", error.message, "Use HTTPS for remote AI APIs or an explicit loopback endpoint for Local AI.");
   }
   if (error instanceof ProviderResponseTooLargeError) {
-    return status("failed", "provider_http_error", "error", "Provider response exceeded the Reader-Wiki byte limit.", "Reduce the response size or choose a smaller model output.");
+    return status("failed", "provider_http_error", "error", "Provider response exceeded the Local Reader App byte limit.", "Reduce the response size or choose a smaller model output.");
   }
   if (error instanceof ProviderProtocolError) {
     return status("failed", "provider_http_error", "error", error.message, "Check the provider API format and model response shape.");

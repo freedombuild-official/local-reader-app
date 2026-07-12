@@ -18,14 +18,21 @@ const DEFAULT_PROMPT_VERSION = "2.3.0";
 const MAX_ATTACHMENT_CONTEXT_CHARS = 12000;
 
 export function loadAIChatSystemPrompt(): AIChatSystemPrompt {
-  const customPromptPath = process.env.READER_WIKI_AI_CHAT_SYSTEM_PROMPT;
+  const customPromptPath = configuredAIChatSystemPromptPath();
   const promptPath = aiChatSystemPromptPath();
   const raw = readFileSync(promptPath, "utf8");
   return parseMarkdownPrompt(raw, promptPath, customPromptPath ? undefined : DEFAULT_PROMPT_VERSION);
 }
 
-export function aiChatSystemPromptPath(): string {
-  return process.env.READER_WIKI_AI_CHAT_SYSTEM_PROMPT || DEFAULT_PROMPT_PATH;
+export function aiChatSystemPromptPath(
+  env: NodeJS.ProcessEnv = process.env,
+  defaultPromptPath = DEFAULT_PROMPT_PATH,
+): string {
+  return configuredAIChatSystemPromptPath(env) || defaultPromptPath;
+}
+
+function configuredAIChatSystemPromptPath(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  return env.LOCAL_READER_APP_AI_CHAT_SYSTEM_PROMPT || env.READER_WIKI_AI_CHAT_SYSTEM_PROMPT;
 }
 
 export function buildAIChatRuntimePrompt(

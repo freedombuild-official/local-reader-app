@@ -63,15 +63,15 @@ export async function readGuardedRepoFile(repo: RepositoryConfig, inputPath: unk
   try {
     const openedStat = await handle.stat();
     if (!openedStat.isFile()) throw new HttpError(400, "The requested path must be a regular file.");
-    if (openedStat.size > maxBytes) throw new HttpError(413, "The requested file exceeds the Reader-Wiki byte limit.");
+    if (openedStat.size > maxBytes) throw new HttpError(413, "The requested file exceeds the Local Reader App byte limit.");
     await assertOpenedFileBoundary(repo, resolved, handle.fd, openedStat);
     const bytes = await handle.readFile();
     const finalStat = await handle.stat();
     if (finalStat.size > maxBytes || bytes.byteLength > maxBytes) {
-      throw new HttpError(413, "The requested file exceeds the Reader-Wiki byte limit.");
+      throw new HttpError(413, "The requested file exceeds the Local Reader App byte limit.");
     }
     if (finalStat.dev !== openedStat.dev || finalStat.ino !== openedStat.ino || finalStat.size !== bytes.byteLength) {
-      throw new HttpError(409, "The file changed while Reader-Wiki was reading it. Retry the request.");
+      throw new HttpError(409, "The file changed while Local Reader App was reading it. Retry the request.");
     }
     await assertOpenedFileBoundary(repo, resolved, handle.fd, finalStat);
     return { resolved, stat: finalStat, bytes };
@@ -87,7 +87,7 @@ async function assertNoSymlinkComponents(rootRealPath: string, relativePath: str
     const component = await lstat(current).catch(() => {
       throw new HttpError(404, "The requested path was not found.");
     });
-    if (component.isSymbolicLink()) throw new HttpError(403, "Symbolic links are disabled by the Reader-Wiki safe file policy.");
+    if (component.isSymbolicLink()) throw new HttpError(403, "Symbolic links are disabled by the Local Reader App safe file policy.");
   }
 }
 
@@ -112,14 +112,14 @@ export async function assertOpenedFileBoundary(
   }
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const currentRealPath = await realpath(resolved.realPath).catch(() => {
-      throw new HttpError(409, "The file path changed while Reader-Wiki was opening it. Retry the request.");
+      throw new HttpError(409, "The file path changed while Local Reader App was opening it. Retry the request.");
     });
     if (!isInsideRoot(resolved.rootRealPath, currentRealPath) || isExcludedRealPath(repo, resolved.rootRealPath, currentRealPath)) {
       throw new HttpError(403, "The opened file escaped the repository boundary.");
     }
     const pathStat = await stat(currentRealPath);
     if (pathStat.dev !== openedStat.dev || pathStat.ino !== openedStat.ino) {
-      throw new HttpError(409, "The file path changed while Reader-Wiki was opening it. Retry the request.");
+      throw new HttpError(409, "The file path changed while Local Reader App was opening it. Retry the request.");
     }
   }
 }

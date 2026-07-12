@@ -1,0 +1,13 @@
+cff-version: 1.2.0
+message: "If you use Local Reader App, please cite it using this metadata."
+title: "Local Reader App"
+type: software
+version: 0.1.0
+authors:
+  - family-names: "Komada"
+    given-names: "Ryusei"
+    affiliation: "FreedomBuild"
+    email: "info.freedombuild@gmail.com"
+repository-code: "https://github.com/freedombuild-official/local-reader-app"
+url: "https://github.com/freedombuild-official/local-reader-app"
+license: Apache-2.0

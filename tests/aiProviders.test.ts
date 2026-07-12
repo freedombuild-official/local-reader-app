@@ -87,7 +87,7 @@ describe("AI provider network boundary", () => {
     app.use(express.json());
     app.get("/v1/models", (_request, response) => response.redirect("/v1/redirected-models"));
     app.get("/v1/redirected-models", (_request, response) => response.json({ data: [{ id: "wanted-model" }] }));
-    app.post("/v1/chat/completions", (_request, response) => response.json({ choices: [{ message: { content: emptyResponse ? "" : "Reader-Wiki ready." } }] }));
+    app.post("/v1/chat/completions", (_request, response) => response.json({ choices: [{ message: { content: emptyResponse ? "" : "Local Reader App ready." } }] }));
     const server = await listen(app);
     try {
       await expect(testAIConnection(localProvider(`${server.url}/v1`))).resolves.toMatchObject({

@@ -144,5 +144,5 @@ function normalizeSource(source: AIChatContextPathRequest["source"], role: AICha
 
 function truncateContext(content: string): string {
   if (content.length <= MAX_CONTEXT_CHARS) return content;
-  return `${content.slice(0, MAX_CONTEXT_CHARS)}\n\n[Reader-Wiki omitted the rest of this large file.]`;
+  return `${content.slice(0, MAX_CONTEXT_CHARS)}\n\n[Local Reader App omitted the rest of this large file.]`;
 }

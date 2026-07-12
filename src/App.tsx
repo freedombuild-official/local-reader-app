@@ -419,13 +419,13 @@ export function App() {
     try {
       const nextRepos = await fetchRepos();
       const nextRepo = nextRepos.find((repo) => repo.id === repoId);
-      if (!nextRepo) throw new Error("The repository changed, but it is no longer registered in Reader-Wiki.");
+      if (!nextRepo) throw new Error("The repository changed, but it is no longer registered in Local Reader App.");
       if (repoReloadTokenRef.current !== reloadToken || activeRepoIdRef.current !== repoId) return false;
 
       const opened = await openRepository(repoId, nextRepo.revision);
       if (repoReloadTokenRef.current !== reloadToken || activeRepoIdRef.current !== repoId) return false;
       if (opened.repoId !== repoId || opened.revision !== nextRepo.revision) {
-        throw new Error("The repository changed again before Reader-Wiki could refresh the viewer.");
+        throw new Error("The repository changed again before Local Reader App could refresh the viewer.");
       }
 
       reposRef.current = nextRepos;
@@ -812,7 +812,7 @@ export function App() {
     <main className={appShellClass} data-color-mode={basicSettings.colorMode}>
       <aside className="sidebar" aria-label="Repositories and files">
         <header className="sidebar-header">
-          <h1>Reader-Wiki</h1>
+          <h1>Local Reader App</h1>
           <p>Local repository reader with optional AI Chat</p>
         </header>
         {loading ? <p className="state-text">Loading repositories...</p> : null}
@@ -925,7 +925,7 @@ export function App() {
                   tabIndex={-1}
                   aria-disabled={aiPathSendReady ? undefined : "true"}
                   className={aiPathSendReady ? "" : "disabled"}
-                  title={aiPathSendReady ? "Send a path to AI Chat" : "AI Entry の認証が必要です"}
+                  title={aiPathSendReady ? "Send a path to AI Chat" : "AI Entry authentication is required"}
                   onClick={sendPathFromMenuToAIChat}
                 >
                   Send a path to AI Chat
@@ -934,7 +934,7 @@ export function App() {
             ) : null}
           </div>
         ) : null}
-        <div className="sidebar-settings-zone" aria-label="Reader-Wiki settings">
+        <div className="sidebar-settings-zone" aria-label="Local Reader App settings">
           <button type="button" className="icon-button sidebar-settings-button" aria-label="Open Settings" title="Open Settings" onClick={() => openSettings("basic")}>
             <SettingsIcon aria-hidden="true" focusable="false" />
           </button>
@@ -1659,7 +1659,7 @@ function MetadataFileState({ file }: { file: FileResponse }) {
     <div className="binary-state metadata-state" data-viewer-status={status}>
       <span className={`binary-state-marker ${status === "oversized" ? "binary" : status}`} aria-hidden="true" />
       <h2>{title}</h2>
-      <p>Reader-Wiki is showing metadata for this file. Use File Information for size, type, path, and Git state.</p>
+      <p>Local Reader App is showing metadata for this file. Use File Information for size, type, path, and Git state.</p>
     </div>
   );
 }
@@ -1775,7 +1775,7 @@ function RightPanel({ mode, onModeChange, file, outline, onHeadingSelect, memoTe
         <div className="ai-chat-session-header" role="toolbar" aria-label="AI Chat session actions">
           <button type="button" className="ai-chat-new-button" onClick={onNewAIChat}>
             <Plus aria-hidden="true" focusable="false" />
-            新規チャット
+            New chat
           </button>
         </div>
       ) : null}
@@ -1958,7 +1958,7 @@ function MemoPanel({ memoText, memoMode, onMemoTextChange, onMemoModeChange }: {
   }
 
   function handleDownloadMemo() {
-    downloadTextFile("reader-wiki-memo.md", memoText, "text/markdown;charset=utf-8");
+    downloadTextFile("local-reader-app-memo.md", memoText, "text/markdown;charset=utf-8");
   }
 
   return (

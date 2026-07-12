@@ -1,9 +1,29 @@
 {
-  "name": "reader-wiki",
+  "name": "local-reader-app",
   "version": "0.1.0",
-  "description": "Source-only local HTTP wiki viewer with optional repo-scoped AI Chat.",
+  "description": "Source-only local browser workspace for reading folders, files, and Git changes with optional repo-scoped AI Chat.",
   "private": true,
-  "license": "MIT",
+  "license": "Apache-2.0",
+  "author": {
+    "name": "Ryusei Komada",
+    "email": "info.freedombuild@gmail.com",
+    "url": "https://github.com/freedombuild-official"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/freedombuild-official/local-reader-app.git"
+  },
+  "homepage": "https://github.com/freedombuild-official/local-reader-app#readme",
+  "bugs": {
+    "url": "https://github.com/freedombuild-official/local-reader-app/issues"
+  },
+  "keywords": [
+    "local",
+    "reader",
+    "markdown",
+    "git",
+    "ai-chat"
+  ],
   "type": "module",
   "engines": {
     "node": ">=22.13.0 <27"

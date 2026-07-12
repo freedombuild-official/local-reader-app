@@ -1,15 +1,24 @@
-# Reader-Wiki
+# Local Reader App
 
 言語: [English](README.md) | [日本語](README.ja.md)
 
-Reader-Wiki は、Mac または Windows PC 上のフォルダを、ブラウザで読むための個人用閲覧領域に変えるアプリです。文書、ソースコード、テキスト、画像、PDF、ローカルの Git 変更を、別サービスへ移さずに閲覧できます。
+このREADMEは、package version `0.1.0`にある現在のdefault-branch sourceを説明します。
 
-通常の閲覧では、登録したフォルダ内のファイルを編集しません。Reader-Wiki は自分のコンピュータ上の `http://127.0.0.1:5173/` で動作します。AI Chat を有効にしない限り、リポジトリの内容を AI サービスへ送信しません。送信前にはリポジトリから渡す情報を取り外せるチップで表示し、ルートのルールファイルを自動提案する場合もあります。
+Local Reader App は、Mac または Windows PC 上のフォルダを、ブラウザで読むための個人用閲覧領域に変えるアプリです。文書、ソースコード、テキスト、画像、PDF、ローカルの Git 変更を、別サービスへ移さずに閲覧できます。
 
-現在の Reader-Wiki は、GitHub からソースファイルを入手して動かします。`.dmg`、`.exe`、App Store 用パッケージ、オンラインアカウント、ワンクリックのインストーラーはありません。以下の手順に沿って、ソースファイルのダウンロードから最初のフォルダを開くところまで進められます。
+通常の閲覧では、登録したフォルダ内のファイルを編集しません。Local Reader App は自分のコンピュータ上の `http://127.0.0.1:5173/` で動作します。AI Chat を有効にしない限り、リポジトリの内容を AI サービスへ送信しません。AIへの送信前にはCurrent repoから選んだcontextを取り外せるchipで表示し、Current repo rootのrule fileを自動提案する場合もあります。
+
+現在の Local Reader App は、GitHub からソースファイルを入手して動かします。`.dmg`、`.exe`、App Store 用パッケージ、オンラインアカウント、ワンクリックのインストーラーはありません。以下の手順に沿って、ソースファイルのダウンロードから最初のフォルダを開くところまで進められます。
+
+## プロジェクトと作者
+
+Local Reader App は **[Ryusei Komada](https://github.com/freedombuild-official)** が制作し、**FreedomBuild** の屋号で公開するプロジェクトです。公式ソースは [`freedombuild-official/local-reader-app`](https://github.com/freedombuild-official/local-reader-app) です。
+
+Ryusei Komada および各 contributor は、それぞれの成果物について著作権を保持します。Apache License 2.0 が許諾する内容は [LICENSE](LICENSE) に定められており、作者表示を消したり、改変版を FreedomBuild の公式版として表示したりする権利を与えるものではありません。プロジェクトの識別表示と帰属の詳細は、[AUTHORS.md](AUTHORS.md)、[NOTICE](NOTICE)、[TRADEMARKS.md](TRADEMARKS.md)を参照してください。
 
 ## 目次
 
+- [プロジェクトと作者](#プロジェクトと作者)
 - [できること](#できること)
 - [macOSへのインストールと起動](#macosへのインストールと起動)
 - [Windowsへのインストールと起動](#windowsへのインストールと起動)
@@ -17,12 +26,14 @@ Reader-Wiki は、Mac または Windows PC 上のフォルダを、ブラウザ�
 - [画面の構成を理解する](#画面の構成を理解する)
 - [任意のAI Chatを設定する](#任意のai-chatを設定する)
 - [安全性とプライバシー](#安全性とプライバシー)
+- [セキュリティ報告](#セキュリティ報告)
 - [サポートと責任範囲](#サポートと責任範囲)
-- [Reader-Wikiを更新する](#reader-wikiを更新する)
-- [Reader-Wikiをアンインストールする](#reader-wikiをアンインストールする)
+- [Local Reader Appを更新する](#local-reader-appを更新する)
+- [Local Reader Appをアンインストールする](#local-reader-appをアンインストールする)
 - [トラブルシューティング](#トラブルシューティング)
+- [技術概要と公開インターフェース](#技術概要と公開インターフェース)
 - [開発に参加する人向け](#開発に参加する人向け)
-- [License](#license)
+- [ライセンス、帰属表示、商標](#ライセンス帰属表示商標)
 
 ## できること
 
@@ -37,7 +48,7 @@ Reader-Wiki は、Mac または Windows PC 上のフォルダを、ブラウザ�
 - 文字サイズ、Light/Dark 表示、作業領域の幅を調整する。
 - 任意で、明示的に選んだファイルやフォルダについて AI サービスへ質問する。
 
-Reader-Wiki は閲覧を主目的とするアプリであり、汎用のファイル編集ソフト、ターミナル、Git クライアント、遠隔ファイルサーバーではありません。通常閲覧は登録したフォルダへ書き込みません。対応する任意のAI Chat **Current repo write**だけが明示的な例外で、準備確認の成功後にCurrent repoだけを編集できます。Repository Settings の保存で更新するのは Reader-Wiki 自身の設定だけで、Memo のダウンロードは利用者が明示的に指示したブラウザからの保存です。一覧から項目を削除しても、登録したフォルダは削除しません。
+Local Reader App は閲覧を主目的とするアプリであり、汎用のファイル編集ソフト、ターミナル、Git クライアント、遠隔ファイルサーバーではありません。通常閲覧は登録したフォルダへ書き込みません。対応する任意のAI Chat **Current repo write**だけが明示的な例外で、準備確認の成功後に、そのrunで選択したCurrent repoだけを編集できます。Repository Settings の保存で更新するのは Local Reader App 自身の設定だけで、Memo のダウンロードは利用者が明示的に指示したブラウザからの保存です。一覧から項目を削除しても、登録したフォルダは削除しません。
 
 ## インストール前の準備
 
@@ -53,14 +64,16 @@ Reader-Wiki は閲覧を主目的とするアプリであり、汎用のファ�
 
 AI ソフトウェアと API キーは任意です。AI 以外の閲覧機能は、どれも AI なしで使えます。
 
-## GitHubからReader-Wikiを入手する
+`0.1.0`でsupported end-user installation pathとして説明するのはmacOSとnative Windowsです。LinuxとWSL2はsource-level CIの対象ですが、end-user向けinstall/lifecycle guideを実機検証していないため、supported user platformとは主張しません。後段のLinux/WSL2への言及はClaude Code CLIのsecurity classificationだけを説明します。文書化済みsetupにはmacOSまたはnative Windowsを使ってください。
+
+## GitHubからLocal Reader Appを入手する
 
 このリポジトリの GitHub ページで、どちらかを選びます。
 
 1. 最も簡単な方法は、**Code** > **Download ZIP** を選び、ZIP を展開して、そのフォルダの場所を覚えておくことです。
 2. Git をすでに使っている場合は、**Code** からこの GitHub ページに表示された HTTPS URL をコピーし、その URL からリポジトリを複製します。
 
-以下のコマンドでは、例として `/path/to/reader-wiki` または `C:\path\to\reader-wiki` を使います。ダウンロードまたは複製したフォルダの実際の場所に置き換えてください。
+以下のコマンドでは、例として `/path/to/local-reader-app` または `C:\path\to\local-reader-app` を使います。ダウンロードまたは複製したフォルダの実際の場所に置き換えてください。
 
 ## macOSへのインストールと起動
 
@@ -68,7 +81,7 @@ AI ソフトウェアと API キーは任意です。AI 以外の閲覧機能は
 
 1. 公式ダウンロードページから、対応するバージョンの Node.js をインストールします。
 2. **Terminal** を開きます。
-3. Node.js と npm を確認し、Reader-Wiki が使うバージョンの pnpm をインストールします。
+3. Node.js と npm を確認し、Local Reader App が使うバージョンの pnpm をインストールします。
 
    ```bash
    node --version
@@ -79,12 +92,12 @@ AI ソフトウェアと API キーは任意です。AI 以外の閲覧機能は
 
 pnpm のシステム全体へのインストールで権限エラーが出た場合は、ファイルシステムの権限をむやみに広げず、公式の [pnpm インストールガイド](https://pnpm.io/10.x/installation) を使ってください。
 
-### Reader-Wikiをインストールする
+### Local Reader Appをインストールする
 
-1. ダウンロードした Reader-Wiki フォルダへ移動します。最も簡単な方法は、Terminal で末尾に半角空白を付けて `cd ` と入力し、Finder から Reader-Wiki フォルダを Terminal へドラッグして `Return` を押すことです。パスを直接入力することもできます。
+1. ダウンロードした Local Reader App フォルダへ移動します。最も簡単な方法は、Terminal で末尾に半角空白を付けて `cd ` と入力し、Finder から Local Reader App フォルダを Terminal へドラッグして `Return` を押すことです。パスを直接入力することもできます。
 
    ```bash
-   cd "/path/to/reader-wiki"
+   cd "/path/to/local-reader-app"
    ```
 
 2. バージョンが固定された依存関係をインストールします。
@@ -118,7 +131,7 @@ pnpm のシステム全体へのインストールで権限エラーが出た場
 
    対象フォルダに `README.md` がない場合は、`defaultPath` を実在する別のファイルへ変更するか、その行を削除します。
 
-5. Reader-Wiki をビルドします。
+5. Local Reader App をビルドします。
 
    ```bash
    pnpm build
@@ -132,7 +145,7 @@ pnpm のシステム全体へのインストールで権限エラーが出た場
 
 7. Terminal を開いたままにして、ブラウザで [http://127.0.0.1:5173/](http://127.0.0.1:5173/) を開きます。Terminal には正確な URL と設定ファイルのパスも表示されます。
 
-8. Reader-Wiki を停止するときは、その Terminal ウィンドウに戻り、`Control+C` を押します。
+8. Local Reader App を停止するときは、その Terminal ウィンドウに戻り、`Control+C` を押します。
 
 ## Windowsへのインストールと起動
 
@@ -142,7 +155,7 @@ pnpm のシステム全体へのインストールで権限エラーが出た場
 
 1. 公式の Windows 用インストーラーで、対応するバージョンの Node.js をインストールします。
 2. **PowerShell** を開きます。
-3. Node.js と npm を確認し、Reader-Wiki が使うバージョンの pnpm をインストールします。
+3. Node.js と npm を確認し、Local Reader App が使うバージョンの pnpm をインストールします。
 
    ```powershell
    node --version
@@ -153,12 +166,12 @@ pnpm のシステム全体へのインストールで権限エラーが出た場
 
 PowerShell で実行ポリシーにより `pnpm.ps1` を実行できないと表示された場合、ポリシーを弱めないでください。以降のコマンドでは、たとえば `pnpm.cmd --version` のように、`pnpm` の代わりに `pnpm.cmd` を使います。
 
-### Reader-Wikiをインストールする
+### Local Reader Appをインストールする
 
-1. 展開または複製した Reader-Wiki フォルダへ移動します。エクスプローラーでそのフォルダを選び、`Shift` を押しながら右クリックして **パスのコピー** を選びます。PowerShell で末尾に半角空白を付けて `Set-Location ` と入力し、コピーしたパスを貼り付けて `Enter` を押します。パスを直接入力することもできます。
+1. 展開または複製した Local Reader App フォルダへ移動します。エクスプローラーでそのフォルダを選び、`Shift` を押しながら右クリックして **パスのコピー** を選びます。PowerShell で末尾に半角空白を付けて `Set-Location ` と入力し、コピーしたパスを貼り付けて `Enter` を押します。パスを直接入力することもできます。
 
    ```powershell
-   Set-Location 'C:\path\to\reader-wiki'
+   Set-Location 'C:\path\to\local-reader-app'
    ```
 
 2. バージョンが固定された依存関係をインストールします。
@@ -196,7 +209,7 @@ PowerShell で実行ポリシーにより `pnpm.ps1` を実行できないと表
 
    対象フォルダに `README.md` がない場合は、`defaultPath` を実在する別のファイルへ変更するか、その行を削除します。
 
-5. Reader-Wiki をビルドします。
+5. Local Reader App をビルドします。
 
    ```powershell
    pnpm build
@@ -210,23 +223,23 @@ PowerShell で実行ポリシーにより `pnpm.ps1` を実行できないと表
 
 7. PowerShell を開いたままにして、ブラウザで [http://127.0.0.1:5173/](http://127.0.0.1:5173/) を開きます。PowerShell には正確な URL と設定ファイルのパスも表示されます。
 
-8. Reader-Wiki を停止するときは、その PowerShell ウィンドウに戻り、`Ctrl+C` を押します。
+8. Local Reader App を停止するときは、その PowerShell ウィンドウに戻り、`Ctrl+C` を押します。
 
-## Reader-Wikiを再び起動する
+## Local Reader Appを再び起動する
 
-最初のビルド後は、通常起動に Reader-Wiki フォルダと `pnpm start` だけが必要です。
+最初のビルド後は、通常起動に Local Reader App フォルダと `pnpm start` だけが必要です。
 
 macOS:
 
 ```bash
-cd "/path/to/reader-wiki"
+cd "/path/to/local-reader-app"
 pnpm start
 ```
 
 Windows PowerShell:
 
 ```powershell
-Set-Location 'C:\path\to\reader-wiki'
+Set-Location 'C:\path\to\local-reader-app'
 pnpm start
 ```
 
@@ -234,15 +247,15 @@ pnpm start
 
 ## 閲覧するフォルダを設定する
 
-Reader-Wiki では登録した各フォルダを「リポジトリ」と呼びますが、Git で管理されていない文書フォルダも登録できます。
+Local Reader App では登録した各フォルダを「リポジトリ」と呼びますが、Git で管理されていない文書フォルダも登録できます。
 
-既定の設定ファイルは、Reader-Wiki フォルダ内の `repositories.yaml` です。このファイルには自分のコンピュータの絶対パスが含まれ、Git の対象から意図的に除外されるため、非公開にしてください。
+既定の設定ファイルは、Local Reader App フォルダ内の `repositories.yaml` です。このファイルには自分のコンピュータの絶対パスが含まれ、Git の対象から意図的に除外されるため、非公開にしてください。
 
 各項目には次の設定値があります。
 
 | 設定値 | 必須 | 意味 |
 | --- | --- | --- |
-| `id` | はい | Reader-Wiki 内で使う一意の名前。 |
+| `id` | はい | Local Reader App 内で使う一意の名前。 |
 | `label` | はい | リポジトリの選択欄に表示する名前。 |
 | `root` | はい | 実在し、読み取れるフォルダの絶対パス。 |
 | `defaultPath` | いいえ | リポジトリ選択時に開く、`root` 内のファイル。例: `README.md`。 |
@@ -250,7 +263,7 @@ Reader-Wiki では登録した各フォルダを「リポジトリ」と呼び�
 
 リポジトリ ID は重複しないようにします。2つの項目が同じフォルダを指すこと、文字の大小または Unicode 正規化だけが異なること、ルートフォルダが親子関係になることは許可されません。これは、表示範囲と AI へ渡す情報の範囲が重なることを防ぐためです。
 
-`.git` は常に非表示です。古い設定に `fetchRemote: true` が残っていても、Reader-Wiki は Git のリモートリポジトリから情報を取得しません。
+`.git` は常に非表示です。古い設定に `fetchRemote: true` が残っていても、Local Reader App は Git のリモートリポジトリから情報を取得しません。
 
 `excludes` の各行では、次の簡単な指定方法を使えます。
 
@@ -259,7 +272,9 @@ Reader-Wiki では登録した各フォルダを「リポジトリ」と呼び�
 - `'*.pem'` のような拡張子の指定。
 - `'secret*'` のように、末尾を `*` にした名前の先頭一致。
 
-先頭が `*` の項目を引用符なしで書くと YAML では別の意味になるため、例のとおり引用符で囲んでください。それ以外のワイルドカード記法には対応しません。自動で除外するのは `.git` だけです。`.env`、鍵ファイル、書き出しデータなどをツリー、AI に渡す候補、直接の HTTP Delivery 対象へ出したくない場合は、自分で機密パスを追加してください。
+先頭が `*` の項目を引用符なしで書くと YAML では別の意味になるため、例のとおり引用符で囲んでください。それ以外のワイルドカード記法には対応しません。exclude matchingはcase-sensitiveなので、実際のpathと同じletter caseを使います。自動で除外するのは `.git` だけです。`.env`、鍵ファイル、書き出しデータなどをtree、Local Reader Appが作るAI context候補、直接のHTTP Delivery対象へ出したくない場合は、自分で機密pathを追加してください。
+
+**`excludes`はnative CLIのaccess boundaryではありません。** Codex CLIとClaude Code CLIは、それぞれのruntime policyに従い、native toolを使うとCurrent repo内のexcluded pathも確認または変更できます。context chipを取り除いても、Local Reader Appが作るinitial contextから外れるだけであり、CLIが後から同じfileやruleを見つけることは防げません。CLIに絶対に触れさせたくないsecretを含むrepositoryでは、CLI Entryを有効にしないでください。
 
 ### Settingsからリポジトリを追加・編集する
 
@@ -275,24 +290,28 @@ Reader-Wiki では登録した各フォルダを「リポジトリ」と呼び�
 
 **Remove from list** は設定項目だけを削除します。フォルダや中のファイルは削除しません。変更したリポジトリ一覧を保存すると、以前のリポジトリ範囲は現行ではなくなるため、使用中の HTTP Delivery セッションは停止します。
 
-Settings を読み込んだ後に別のプログラムが設定を変更した場合、Reader-Wiki は新しいファイルの上書きを拒否します。閲覧画面へ戻り、Settings を開き直してからやり直してください。
+Settings を読み込んだ後に別のプログラムが設定を変更した場合、Local Reader App は新しいファイルの上書きを拒否します。閲覧画面へ戻り、Settings を開き直してからやり直してください。
+
+Repository SettingsのsaveとAI runは同時に実行できません。AI Chat実行中のためsaveが拒否された場合は、runの完了を待つかcancelしてから、もう一度validateしてsaveします。config save中にAI requestが拒否された場合は、save完了後にrequestを再試行します。
 
 ### 別の場所にある設定ファイルを使う
 
 macOS:
 
 ```bash
-READER_WIKI_CONFIG="<absolute-path-to-repositories.yaml>" pnpm start
+LOCAL_READER_APP_CONFIG="<absolute-path-to-repositories.yaml>" pnpm start
 ```
 
 Windows PowerShell:
 
 ```powershell
-$env:READER_WIKI_CONFIG = '<absolute-path-to-repositories.yaml>'
+$env:LOCAL_READER_APP_CONFIG = '<absolute-path-to-repositories.yaml>'
 pnpm start
 ```
 
 Settings は選択された設定ファイルへ保存します。画面からリポジトリ一覧を編集する場合は、そのファイルが書き込み可能である必要があります。
+
+`READER_WIKI_CONFIG` は後方互換用のフォールバックとしてだけ残しています。新しい設定と文書では `LOCAL_READER_APP_CONFIG` を使ってください。
 
 ## 画面の構成を理解する
 
@@ -307,7 +326,7 @@ Settings は選択された設定ファイルへ保存します。画面から�
 ### リポジトリの選択欄とファイルツリー
 
 - **Repository** は、登録済みのルートフォルダを切り替えます。各リポジトリは、現在のページを開いている間、独立したファイルタブを保持します。
-- **Reload repository** は、ローカルディスクからファイルツリーと開いているすべてのタブを再読み込みします。別の編集ソフトやプログラムがファイルを変更した後に使います。Reader-Wiki はファイルシステムを常時監視しません。
+- **Reload repository** は、ローカルディスクからファイルツリーと開いているすべてのタブを再読み込みします。別の編集ソフトやプログラムがファイルを変更した後に使います。Local Reader App はファイルシステムを常時監視しません。
 - **HTTP Delivery** は、一時配信中のファイル数、URL、各セッションの停止ボタンを表示します。
 - **Collapse all folders** は、ルート以外の展開済みフォルダをすべて閉じます。ファイルタブは閉じません。
 - 長いツリーは横スクロールに対応し、上位フォルダが画面上部に残ります。上部に固定された上位フォルダを選ぶと、元の位置へ移動します。
@@ -319,7 +338,7 @@ Settings は選択された設定ファイルへ保存します。画面から�
 
 - **Copy Absolute Path**
 - **Copy Relative Path**
-- ファイルの **Open in New Tab**。ブラウザの別タブではなく、Reader-Wiki 内に別のファイルタブを開く。
+- ファイルの **Open in New Tab**。ブラウザの別タブではなく、Local Reader App 内に別のファイルタブを開く。
 - AI の接続設定が準備確認を通過した後の **Send a path to AI Chat**
 
 右クリックメニューは、`Arrow Up`、`Arrow Down`、`Home`、`End`、`Escape`に対応します。
@@ -346,7 +365,7 @@ Settings は選択された設定ファイルへ保存します。画面から�
 
 ## ファイルを表示する
 
-Reader-Wiki は、ファイル名、内容、サイズから安全な表示方法を選びます。
+Local Reader App は、ファイル名、内容、サイズから安全な表示方法を選びます。
 
 | ファイル | 利用できる表示方法 |
 | --- | --- |
@@ -362,7 +381,7 @@ Reader-Wiki は、ファイル名、内容、サイズから安全な表示方�
 
 **Source** は長い行を折り返して読みやすく表示します。**Raw** は行の構造を維持し、横スクロールを使います。
 
-Rendered Markdown と HTML は、文書内で明示的に参照された HTTPS 画像を読み込むことがあります。この場合、画像の配信元へ接続し、新しく開いた Markdown または HTML は最初に **Rendered** で表示されます。この接続を避ける必要がある場合は、信頼できない文書を Reader-Wiki で開く前に、別のプレーンテキスト編集ソフトで確認してください。
+Rendered Markdownとsandboxed HTMLは、inline CSSの画像URLを含め、文書内で明示的に参照されたHTTPS画像resourceを読み込むことがあります。Content Security Policyはそのほかのremote subresourceを制限し、HTML sandboxはscriptを無効にしますが、許可されたHTTPS画像requestは配信元へ接続します。新しく開いたMarkdownまたはHTMLは最初に**Rendered**で表示されるため、外部requestを避ける必要がある場合は、Local Reader Appで開く前に別のplain-text editorで信頼できない文書を確認してください。
 
 ### 表示できるファイルサイズの上限
 
@@ -400,14 +419,14 @@ Markdown では、**Table of Contents** に H1 から H6 までの見出しと�
 - **Raw** で Markdown テキストを編集する。
 - **Render** で表、タスクリスト、コードブロック操作付きのプレビューを表示する。
 - コピーボタンでメモ全体をコピーする。
-- ダウンロードボタンで、ブラウザから `reader-wiki-memo.md` を明示的に保存する。
+- ダウンロードボタンで、ブラウザから `local-reader-app-memo.md` を明示的に保存する。
 - 削除ボタンで直ちに消去する。
 
 Memo はリポジトリ内のファイルを作成・編集しません。ページを再読み込みまたは閉じる前に、残したい内容をダウンロードしてください。
 
 ## HTTP Deliveryを使う
 
-HTTP Delivery は、選択したファイルに同じローカル Reader-Wiki サーバー上の一時 URL を与え、別のタブで開きます。中央の閲覧領域上部またはファイルタブのメニューから開始します。リポジトリ選択欄の横にある電波塔のボタンで、使用中の URL を開き直すか停止できます。
+HTTP Delivery は、選択したファイルに同じローカル Local Reader App サーバー上の一時 URL を与え、別のタブで開きます。中央の閲覧領域上部またはファイルタブのメニューから開始します。リポジトリ選択欄の横にある電波塔のボタンで、使用中の URL を開き直すか停止できます。
 
 - 同時に最大5ファイルを配信できます。
 - 登録したリポジトリ設定が変わらない間は、同じファイルの Delivery をもう一度開始すると既存の配信を再利用します。
@@ -424,7 +443,7 @@ HTTP Delivery は、選択したファイルに同じローカル Reader-Wiki �
 
 これらの URL はローカルかつ一時的です。トンネル、ルーター規則、リバースプロキシ、公開ファイアウォール規則で外部公開しないでください。
 
-## SettingsでReader-Wikiを調整する
+## SettingsでLocal Reader Appを調整する
 
 歯車ボタンを選んで Settings を開きます。ページを再読み込みせず閲覧画面へ戻れば、現在のタブ、Memo、AI との会話は維持されます。
 
@@ -442,55 +461,59 @@ HTTP Delivery は、選択したファイルに同じローカル Reader-Wiki �
 
 ### AI Chat
 
-1つの AI 接続設定を選び、必要な接続情報だけを入力し、準備確認を実行して、対応するモデルの動作を調整します。AI の設定と認証情報は、`repositories.yaml` やブラウザの永続記憶領域へ書き込みません。
+1つのAI Entryを選び、必要な接続情報だけを入力し、準備確認を実行して、対応するmodelの動作を調整します。Local Reader Appへ入力した値は現在のpageだけに残り、`repositories.yaml`やbrowserの永続記憶領域へ書き込みません。CLIのpersistent sign-inはLocal Reader Appの外にある各CLI自身のstorageへ残ります。
 
 ## 保存されるものを理解する
 
 | 項目 | 保存場所 | ページ再読み込み後 |
 | --- | --- | --- |
-| リポジトリ一覧 | `repositories.yaml`または`READER_WIKI_CONFIG`で選んだファイル | 残る |
+| リポジトリ一覧 | `repositories.yaml`または`LOCAL_READER_APP_CONFIG`で選んだファイル | 残る |
 | 文字サイズ、テーマ、配置 | このローカルサイト用のブラウザ保存領域 | 残る |
 | 開いているファイルタブ | 現在のページのメモリ | 消える |
 | Memo | ダウンロードするまで現在のページのメモリ | 消える |
 | AI との会話 | 現在のページのメモリ | 消える |
-| AI 接続設定と認証情報 | 現在のページのメモリのみ | 消える |
-| HTTP Delivery セッション | 現在の Reader-Wiki サーバープロセス | サーバー停止時に消える |
+| Local Reader App内のAI Entry stateと入力したcredential値 | 現在のpage memoryのみ | 消える |
+| Codex CLIまたはClaude Code CLIのpersistent sign-in | 各CLIが外部で管理するstorage | Local Reader Appでは消えない |
+| 音声入力のaudioとtranscript | browserまたはOSのspeech recognition。外部speech serviceがaudioを処理する場合があり、Local Reader Appはtranscriptを受け取る | browser/providerによる |
+| HTTP Delivery セッション | 現在の Local Reader App サーバープロセス | サーバー停止時に消える |
 | 登録リポジトリ内のファイル | 閲覧機能は読み取るだけで、対応CLIへのAI Chat依頼はCurrent repoを編集できる | CLI編集依頼後に変更される場合がある |
+
+Local Reader Appにはrepositoryの組み込みbackup/restore機能がありません。CLI writeの前に、通常利用しているGitまたはfile copyの手順で検証済みbackupを作ります。Local Reader Appのrepository一覧をbackupする場合は、**Settings** > **Repositories** > **Config details**に表示される実際のYAML fileをcopyします。server停止中にそのfileを戻してからappを起動するとrestoreできます。browser appearance設定にexportはなく、site dataを消去した場合は設定し直します。
 
 ## 任意のAI Chatを設定する
 
-AI Chat は任意です。MVPで対応するのは、インストールと認証が完了している **Codex CLI** と **Claude Code CLI** です。Current repo境界を強制できるruntimeでは、どちらもnative toolを使ってCurrent repoを操作できます。**AI API** と **Local AI** は将来用の項目として表示を残しますが、actionはdisabledな **Comming soon** となり、このbuildではactiveにできません。4項目とも通常の`pnpm start`を入口とし、AI専用の別起動commandはありません。
+AI Chatは任意です。このREADMEでいう「MVP」と「this build」は、説明対象の`0.1.0` sourceを指します。MVPで対応するのは、installと認証が完了している**Codex CLI**と**Claude Code CLI**です。Current repo境界を強制できるruntimeでは、どちらもnative toolを使ってCurrent repoを操作できます。**AI API**と**Local AI**は将来用の項目として表示を残しますが、actionはdisabledな**Coming soon**となり、通常UIからactiveにできません。4つのcardとも通常の`pnpm start`を入口とし、AI専用の別起動commandはありません。
 
-AI Chat で使う AI アカウント、API キー、ローカル実行環境、モデル、接続先、認証情報は、利用者自身が用意して管理します。事業者の契約料金、API 利用料、token や quota の上限、ネットワーク利用、ローカルモデルのダウンロード、モデルのライセンス、ストレージ、メモリ、計算資源、電力、更新、モデル選択は利用者の責任と負担です。Reader-Wiki は AI 利用料を負担せず、事業者への支払いの返金、quota の増加、モデル選定の代行、事業者別の個別サポートを提供しません。
+AI Chat で使う AI アカウント、API キー、ローカル実行環境、モデル、接続先、認証情報は、利用者自身が用意して管理します。事業者の契約料金、API 利用料、token や quota の上限、ネットワーク利用、ローカルモデルのダウンロード、モデルのライセンス、ストレージ、メモリ、計算資源、電力、更新、モデル選択は利用者の責任と負担です。Local Reader App は AI 利用料を負担せず、事業者への支払いの返金、quota の増加、モデル選定の代行、事業者別の個別サポートを提供しません。
 
 ### AI APIとLocal AI
 
-AI APIとLocal AIの実装は、provider設定やguarded edit protocolを含め、将来の対応用としてsourceに残します。ただしMVPの対象外です。4項目の設計を示すためcardは表示しますが、**Set active**はdisabledな**Comming soon**に置き換えます。このbuildでは、どちらの項目からもprovider requestを送らず、local runtimeも起動しません。
+AI APIとLocal AIの実装は、provider設定やguarded edit protocolを含め、将来の開発用としてsourceに残します。ただしMVPのsupported public interfaceではありません。4項目の設計を示すためcardは表示しますが、**Set active**はdisabledな**Coming soon**に置き換えるため、通常UIからprovider requestを送ったりlocal runtimeを起動したりできません。将来項目用のinternal loopback API codeは残っており、supported interfaceまたは無効化済みsecurity boundaryとして扱ってはいけません。
 
 ### CLIの項目
 
-Codex CLIとClaude Code CLIは、Reader-Wikiで選択中のCurrent repoにあるfileをnative toolで編集できます。Reader-Wikiは、binary、既存の認証、必要な非対話flag、workspaceのreadinessが成功した場合だけ、登録済みrepository rootを作業directoryとして選択CLIを起動します。
+Codex CLIとClaude Code CLIは、Local Reader Appで選択中のCurrent repoにあるfileをnative toolで編集できます。Local Reader Appは、binary、既存の認証、必要な非対話flag、workspaceのreadinessが成功した場合だけ、登録済みrepository rootを作業directoryとして選択CLIを起動します。
 
 1. Codex CLIまたはClaude Code CLIを、各CLIの公式手順に従って別途インストールします。
-2. 自分のターミナルからCLIの通常の認証を完了し、Reader-Wikiを起動する前に動作を確認します。Reader-Wikiは、公式CLIが既存accountまたは対応する認証環境を利用できるようにしますが、credential値を表示または保存しません。
-3. Reader-Wikiを通常どおり`pnpm start`で起動します。
+2. 自分のterminalからCLIの通常の認証を完了し、Local Reader Appを起動する前に動作を確認します。Codex CLIは既存のpersistent sign-inを使い、Local Reader Appは`OPENAI_API_KEY`と`CODEX_API_KEY`をCodexへ意図的に渡しません。Claude Code CLIはpersistent sign-inまたはlauncherの対応環境変数`ANTHROPIC_API_KEY`、`ANTHROPIC_AUTH_TOKEN`、`CLAUDE_CODE_OAUTH_TOKEN`、`CLAUDE_CONFIG_DIR`を利用できます。Local Reader Appはそれらの値を表示または永続保存しません。
+3. Local Reader Appを通常どおり`pnpm start`で起動します。
 4. **Settings** > **AI Chat**を開き、インストール済みCLIを使用中にして、**Check readiness**を選びます。
 5. readinessの成功を確認し、Current repoを確かめてからAI Chatで依頼を送ります。
 
-準備確認はrepository fileを編集しません。Codexの準備確認はmodel requestを送らず、installed CLI、persistent sign-in、flag、Current repoの書込権限、project MCP isolationを確認します。Claude Codeの準備確認は、期限切れまたは拒否されたcredentialをreadyと誤表示しないため、追加でtoolを渡さないmodel promptを1回送ります。Reader-Wikiは、sign-in手順、browser認証、CLIのinstall、model download、app内terminalを開始しません。
+準備確認はrepository fileを編集しません。Codexの準備確認はmodel requestを送らず、installed CLI、persistent sign-in、flag、Current repoの書込権限、project MCP isolationを確認します。Claude Codeの準備確認は、期限切れまたは拒否されたcredentialをreadyと誤表示しないため、追加でtoolを渡さないmodel promptを1回送ります。Local Reader Appは、sign-in手順、browser認証、CLIのinstall、model download、app内terminalを開始しません。
 
-Codex CLIはCurrent repoを`-C`に指定し、そのworkspaceだけを書き込み可能にするrunごとに固有のpermission profileを使って非対話で起動します。runでは利用者configを読み込まず、無関係な組み込みintegrationを無効にしますが、既存のexec-policy ruleは迂回しません。Claude Code CLIはCurrent repoを作業directoryにし、user / project / localのsetting sourceと追加directoryを読み込まず、nativeな`Bash`、`Glob`、`Grep`、`Read`、`Edit`、`Write` toolを`acceptEdits` modeで使います。macOSとLinuxではnative Bash sandboxの起動成功を必須にし、sandbox外でのcommand再実行を許可しません。native Windowsでは同じsandbox境界を利用できないため、Claude Code CLIのreadinessをfail-closedにして編集runを開始しません。WSL2はLinux runtimeとして扱います。
+Codex CLIはCurrent repoを`-C`に指定し、そのworkspaceだけを書き込み可能にするrunごとに固有のpermission profileを使って非対話で起動します。runでは利用者configを読み込まず、無関係な組み込みintegrationを無効にしますが、既存のexec-policy ruleは迂回しません。Claude Code CLIはCurrent repoを作業directoryにし、user / project / localのsetting sourceと追加directoryを読み込まず、nativeな`Bash`、`Glob`、`Grep`、`Read`、`Edit`、`Write` toolを`acceptEdits` modeで使います。macOSとLinux runtimeではnative Bash sandboxの起動成功を必須にし、sandbox外でのcommand再実行を許可しません。native Windowsでは同じsandbox境界を利用できないため、Claude Code CLIのreadinessをfail-closedにして編集runを開始しません。WSL2はこの確認ではLinux runtimeとして分類しますが、その分類はWSL2をsupported Local Reader App user platformにするものではありません。
 
-Reader-WikiはCLI responseをguarded provider edit protocolへ変換せず、そのprotocolにあるfile個数、directory、read round、operation種別の上限をCLI runへ課しません。依頼に必要であれば、CLIはCurrent repo内の追加fileを確認・変更できます。選択context chipは初期contextであり、編集pathの上限ではありません。残す内容はresponseと実際のworking-tree diffを確認して判断してください。
+Local Reader AppはCLI responseをLocal Reader Appのguarded provider edit protocolへ変換せず、そのprotocolにあるfile個数、directory、read round、operation種別の上限をCLI runへ課しません。依頼の完了に必要であれば、CLIはCurrent repo内の追加fileを確認・変更できます。選択context chipと設定済み`excludes`は、編集pathまたはnative tool accessの上限ではありません。残す内容はresponseと実際のworking-tree diffを確認して判断してください。
 
 ### 送る情報を選んでメッセージを送る
 
 1. 使用中の AI 接続設定で準備確認を完了します。
 2. リポジトリ固有の質問をする場合は、ファイルツリーでファイルまたはフォルダを右クリックし、**Send a path to AI Chat** を選びます。
-3. メッセージ欄の上にある、送信情報を示すチップを確認します。送りたくないものは取り除きます。
+3. メッセージ欄の上にあるcontext chipを確認します。chipを取り除くとLocal Reader Appが作るinitial contextから外れますが、CLI Entryがnative toolで後から同じpathを見つけることは防げません。
 4. メッセージを入力して送信します。
 
-パスの選択は任意です。一般的な質問、添付ファイルだけの質問、初期path hintを必要としないrepo-wide編集依頼では手順2を省けます。directoryや複数fileを選んだcontextも有効です。自動提案されたルートのルールを送りたくない場合は、確認して取り除いてください。
+pathの選択は任意です。一般的な質問、添付fileだけの質問、initial path hintを必要としないrepo-wide編集依頼では手順2を省けます。directoryや複数fileを選んだcontextも有効です。自動提案されたroot ruleは送信前に確認します。取り除いてもinitial contextから外れるだけで、CLIがCurrent repo内からそのruleを見つけない保証にはなりません。
 
 開いているファイルは自動送信されません。選択したファイルはテキストを渡せます。選択したフォルダが渡すのは直下の項目一覧だけで、入れ子にあるすべてのファイル本文ではありません。ルートに `AGENTS.md` または `CLAUDE.md` がある場合は、内容を確認して取り除くこともできる規則チップとして表示します。
 
@@ -500,7 +523,7 @@ AI へ送る情報には、主要項目12件、規則項目2件、合計64 KiB�
 
 ### 会話の操作
 
-- AI Chat専用headerの**新規チャット**を選び、使用中のAI Entryとreadinessを保ったまま、transcript、下書き、再試行状態、添付file、1回限りのcontextを消去する。
+- AI Chat専用headerの**New chat**を選び、使用中のAI Entryとreadinessを保ったまま、transcript、下書き、再試行状態、添付file、1回限りのcontextを消去する。
 - repositoryを切り替えても、使用中のAI Entry、readiness表示、transcriptを保持する。次の依頼は新しく選んだCurrent repoで実行する。
 - 選択したCLI runが完了すると、応答を会話へ追加する。
 - 利用者または AI のメッセージをコピーする。
@@ -513,38 +536,46 @@ AI へ送る情報には、主要項目12件、規則項目2件、合計64 KiB�
 - AI へ送る要求全体は約140 KiBが上限です。そのため、大きめのテキストファイルを複数添付すると拒否される場合があります。その場合は、数またはサイズを減らしてください。
 - Codex CLIでは利用可能なresponse depthを選ぶ。Claude Code CLIは設定済みの既定動作を使う。
 
-同じrepositoryで同時に実行できるAI処理は1件、server全体では最大4件です。CLI readinessはrepository切替後も共有する短いserver-side leaseを使い、各送信では選択中Current repoのrootと書込権限を引き続き検証します。leaseの期限切れ後は、送信時にEntry、認証、Current repo、revisionを自動再確認してから続行します。更新に失敗した場合はCLI runの前に停止します。page reloadとReader-Wiki server再起動では、新しいbrowser sessionとなり、memory上の会話を初期化します。
+同じrepositoryで同時に実行できるAI処理は1件、server全体では最大4件です。CLI readinessはrepository切替後も共有する短いserver-side leaseを使い、各送信では選択中Current repoのrootと書込権限を引き続き検証します。leaseの期限切れ後は、送信時にEntry、認証、Current repo、revisionを自動再確認してから続行します。更新に失敗した場合はCLI runの前に停止します。page reloadはmemory上の会話を消去します。server restartは古いbrowser sessionを無効にしますが、開いたままのpageを単独では消去しません。新serverが表示したURLをreloadまたは開き直すと新しいsessionを作り、その際に会話も消去します。
 
-AI ChatにはAI Entryが返した利用者向けの自然言語応答だけを表示します。Reader-Wikiのbest-effort change auditとwarningは、会話へ追記せずrepository refreshとretry制御に使う内部run metadataとして保持します。実行に失敗した場合もraw CLI outputではなく、短い説明と次のactionを表示します。AIは助言を行うだけであり、人間が応答、repository、実際のworking-tree diffを確認して残す内容を判断します。
+AI ChatにはAI Entryが返した利用者向けの自然言語応答だけを表示します。Local Reader Appのbest-effort change auditとwarningは、会話へ追記せずrepository refreshとretry制御に使う内部run metadataとして保持します。実行に失敗した場合もraw CLI outputではなく、短い説明と次のactionを表示します。AIは助言を行うだけであり、人間が応答、repository、実際のworking-tree diffを確認して残す内容を判断します。
 
 ## 安全性とプライバシー
 
-- Reader-Wiki は `127.0.0.1`、`localhost`、`::1` などのローカルループバックホストだけを受け付けます。`0.0.0.0` などのネットワークインターフェースは拒否します。
-- 起動ごとに新しいブラウザセッションを作ります。API 呼び出しにはそのセッションが必要で、設定保存などの書き込みを伴う操作には、正確なローカル接続元と要求形式も必要です。
+- Local Reader Appの`HOST`に指定できるのは、`127.0.0.1`、`localhost`、`::1`の3値だけです。`0.0.0.0`、そのほかのloopback address、network interfaceは拒否します。
+- server起動ごとに新しいserver-side session tokenを作ります。そのserverが表示した正確なURLを開くかreloadして、新しいbrowser sessionを受け取ります。古いtabのAPI callは、server restart後にreloadするまで失敗します。設定保存などのwrite操作には、正確なlocal originとrequest形式も必要です。
 - 要求するパスは登録したルート内に留まる必要があります。絶対パスの入力、`..` による上位移動、除外パスを拒否します。ファイル本文の読み取りと HTTP Delivery では、パス途中のシンボリックリンクもすべて拒否します。ツリー表示では、ルート外へ解決されるリンクを拒否します。
-- `.git` はファイル閲覧から常に除外します。Git コマンドはローカルの状態と差分情報だけに使い、Reader-Wiki は Git のリモートリポジトリへ接続しません。
-- 通常閲覧はリポジトリ内のファイルを編集しません。Repository Settings が書き込むのは、選択された Reader-Wiki の設定ファイルだけです。
-- AI APIとLocal AIは、このbuildではdisabledな**Comming soon**項目であり、repository contextまたは編集依頼を送信できません。
-- Codex CLIと、macOSまたはLinux上のClaude Code CLIは、AI Chatで明示的にwriteを行う項目です。会話と画面上のcontextを受け取り、native toolでCurrent repo内の追加fileを確認し、Reader-Wikiのprovider編集上限を受けずに複数fileやnested directoryを作成・更新・rename・削除できます。Reader-Wikiは追加workspace rootを渡しません。native WindowsのClaude Code CLI編集はCurrent repo限定のBash境界を強制できないため、このMVPでは有効にしません。
-- HTTP Delivery は一時的で制限されたローカル URL を使い、Reader-Wiki を公開サーバーにはしません。
+- `.git` はファイル閲覧から常に除外します。Git コマンドはローカルの状態と差分情報だけに使い、Local Reader App は Git のリモートリポジトリへ接続しません。
+- Rendered Markdownとsandboxed HTMLは、明示的に参照されたHTTPS画像hostへ接続する場合があります。そのほかのremote subresourceはContent Security Policyで制限され、HTML scriptは無効ですが、network requestを一切許容できない場合は、信頼できない文書を別のplain-text editorで確認してから開いてください。
+- 音声入力はbrowserのspeech-recognition機能を使います。browserとOSによっては音声を外部speech serviceで処理する場合があり、Local Reader Appはそのserviceの選択、確認、保存を制御できません。許容できない場合は文字入力を使ってください。
+- 通常閲覧はリポジトリ内のファイルを編集しません。Repository Settings が書き込むのは、選択された Local Reader App の設定ファイルだけです。
+- AI APIとLocal AIは通常UIでdisabledな**Coming soon**項目であり、通常UIからrepository contextや編集依頼を送信できません。将来用のinternal loopback API実装は、supported interfaceまたはaccess-controlの保証ではありません。
+- Codex CLIと、macOSまたはLinux上のClaude Code CLIは、AI Chatで明示的にwriteを行う項目です。会話と画面上のcontextを受け取り、native toolでCurrent repo内の追加fileを確認し、Local Reader Appのprovider編集上限を受けずに複数fileやnested directoryを作成・更新・rename・削除できます。Local Reader Appは追加workspace rootを渡しません。native WindowsのClaude Code CLI編集はCurrent repo限定のBash境界を強制できないため、このMVPでは有効にしません。
+- HTTP Delivery は一時的で制限されたローカル URL を使い、Local Reader App を公開サーバーにはしません。
 
-信頼できない Reader-Wiki のソースを実行せず、ポートをトンネルやネットワーク規則で外部公開しないでください。セキュリティ上の問題を非公開で報告するには、[SECURITY.md](SECURITY.md)に従ってください。
+信頼できない Local Reader App のソースを実行せず、ポートをトンネルやネットワーク規則で外部公開しないでください。セキュリティ上の問題を非公開で報告するには、[SECURITY.md](SECURITY.md)に従ってください。
+
+## セキュリティ報告
+
+未修正の脆弱性を public issue、discussion、pull request、AI prompt、スクリーンショット、ログへ投稿しないでください。このリポジトリで **Security** > **Advisories** > **Report a vulnerability** が表示される場合は、その非公開導線を使います。表示されない場合は、件名を `[Security] Local Reader App` として [`info.freedombuild@gmail.com`](mailto:info.freedombuild@gmail.com) へメールしてください。
+
+影響を受けるrevision、OS、再現条件、想定する影響、安全な最小限のproof of conceptを含めてください。認証情報、個人情報、非公開path、機密repositoryの内容は取り除きます。報告方針の全文は [SECURITY.md](SECURITY.md) を参照してください。
 
 ## サポートと責任範囲
 
-Reader-Wiki は MIT License のもとで無償公開される OSS です。有償製品または有償サポート契約に相当する個別の導入、設定、操作、トラブル対応サポートは含まれません。
+Local Reader App は Apache License 2.0 のもとで無償公開される OSS です。有償製品または有償サポート契約に相当する個別の導入、設定、操作、トラブル対応サポートは含まれません。
 
-Reader-Wiki を使うかどうか、どの環境でどう運用するかは、利用者自身の裁量と責任で判断してください。重要なrepositoryを扱う場合は、tool、設定、依存関係を変えたりCLI Entryを有効にしたりする前にbackupを用意してください。実行するcommand、登録するfolder、HTTP Deliveryで開くfile、AIへ送る情報、Codex CLIまたはClaude Code CLIが行ったすべてのfile変更を確認する責任は利用者にあります。
+Local Reader App を使うかどうか、どの環境でどう運用するかは、利用者自身の裁量と責任で判断してください。重要なrepositoryを扱う場合は、tool、設定、依存関係を変えたりCLI Entryを有効にしたりする前にbackupを用意してください。実行するcommand、登録するfolder、HTTP Deliveryで開くfile、AIへ送る情報、Codex CLIまたはClaude Code CLIが行ったすべてのfile変更を確認する責任は利用者にあります。
 
-公開リポジトリで bug report や issue を受け付けている場合でも、個別返信、修正、公開時期、SLA は約束しません。セキュリティ報告は一般サポートとは別です。[SECURITY.md](SECURITY.md)に従い、修正前の脆弱性の詳細を public issue、discussion、AI への相談、スクリーンショット、ログへ投稿しないでください。
+repository公開後は、再現できるbugと範囲を絞ったfeature proposalを[GitHub Issues](https://github.com/freedombuild-official/local-reader-app/issues)へ投稿します。source versionまたはrevision、OS、手順、期待した挙動、実際の挙動、機密情報を除いた正確なerrorを含めてください。issueは個別返信、修正、公開時期、SLAを約束するものではありません。セキュリティ報告は別です。[SECURITY.md](SECURITY.md)に従い、未修正の脆弱性の詳細をissue、discussion、AIへの相談、スクリーンショット、ログへ投稿しないでください。
 
-## Reader-Wikiを更新する
+## Local Reader Appを更新する
 
 更新前に、実行中のサーバーを `Control+C` または `Ctrl+C` で停止します。
 
 ### Gitで複製した場合
 
-Reader-Wiki フォルダで実行します。
+Local Reader App フォルダで実行します。
 
 ```bash
 git pull --ff-only
@@ -558,22 +589,22 @@ PowerShell でも同じコマンドを使います。実行ポリシーが `pnpm
 ### ZIPをダウンロードした場合
 
 1. 新しい ZIP をダウンロードし、新しいフォルダに展開します。
-2. 古い Reader-Wiki フォルダの非公開ファイル `repositories.yaml` を、新しいフォルダへコピーします。
+2. 古い Local Reader App フォルダの非公開ファイル `repositories.yaml` を、新しいフォルダへコピーします。
 3. 新しいフォルダで `pnpm install --frozen-lockfile`、`pnpm build`、`pnpm start` を実行します。
-4. 古い Reader-Wiki フォルダを削除する前に、リポジトリと設定を確認します。
+4. 古い Local Reader App フォルダを削除する前に、リポジトリと設定を確認します。
 
-## Reader-Wikiをアンインストールする
+## Local Reader Appをアンインストールする
 
 1. サーバーを `Control+C` または `Ctrl+C` で停止します。
 2. リポジトリ一覧を残したい場合は、`repositories.yaml` を別の場所へコピーします。
-3. Reader-Wiki のフォルダを削除します。
-4. 保存された文字サイズ、テーマ、配置も削除したい場合は、ブラウザで `127.0.0.1:5173` のサイトデータを消去します。
+3. Local Reader App のフォルダを削除します。
+4. 保存された文字サイズ、テーマ、配置も削除したい場合は、実際に使ったlocal origin（既定は`http://127.0.0.1:5173`）のsite dataをbrowserで消去します。
 
-Reader-Wiki をアンインストールしても、登録済みのリポジトリフォルダは削除しません。
+Local Reader App をアンインストールしても、登録済みのリポジトリフォルダは削除しません。
 
 ## トラブルシューティング
 
-困ったときは、この README ファイルを AI アシスタントへ添付し、現在の手順を一緒に確認してもらうこともできます。使用している OS、分かる場合は Reader-Wiki のバージョンまたはソースの revision、今いる手順、実行した正確なコマンドまたはクリック、表示された正確なエラーを伝えてください。API キー、パスワード、トークン、cookie、`.env` の内容、個人情報、非公開のパス、機密リポジトリの内容は送る前に取り除きます。AI の提案は誤ることがあるため、コマンドと影響を確認してから実行してください。AI に相談できることは、maintainer による個別サポートを意味しません。
+困ったときは、この README ファイルを AI アシスタントへ添付し、現在の手順を一緒に確認してもらうこともできます。使用している OS、分かる場合は Local Reader App のバージョンまたはソースの revision、今いる手順、実行した正確なコマンドまたはクリック、表示された正確なエラーを伝えてください。API キー、パスワード、トークン、cookie、`.env` の内容、個人情報、非公開のパス、機密リポジトリの内容は送る前に取り除きます。AI の提案は誤ることがあるため、コマンドと影響を確認してから実行してください。AI に相談できることは、maintainer による個別サポートを意味しません。
 
 ### `pnpm`が見つからない
 
@@ -592,7 +623,7 @@ Windows で PowerShell の実行ポリシーが `pnpm.ps1` を拒否する場合
 
 ### `Repository config was not found`と表示される
 
-Reader-Wiki 自身のフォルダから起動したか、`repositories.yaml` を作成したか確認します。`READER_WIKI_CONFIG` を使う場合は、その絶対パスが正しいか確認します。
+Local Reader App 自身のフォルダから起動したか、`repositories.yaml` を作成したか確認します。`LOCAL_READER_APP_CONFIG` を使う場合は、その絶対パスが正しいか確認します。
 
 ### リポジトリ設定が安全でない、または無効と表示される
 
@@ -633,7 +664,7 @@ pnpm start
 
 ### ローカルファイルの変更が表示されない
 
-**Reload repository** を選びます。Reader-Wiki は登録フォルダを常時監視しません。
+**Reload repository** を選びます。Local Reader App は登録フォルダを常時監視しません。
 
 ### Gitの変更を示す印が表示されない
 
@@ -643,10 +674,20 @@ Git がインストール済みか、登録フォルダが Git の作業ツリ�
 
 - Codex CLIまたはClaude Code CLIがインストール済みで、自分のterminalから動くか確認する。
 - 同じterminalでCLI自身の認証status commandを実行し、必要ならsign-inを完了する。
-- CLIが認証用の環境変数を使う場合は、その変数を利用できる環境からReader-Wikiを起動する。
-- Claude Codeでは、古いまたは拒否された`ANTHROPIC_API_KEY`がpersistent sign-inより優先される場合がある。その変数を削除または更新し、必要なら`claude auth login`を完了してから、修正したterminalでReader-Wikiを起動する。
+- Codex CLIはpersistent sign-inを使う。Local Reader Appは`OPENAI_API_KEY`と`CODEX_API_KEY`をCodexへ渡さない。
+- Claude Code CLIはpersistent sign-in、またはLocal Reader Appを起動したprocessから継承する対応Claude authentication environmentを利用できる。
+- Claude Codeでは、古いまたは拒否された`ANTHROPIC_API_KEY`がpersistent sign-inより優先される場合がある。その変数を削除または更新し、必要なら`claude auth login`を完了してから、修正したterminalでLocal Reader Appを起動する。
 - 選択中のCurrent repoが存在し、利用者accountで書き込み可能か確認する。
-- **Check readiness**をもう一度選ぶ。AI APIとLocal AIは、このbuildではdisabledな**Comming soon**項目のままです。
+- **Check readiness**をもう一度選ぶ。AI APIとLocal AIは、このbuildではdisabledな**Coming soon**項目のままです。
+
+### CLIが停止したことをLocal Reader Appで確認できない
+
+CLI process treeがまだ実行中の可能性があるため、serverはそのCurrent repoのlockを意図的に保持します。CLIを閉じるだけではlockを解除しません。
+
+1. CLI processと、そのCLIが起動したchild processを閉じる。
+2. Current repoを確認し、途中まで行われた変更をどう扱うか判断する。
+3. `Control+C`または`Ctrl+C`でLocal Reader App serverを停止し、もう一度`pnpm start`を実行する。
+4. 新serverが表示した正確なURLをreloadまたは開き直し、readinessを再実行してからretryする。reloadするとmemory上の会話は消去される。
 
 ### 音声入力が利用できない
 
@@ -656,11 +697,39 @@ Git がインストール済みか、登録フォルダが Git の作業ツリ�
 
 HTML、HTM、SVG にはメインの閲覧画面を使います。Markdown のローカル付属ファイルは、文書が `../` を使わず明示的に参照しているか、Markdown ファイルと同じフォルダまたは下位フォルダにあるか、除外対象やシンボリックリンク経由ではないかを確認します。配信する Markdown の上限は2 MiB、そのほかの配信ファイルと付属ファイルの上限は25 MiBです。
 
+## 技術概要と公開インターフェース
+
+Local Reader App は React/Vite のブラウザクライアントと、ローカルの Express サーバーで構成されます。サーバーは設定済みYAMLを読み、各registered rootを検証し、保護されたfilesystem操作とlocal Git操作を実行し、clientとloopback APIを1つのprocessで配信します。任意のCodex CLIとClaude Code CLIは、readinessとCurrent repoの確認に成功した場合だけ、別のchild processとして実行します。hosted backend、account system、組み込みtelemetry serviceはありません。
+
+利用者向けに対応する公開インターフェースは次のとおりです。
+
+| インターフェース | 用途と互換性 |
+| --- | --- |
+| `pnpm start` | 最後に作成したproduction buildを起動する。install後またはupdate後は先に`pnpm build`を実行する。 |
+| `pnpm dev` | source変更を自動反映するdevelopment serverを起動する。Local Reader App自体の開発時だけ使う。 |
+| `http://127.0.0.1:5173/` | 既定のlocal URL。`PORT`でportを変更できる。`HOST`に指定できるのは`127.0.0.1`、`localhost`、`::1`だけ。 |
+| `repositories.yaml` | 既定の非公開repository一覧。`example.repositories.yaml`から作り、実際のpathはcommitしない。 |
+| `LOCAL_READER_APP_CONFIG` | 別のrepository設定fileを選ぶ。`READER_WIKI_CONFIG`は旧版との互換用fallback。 |
+| `LOCAL_READER_APP_AI_CHAT_SYSTEM_PROMPT` | `version` frontmatterを含む独自Markdown system promptを選ぶ。`READER_WIKI_AI_CHAT_SYSTEM_PROMPT`は旧版との互換用fallback。 |
+| `VITE_HMR_PORT` | 必要な場合に、開発時だけ使うbrowser hot-reload portを上書きする。 |
+
+内部の`ReaderWiki*`型、`reader_wiki_*` protocol値、cookie、local-storage key、loopback JSON endpoint、`X-Reader-Wiki-*` headerは互換実装の詳細であり、安定した外部APIとして約束するものではありません。将来のreleaseでは、対応するclientとserverを同時に変更する場合があります。
+
 ## 開発に参加する人向け
 
-Reader-Wiki 自体を変更するときだけ、自動更新される開発用サーバーを使います。
+contributionは標準的なApache-2.0のinbound-equals-outbound方式です。CLAや著作権譲渡は要求せず、contributorは自身の成果物の著作権を保持したまま、提出したcontributionをApache-2.0で許諾します。
+
+1. 公式repositoryをforkして自分のforkをcloneし、範囲を絞ったbranchを作る。
+2. locked dependencyをinstallし、1つのまとまった変更を行い、挙動を変える場合はtestとREADME日英を追加または更新する。
+3. 下記のverification commandをすべて実行する。
+4. branchをpushし、公式`main` branchへpull requestを開く。問題、選んだ変更、利用者または安全性への影響、検証結果を説明する。
+
+credential、token、private repository content、個人path、customer data、無関係なgenerated fileを含めないでください。脆弱性はpublic issueやpull requestではなく[SECURITY.md](SECURITY.md)から報告します。完全なcontribution policyは[CONTRIBUTING.md](CONTRIBUTING.md)を参照してください。
+
+Local Reader App 自体を変更するときだけ、自動更新される開発用サーバーを使います。
 
 ```bash
+pnpm install --frozen-lockfile
 pnpm dev
 ```
 
@@ -674,12 +743,16 @@ pnpm audit --prod
 pnpm run scan:public
 ```
 
-GitHub Actions は Ubuntu、Windows、macOS で、固定された依存関係のインストール、型の確認、テスト、本番用ビルド、公開ソースの検査を行います。
+挙動、command、上限、warning、公開identityを変える場合は、[README.md](README.md)と[README.ja.md](README.ja.md)を同期してください。GitHub ActionsはUbuntu、Windows、macOSで、固定された依存関係のinstall、型の確認、test、production build、公開sourceのscanを実行します。
 
-## License
+## ライセンス、帰属表示、商標
 
-Reader-Wiki は MIT License です。[LICENSE](LICENSE)を参照してください。
+Local Reader App は [Apache License 2.0](LICENSE) で提供します。Copyright 2026 Ryusei Komada。各contributorは、それぞれのcontributionについて著作権を保持します。[NOTICE](NOTICE)は元のプロジェクトへの帰属を記録し、[AUTHORS.md](AUTHORS.md)は原作者とmaintainerを示します。
+
+Apache-2.0は、その条件に従う利用、改変、再配布を認めますが、FreedomBuildの屋号、Local Reader Appのプロジェクトidentity、将来の公式logoを利用する権利は与えません。[TRADEMARKS.md](TRADEMARKS.md)に従って識別表示を正確に使い、forkや改変版を公式releaseと区別してください。
+
+プロジェクトを引用する場合は [CITATION.cff](CITATION.cff)、contributionを行う場合は [CONTRIBUTING.md](CONTRIBUTING.md) を参照してください。
 
 ## まとめ
 
-Reader-Wiki は、通常閲覧でファイルをオンラインサービスへ渡さず、1つ以上のフォルダを読むためのローカルなブラウザ作業領域です。macOS または Windows の手順から始め、フォルダの絶対パスを登録し、この README の全機能の節を操作説明書として使ってください。AI Chatは任意です。取り外せるchipは初期contextを示しますが、対応CLI Entryは依頼に必要な場合、Current repo内の追加fileを確認できます。
+Local Reader App は、通常閲覧でファイルをオンラインサービスへ渡さず、1つ以上のフォルダを読むためのローカルなブラウザ作業領域です。macOS または Windows の手順から始め、フォルダの絶対パスを登録し、この README の全機能の節を操作説明書として使ってください。AI Chatは任意です。取り外せるchipは初期contextを示しますが、対応CLI Entryは依頼に必要な場合、Current repo内の追加fileを確認できます。

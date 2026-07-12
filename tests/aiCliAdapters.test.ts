@@ -8,7 +8,7 @@ import { claudeCurrentRepoSandboxSupported, claudeCurrentRepoSettings, codexCurr
 import { probeAIEntryReadiness } from "../server/aiEntries.js";
 
 describe("AI CLI process boundary", () => {
-  it("runs Codex native tools in the Current repo without Reader-Wiki edit-count limits", async () => {
+  it("runs Codex native tools in the Current repo without Local Reader App edit-count limits", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "reader-wiki-codex-direct-"));
     await writeFile(path.join(root, "README.md"), "# Direct Codex\n");
     const calls: Array<{ args: string[]; cwd: string; input: string }> = [];
@@ -261,7 +261,7 @@ describe("AI CLI process boundary", () => {
       maxBuffer: 128,
     })).rejects.toMatchObject({
       status: 502,
-      message: "The CLI returned more information than Reader-Wiki can display safely. Ask for a smaller result and try again.",
+      message: "The CLI returned more information than Local Reader App can display safely. Ask for a smaller result and try again.",
     });
   });
 

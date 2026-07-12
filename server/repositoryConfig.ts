@@ -22,6 +22,13 @@ type RawRegistry = {
 
 const configSaveTails = new Map<string, Promise<void>>();
 
+export function repositoryConfigPathFromEnv(
+  packageRoot = process.cwd(),
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  return env.LOCAL_READER_APP_CONFIG || env.READER_WIKI_CONFIG || path.join(packageRoot, "repositories.yaml");
+}
+
 export function configSourceMode(configPath: string, packageRoot = process.cwd()): RepositoryConfigSourceMode {
   const defaultPath = path.resolve(packageRoot, "repositories.yaml");
   return path.resolve(configPath) === defaultPath ? "default" : "env";
@@ -384,7 +391,7 @@ function excludesRelativeCheck(entry: RepositoryConfigEntryDraft, index: number)
 
 async function configFileWritableCheck(configPath: string): Promise<RepositoryConfigCheck> {
   const state = await inspectConfigFile(configPath);
-  return check(state.writable, "config:writable", "Config file is writable", "Reader-Wiki must be able to write the config file or its parent directory.");
+  return check(state.writable, "config:writable", "Config file is writable", "Local Reader App must be able to write the config file or its parent directory.");
 }
 
 function check(ok: boolean, id: string, label: string, message: string): RepositoryConfigCheck {

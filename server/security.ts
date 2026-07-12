@@ -72,13 +72,13 @@ export function createReaderWikiSecurity(options: { bindHost?: string; token?: s
     const hosts = allowedHosts();
     const requestHost = String(request.headers.host || "").trim().toLowerCase();
     if (!hosts.has(requestHost)) {
-      deny(response, 403, "Reader-Wiki rejected the request Host.");
+      deny(response, 403, "Local Reader App rejected the request Host.");
       return;
     }
 
     const suppliedToken = headerValue(request.headers[TOKEN_HEADER]) || cookieValue(request.headers.cookie, SESSION_COOKIE);
     if (!tokensEqual(token, suppliedToken)) {
-      deny(response, 401, "Reader-Wiki API session is required.");
+      deny(response, 401, "Local Reader App API session is required.");
       return;
     }
 
@@ -86,23 +86,23 @@ export function createReaderWikiSecurity(options: { bindHost?: string; token?: s
       const expectedOrigins = new Set(Array.from(hosts, (host) => `http://${host}`));
       const origin = headerValue(request.headers.origin);
       if (!expectedOrigins.has(origin)) {
-        deny(response, 403, "Reader-Wiki rejected the request Origin.");
+        deny(response, 403, "Local Reader App rejected the request Origin.");
         return;
       }
       if (headerValue(request.headers[MUTATION_HEADER]) !== "1") {
-        deny(response, 403, "Reader-Wiki mutation header is required.");
+        deny(response, 403, "Local Reader App mutation header is required.");
         return;
       }
       const contentType = headerValue(request.headers["content-type"]).toLowerCase();
       if (!contentType.startsWith("application/json")) {
-        deny(response, 415, "Reader-Wiki mutations require application/json.");
+        deny(response, 415, "Local Reader App mutations require application/json.");
         return;
       }
     }
 
     const fetchSite = headerValue(request.headers["sec-fetch-site"]);
     if (fetchSite === "cross-site") {
-      deny(response, 403, "Reader-Wiki rejected a cross-site request.");
+      deny(response, 403, "Local Reader App rejected a cross-site request.");
       return;
     }
     next();

@@ -36,7 +36,7 @@ export async function startReaderWikiServer(options: ReaderWikiServerOptions = {
   const port = options.port ?? 5173;
   const host = options.host || "127.0.0.1";
   if (!isLoopbackHost(host)) {
-    throw new Error("Reader-Wiki is a loopback-only application and refuses non-loopback binding.");
+    throw new Error("Local Reader App is a loopback-only application and refuses non-loopback binding.");
   }
   const repositoryRegistry = options.repositoryRegistry || createRepositoryRegistry({ configPath });
   const httpDelivery = createHttpDeliveryService(repositoryRegistry);

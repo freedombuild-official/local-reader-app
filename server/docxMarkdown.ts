@@ -9,7 +9,7 @@ import {
 } from "./viewerLimits.js";
 
 const WORD_DOCUMENT_ENTRY = "word/document.xml";
-const DOCX_MARKDOWN_UNSUPPORTED_MESSAGE = "This .docx file does not contain Markdown source that Reader-Wiki can render.";
+const DOCX_MARKDOWN_UNSUPPORTED_MESSAGE = "This .docx file does not contain Markdown source that Local Reader App can render.";
 
 export async function extractMarkdownFromDocx(filePath: string, byteLength: number): Promise<string> {
   if (byteLength > DOCX_VIEWER_MAX_BYTES) throw new HttpError(413, "The .docx file is too large to display.");

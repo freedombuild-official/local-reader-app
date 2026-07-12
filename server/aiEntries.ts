@@ -146,7 +146,7 @@ async function probeProviderReadiness(provider: AIProviderSettings | undefined, 
     check("endpoint", "Endpoint reachable", endpointReady, endpointReady ? "The configured endpoint returned a model response." : capability.message),
     check("protocol", "Guarded edit protocol", capability.ok, capability.message),
     check("workspace", "Workspace", workspace.ready && workspace.repoScoped, workspace.repoScoped ? workspace.message : "Current repo write requires a selected repository workspace."),
-    check("execution-policy", "Execution policy", true, "The provider receives bounded repository-relative context but no filesystem or shell access. Reader-Wiki alone validates and applies text operations inside the Current repo."),
+    check("execution-policy", "Execution policy", true, "The provider receives bounded repository-relative context but no filesystem or shell access. Local Reader App alone validates and applies text operations inside the Current repo."),
   ];
   return providerReadinessResult("aiApi", provider, checks);
 }
@@ -176,7 +176,7 @@ async function probeLocalReadiness(provider: AIProviderSettings | undefined, rep
     check("endpoint", "Endpoint reachable", endpointReady, endpointReady ? "The loopback endpoint returned a model response." : capability.message),
     check("protocol", "Guarded edit protocol", capability.ok, capability.message),
     check("workspace", "Workspace", workspace.ready && workspace.repoScoped, workspace.repoScoped ? workspace.message : "Current repo write requires a selected repository workspace."),
-    check("execution-policy", "Execution policy", true, "The local model receives bounded repository-relative context but no filesystem or shell access. Reader-Wiki alone validates and applies text operations inside the Current repo."),
+    check("execution-policy", "Execution policy", true, "The local model receives bounded repository-relative context but no filesystem or shell access. Local Reader App alone validates and applies text operations inside the Current repo."),
   ];
   return providerReadinessResult("localAi", provider, checks);
 }
@@ -188,7 +188,7 @@ async function readinessWorkspace(repo: RepositoryConfig | undefined): Promise<{
   try {
     const workspace = await resolveAIWorkspace(repo);
     await access(workspace.root, constants.W_OK);
-    return { cwd: workspace.root, ready: true, message: "Active repository root is available and writable by the Reader-Wiki process.", repoScoped: true, writable: true };
+    return { cwd: workspace.root, ready: true, message: "Active repository root is available and writable by the Local Reader App process.", repoScoped: true, writable: true };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return { cwd: await ensureSafeCwd(), ready: false, message: sanitizeCliText(message), repoScoped: false, writable: false };
@@ -345,9 +345,9 @@ function readinessStatus(ready: boolean, checks: Check[], message: string): AICo
           ? "substrate_missing"
           : "wrapper_not_ready";
   const nextAction = failed?.id === "auth"
-    ? "Complete persistent sign-in or correct the CLI authentication environment outside Reader-Wiki, then check readiness again. Reader-Wiki does not display or store credential values."
+    ? "Complete persistent sign-in or correct the CLI authentication environment outside Local Reader App, then check readiness again. Local Reader App does not display or store credential values."
     : failed?.id === "protocol"
-      ? "Choose a model that returns the strict versioned Reader-Wiki JSON protocol, then check readiness again."
+      ? "Choose a model that returns the strict versioned Local Reader App JSON protocol, then check readiness again."
     : failed?.id === "workspace"
       ? "Select a registered repository root before sending AI Chat."
       : "Check AI Entry settings and run readiness again.";

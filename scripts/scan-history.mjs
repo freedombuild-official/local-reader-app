@@ -2,15 +2,16 @@ import process from "node:process";
 import { spawnSync } from "node:child_process";
 
 const MAX_HISTORY_BLOB_BYTES = 5_000_000;
+const approvedPublicCommitEmails = new Set(["info.freedombuild@gmail.com"]);
 const privateUserMarker = String.fromCharCode(97, 114, 99, 104, 105);
 const privateProductMarkers = [
   ["kin", "kaku"].join(""),
   String.fromCodePoint(0x91d1, 0x95a3),
 ];
 const contentRules = [
-  { label: "macOS home path", pattern: /\/Users\/(?!example(?:\/|$)|your[-_ ]?name(?:\/|$))[^/\s"']+/gi },
-  { label: "Linux home path", pattern: /\/home\/(?!example(?:\/|$)|your[-_ ]?name(?:\/|$))[^/\s"']+/gi },
-  { label: "Windows home path", pattern: /[A-Za-z]:\\Users\\(?!example(?:\\|$)|your[-_ ]?name(?:\\|$))[^\\/\s"']+/gi },
+  { label: "macOS home path", pattern: /(?<![A-Za-z0-9/.:_-])\/Users\/(?!example(?:\/|$)|your[-_ ]?name(?:\/|$))[^/\s"']+/gi },
+  { label: "Linux home path", pattern: /(?<![A-Za-z0-9/.:_-])\/home\/(?!example(?:\/|$)|your[-_ ]?name(?:\/|$))[^/\s"']+/gi },
+  { label: "Windows home path", pattern: /(?<![A-Za-z0-9/.:_-])[A-Za-z]:\\Users\\(?!example(?:\\|$)|your[-_ ]?name(?:\\|$))[^\\/\s"']+/gi },
   { label: "known private username", pattern: new RegExp(`(^|[^A-Za-z0-9_])${escapeRegExp(privateUserMarker)}(?![A-Za-z0-9_])`, "gi") },
   { label: "AWS access token", pattern: new RegExp(["A", "KIA", "[0-9A-Z]{16}"].join(""), "g") },
   { label: "GitHub access token", pattern: new RegExp(["g", "h", "[pousr]_[A-Za-z0-9]{20,}"].join(""), "g") },
@@ -84,7 +85,9 @@ if (findings.length) {
 }
 
 function reviewEmail(commit, role, email, usage) {
-  const domain = String(email || "").split("@").at(-1)?.toLowerCase() || "missing";
+  const normalizedEmail = String(email || "").trim().toLowerCase();
+  if (approvedPublicCommitEmails.has(normalizedEmail)) return;
+  const domain = normalizedEmail.split("@").at(-1) || "missing";
   if (["example.test", "users.noreply.github.com"].includes(domain)) return;
   const key = `${role}|${domain}`;
   if (!usage.has(key)) usage.set(key, new Set());

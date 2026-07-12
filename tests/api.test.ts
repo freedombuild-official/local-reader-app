@@ -596,7 +596,7 @@ describe("api", () => {
     await mkdir(path.join(root, ".agents"));
     await writeFile(path.join(root, ".codex", "private.md"), "protected\n");
     await writeFile(path.join(root, ".agents", "private.md"), "protected\n");
-    await writeFile(path.join(root, "ai-system.md"), "---\nversion: 9.9.9-test\n---\nReader-Wiki test system prompt.\n");
+    await writeFile(path.join(root, "ai-system.md"), "---\nversion: 9.9.9-test\n---\nLocal Reader App test system prompt.\n");
     process.env.READER_WIKI_AI_CHAT_SYSTEM_PROMPT = path.join(root, "ai-system.md");
     const configPath = path.join(root, "repositories.yaml");
     await writeFile(configPath, `repositories:\n  - id: docs\n    label: Docs\n    root: ${root}\n    defaultPath: README.md\n    excludes:\n      - .git\n`);
@@ -630,8 +630,8 @@ describe("api", () => {
             op: "replace",
             path: "reader-wiki-capability-probe.md",
             content: null,
-            oldText: "Reader-Wiki capability probe: before",
-            newText: "Reader-Wiki capability probe: after",
+            oldText: "Local Reader App capability probe: before",
+            newText: "Local Reader App capability probe: after",
           }],
           message: "ready",
         }), status: readyProviderStatus() };
@@ -1042,8 +1042,8 @@ describe("api", () => {
             op: "replace",
             path: "reader-wiki-capability-probe.md",
             content: null,
-            oldText: "Reader-Wiki capability probe: before",
-            newText: "Reader-Wiki capability probe: after",
+            oldText: "Local Reader App capability probe: before",
+            newText: "Local Reader App capability probe: after",
           }],
           message: "ready",
         }), status: readyProviderStatus() };

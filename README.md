@@ -1,15 +1,24 @@
-# Reader-Wiki
+# Local Reader App
 
 Languages: [English](README.md) | [日本語](README.ja.md)
 
-Reader-Wiki turns folders on your Mac or Windows PC into a private reading workspace in your browser. Use it to browse documentation, source code, text, images, PDFs, and local Git changes without moving those files into another service.
+This README documents the current default-branch source at package version `0.1.0`.
 
-The normal viewer does not edit files in the folders you register. Reader-Wiki runs on your own computer at `http://127.0.0.1:5173/`. No repository content is sent to an AI service unless you enable AI Chat. Before a request, its repository context is shown in removable chips; a root rule file may be suggested automatically.
+Local Reader App turns folders on your Mac or Windows PC into a private reading workspace in your browser. Use it to browse documentation, source code, text, images, PDFs, and local Git changes without moving those files into another service.
 
-Reader-Wiki currently runs from the source files on GitHub. There is no `.dmg`, `.exe`, app-store package, hosted account, or one-click installer. The setup below takes you from downloading the source to opening your first folder.
+The normal viewer does not edit files in the folders you register. Local Reader App runs on your own computer at `http://127.0.0.1:5173/`. No repository content is sent to an AI service unless you enable AI Chat. Before an AI request, context selected from the Current repo is shown in removable chips; a rule file from the Current repo root may be suggested automatically.
+
+Local Reader App currently runs from the source files on GitHub. There is no `.dmg`, `.exe`, app-store package, hosted account, or one-click installer. The setup below takes you from downloading the source to opening your first folder.
+
+## Project and Authorship
+
+Local Reader App was created by **[Ryusei Komada](https://github.com/freedombuild-official)** and is published under the **FreedomBuild** trade name. The official source is [`freedombuild-official/local-reader-app`](https://github.com/freedombuild-official/local-reader-app).
+
+Copyright remains with Ryusei Komada and other contributors for their respective work. The Apache License 2.0 grants the permissions described in [LICENSE](LICENSE); it does not erase authorship or grant rights to present a modified project as an official FreedomBuild release. See [AUTHORS.md](AUTHORS.md), [NOTICE](NOTICE), and [TRADEMARKS.md](TRADEMARKS.md) for the project identity and attribution details.
 
 ## Contents
 
+- [Project and Authorship](#project-and-authorship)
 - [What You Can Do](#what-you-can-do)
 - [Install and Start on macOS](#install-and-start-on-macos)
 - [Install and Start on Windows](#install-and-start-on-windows)
@@ -17,12 +26,14 @@ Reader-Wiki currently runs from the source files on GitHub. There is no `.dmg`, 
 - [Use the Workspace](#understand-the-workspace)
 - [Set Up Optional AI Chat](#set-up-optional-ai-chat)
 - [Safety and Privacy](#safety-and-privacy)
+- [Security Reports](#security-reports)
 - [Support and Responsibility](#support-and-responsibility)
-- [Update Reader-Wiki](#update-reader-wiki)
-- [Uninstall Reader-Wiki](#uninstall-reader-wiki)
+- [Update Local Reader App](#update-local-reader-app)
+- [Uninstall Local Reader App](#uninstall-local-reader-app)
 - [Troubleshooting](#troubleshooting)
+- [Technical Overview and Public Interfaces](#technical-overview-and-public-interfaces)
 - [For Contributors](#for-contributors)
-- [License](#license)
+- [License, Attribution, and Trademarks](#license-attribution-and-trademarks)
 
 ## What You Can Do
 
@@ -37,7 +48,7 @@ Reader-Wiki currently runs from the source files on GitHub. There is no `.dmg`, 
 - Adjust text size, light or dark appearance, and workspace width.
 - Optionally ask an AI service about files or folders that you select explicitly.
 
-Reader-Wiki is primarily a reader, not a general file editor, terminal, Git client, or remote file server. Normal viewing does not write to registered folders. A supported optional AI Chat **Current repo write** entry is the explicit exception and can edit only its Current repo after readiness succeeds. Saving Repository Settings updates only Reader-Wiki's own configuration, while downloading a Memo creates a browser download that you requested. Removing an entry from the repository list never deletes the registered folder.
+Local Reader App is primarily a reader, not a general file editor, terminal, Git client, or remote file server. Normal viewing does not write to registered folders. A supported optional AI Chat **Current repo write** entry is the explicit exception and can edit only the Current repo selected for that run after readiness succeeds. Saving Repository Settings updates only Local Reader App's own configuration, while downloading a Memo creates a browser download that you requested. Removing an entry from the repository list never deletes the registered folder.
 
 ## Before You Install
 
@@ -53,14 +64,16 @@ You need:
 
 AI software and API keys are optional. You can use every non-AI reading feature without them.
 
-## Get Reader-Wiki from GitHub
+The supported end-user installation paths for `0.1.0` are macOS and native Windows. Linux and WSL2 have source-level CI coverage but no verified end-user installation or lifecycle guide here, so they are not claimed as supported user platforms. Later references to Linux or WSL2 describe the Claude Code CLI security classification only; use macOS or native Windows for the documented setup.
+
+## Get Local Reader App from GitHub
 
 Choose one method on this repository's GitHub page:
 
 1. For the simplest method, select **Code** > **Download ZIP**, extract the ZIP, and remember the extracted folder.
 2. If you already use Git, select **Code**, copy the HTTPS URL shown on this GitHub page, and clone that URL.
 
-The commands below use `/path/to/reader-wiki` or `C:\path\to\reader-wiki` as examples. Replace them with the folder you downloaded or cloned.
+The commands below use `/path/to/local-reader-app` or `C:\path\to\local-reader-app` as examples. Replace them with the folder you downloaded or cloned.
 
 ## Install and Start on macOS
 
@@ -68,7 +81,7 @@ The commands below use `/path/to/reader-wiki` or `C:\path\to\reader-wiki` as exa
 
 1. Install a compatible Node.js version from the official download page.
 2. Open **Terminal**.
-3. Confirm Node.js and npm, then install the pnpm version used by Reader-Wiki:
+3. Confirm Node.js and npm, then install the pnpm version used by Local Reader App:
 
    ```bash
    node --version
@@ -79,12 +92,12 @@ The commands below use `/path/to/reader-wiki` or `C:\path\to\reader-wiki` as exa
 
 If the global pnpm installation reports a permissions error, use the official [pnpm installation guide](https://pnpm.io/10.x/installation) instead of changing broad filesystem permissions.
 
-### Install Reader-Wiki
+### Install Local Reader App
 
-1. Move into the downloaded Reader-Wiki folder. The easiest method is to type `cd ` with a trailing space in Terminal, drag the Reader-Wiki folder from Finder into Terminal, and press `Return`. You can also enter its path directly:
+1. Move into the downloaded Local Reader App folder. The easiest method is to type `cd ` with a trailing space in Terminal, drag the Local Reader App folder from Finder into Terminal, and press `Return`. You can also enter its path directly:
 
    ```bash
-   cd "/path/to/reader-wiki"
+   cd "/path/to/local-reader-app"
    ```
 
 2. Install the exact locked dependencies:
@@ -118,7 +131,7 @@ If the global pnpm installation reports a permissions error, use the official [p
 
    If the folder has no `README.md`, set `defaultPath` to another existing file or remove that line.
 
-5. Build Reader-Wiki:
+5. Build Local Reader App:
 
    ```bash
    pnpm build
@@ -132,7 +145,7 @@ If the global pnpm installation reports a permissions error, use the official [p
 
 7. Keep Terminal open and visit [http://127.0.0.1:5173/](http://127.0.0.1:5173/) in your browser. The terminal also prints the exact URL and configuration file path.
 
-8. To stop Reader-Wiki, return to that Terminal window and press `Control+C`.
+8. To stop Local Reader App, return to that Terminal window and press `Control+C`.
 
 ## Install and Start on Windows
 
@@ -142,7 +155,7 @@ Use **PowerShell**, not Command Prompt, for the commands in this section.
 
 1. Install a compatible Node.js version with the official Windows installer.
 2. Open **PowerShell**.
-3. Confirm Node.js and npm, then install the pnpm version used by Reader-Wiki:
+3. Confirm Node.js and npm, then install the pnpm version used by Local Reader App:
 
    ```powershell
    node --version
@@ -153,12 +166,12 @@ Use **PowerShell**, not Command Prompt, for the commands in this section.
 
 If PowerShell says that `pnpm.ps1` cannot run because of the execution policy, do not weaken the policy. Use `pnpm.cmd` in place of `pnpm` in the commands below, for example `pnpm.cmd --version`.
 
-### Install Reader-Wiki
+### Install Local Reader App
 
-1. Move into the extracted or cloned Reader-Wiki folder. In File Explorer, select that folder, hold `Shift`, right-click, and choose **Copy as path**. In PowerShell, type `Set-Location ` with a trailing space, paste the copied path, and press `Enter`. You can also enter it directly:
+1. Move into the extracted or cloned Local Reader App folder. In File Explorer, select that folder, hold `Shift`, right-click, and choose **Copy as path**. In PowerShell, type `Set-Location ` with a trailing space, paste the copied path, and press `Enter`. You can also enter it directly:
 
    ```powershell
-   Set-Location 'C:\path\to\reader-wiki'
+   Set-Location 'C:\path\to\local-reader-app'
    ```
 
 2. Install the exact locked dependencies:
@@ -196,7 +209,7 @@ If PowerShell says that `pnpm.ps1` cannot run because of the execution policy, d
 
    If the folder has no `README.md`, set `defaultPath` to another existing file or remove that line.
 
-5. Build Reader-Wiki:
+5. Build Local Reader App:
 
    ```powershell
    pnpm build
@@ -210,23 +223,23 @@ If PowerShell says that `pnpm.ps1` cannot run because of the execution policy, d
 
 7. Keep PowerShell open and visit [http://127.0.0.1:5173/](http://127.0.0.1:5173/) in your browser. PowerShell also shows the exact URL and configuration file path.
 
-8. To stop Reader-Wiki, return to that PowerShell window and press `Ctrl+C`.
+8. To stop Local Reader App, return to that PowerShell window and press `Ctrl+C`.
 
-## Start Reader-Wiki Again
+## Start Local Reader App Again
 
 After the first build, normal startup only needs the project folder and `pnpm start`.
 
 On macOS:
 
 ```bash
-cd "/path/to/reader-wiki"
+cd "/path/to/local-reader-app"
 pnpm start
 ```
 
 On Windows PowerShell:
 
 ```powershell
-Set-Location 'C:\path\to\reader-wiki'
+Set-Location 'C:\path\to\local-reader-app'
 pnpm start
 ```
 
@@ -234,15 +247,15 @@ pnpm start
 
 ## Configure the Folders You Read
 
-Reader-Wiki calls each registered folder a repository, but the folder can also be a documentation folder that is not managed by Git.
+Local Reader App calls each registered folder a repository, but the folder can also be a documentation folder that is not managed by Git.
 
-The default configuration file is `repositories.yaml` in the Reader-Wiki folder. Keep this file private: it contains absolute paths from your computer and is intentionally excluded from Git.
+The default configuration file is `repositories.yaml` in the Local Reader App folder. Keep this file private: it contains absolute paths from your computer and is intentionally excluded from Git.
 
 Each entry supports these fields:
 
 | Field | Required | Meaning |
 | --- | --- | --- |
-| `id` | Yes | A unique name used internally by Reader-Wiki. |
+| `id` | Yes | A unique name used internally by Local Reader App. |
 | `label` | Yes | The name shown in the repository selector. |
 | `root` | Yes | An existing, readable absolute folder path. |
 | `defaultPath` | No | A file inside `root` to open when the repository is selected, such as `README.md`. |
@@ -250,7 +263,7 @@ Each entry supports these fields:
 
 Repository IDs must be unique. Two entries cannot point to the same folder, differ only by letter case or Unicode normalization, or have parent-and-child roots. These checks prevent overlapping visibility and AI context boundaries.
 
-`.git` is always hidden. Reader-Wiki never fetches from Git remotes, even if an older configuration still contains `fetchRemote: true`.
+`.git` is always hidden. Local Reader App never fetches from Git remotes, even if an older configuration still contains `fetchRemote: true`.
 
 Each `excludes` line supports one of these simple forms:
 
@@ -259,7 +272,9 @@ Each `excludes` line supports one of these simple forms:
 - an extension pattern such as `'*.pem'`; or
 - a name prefix ending in `*`, such as `'secret*'`.
 
-Quote wildcard entries exactly as shown because an unquoted leading `*` has a different meaning in YAML. Other wildcard syntax is not supported. Only `.git` is excluded automatically. Add `.env`, key files, exports, or other sensitive paths yourself when they must not appear in the tree, AI context choices, or direct HTTP Delivery targets.
+Quote wildcard entries exactly as shown because an unquoted leading `*` has a different meaning in YAML. Other wildcard syntax is not supported. Exclude matching is case-sensitive, so use the exact letter case of the real path. Only `.git` is excluded automatically. Add `.env`, key files, exports, or other sensitive paths yourself when they must not appear in the tree, Local Reader App's AI context choices, or direct HTTP Delivery targets.
+
+**`excludes` is not a native CLI access boundary.** Codex CLI and Claude Code CLI may inspect or change excluded paths anywhere inside the Current repo when using their own tools, subject to the CLI runtime policy. Removing a context chip also removes only the initial context assembled by Local Reader App; it does not prevent the CLI from finding the same file or rule later. Do not enable a CLI entry for a repository containing secrets that the CLI must never access.
 
 ### Add or edit repositories in Settings
 
@@ -275,24 +290,28 @@ After the first valid repository is configured, you can manage the list in the b
 
 **Remove from list** removes only the configuration entry. It never deletes the folder or any file inside it. Saving a changed repository list stops active HTTP Delivery sessions because their old repository boundaries are no longer current.
 
-If another program changes the configuration after Settings loads it, Reader-Wiki refuses to overwrite the newer file. Return to the viewer, reopen Settings, and try again.
+If another program changes the configuration after Settings loads it, Local Reader App refuses to overwrite the newer file. Return to the viewer, reopen Settings, and try again.
+
+Repository Settings saves and AI runs are mutually exclusive. If a save is rejected because AI Chat is active, wait for that run to finish or cancel it, then validate and save again. If an AI request is rejected while a configuration save is active, wait for the save to finish and retry the request.
 
 ### Use a configuration file in another location
 
 On macOS:
 
 ```bash
-READER_WIKI_CONFIG="<absolute-path-to-repositories.yaml>" pnpm start
+LOCAL_READER_APP_CONFIG="<absolute-path-to-repositories.yaml>" pnpm start
 ```
 
 On Windows PowerShell:
 
 ```powershell
-$env:READER_WIKI_CONFIG = '<absolute-path-to-repositories.yaml>'
+$env:LOCAL_READER_APP_CONFIG = '<absolute-path-to-repositories.yaml>'
 pnpm start
 ```
 
 Settings saves to the selected configuration file, so it must be writable if you want to edit the repository list in the UI.
+
+`READER_WIKI_CONFIG` remains available only as a backward-compatible fallback. New configurations and documentation should use `LOCAL_READER_APP_CONFIG`.
 
 ## Understand the Workspace
 
@@ -307,7 +326,7 @@ At narrow browser widths, the right panel moves below the reader, and the worksp
 ### Repository selector and file tree
 
 - **Repository** switches between registered roots. Each repository keeps its own file tabs during the current page session.
-- **Reload repository** refreshes the file tree and every open tab from the local disk. Use it after another editor or program changes files; Reader-Wiki does not continuously watch the filesystem.
+- **Reload repository** refreshes the file tree and every open tab from the local disk. Use it after another editor or program changes files; Local Reader App does not continuously watch the filesystem.
 - **HTTP Delivery** shows the current number of temporary deliveries, their URLs, and a stop button for each one.
 - **Collapse all folders** closes every expanded folder except the root. It does not close file tabs.
 - Long trees support horizontal scrolling and keep ancestor folders visible at the top. Select a sticky ancestor to jump back to its position.
@@ -319,7 +338,7 @@ Right-click a file or folder for:
 
 - **Copy Absolute Path**;
 - **Copy Relative Path**;
-- **Open in New Tab** for files, meaning another file tab inside Reader-Wiki; and
+- **Open in New Tab** for files, meaning another file tab inside Local Reader App; and
 - **Send a path to AI Chat** after an AI entry passes its readiness check.
 
 The context menu supports `Arrow Up`, `Arrow Down`, `Home`, `End`, and `Escape`.
@@ -346,7 +365,7 @@ The right-panel tabs also support `Left Arrow`, `Right Arrow`, `Home`, and `End`
 
 ## View Files
 
-Reader-Wiki chooses a safe viewer from the file name, content, and size.
+Local Reader App chooses a safe viewer from the file name, content, and size.
 
 | File | Available view |
 | --- | --- |
@@ -355,14 +374,14 @@ Reader-Wiki chooses a safe viewer from the file name, content, and size.
 | Source code, JSON, YAML, configuration, and text | **Raw** with line numbers, horizontal scrolling, and local Git change markers. |
 | PNG, JPEG, GIF, WebP, and SVG | Image preview. |
 | PDF | Embedded browser PDF preview. |
-| `.docx` containing Markdown source | Rendered as Markdown. Reader-Wiki does not reproduce a normal Word page layout. |
+| `.docx` containing Markdown source | Rendered as Markdown. Local Reader App does not reproduce a normal Word page layout. |
 | Binary, unsupported, deleted binary, or oversized files | Metadata only, without loading an unsafe or excessive body into the reader. |
 
 The header can copy the full contents of a text-based file. Rendered Markdown code blocks have separate buttons to copy only that block or toggle long-line wrapping.
 
 **Source** wraps long lines for reading. **Raw** keeps line structure and uses horizontal scrolling.
 
-Rendered Markdown and HTML can load HTTPS images that the document explicitly references. That contacts the image host, and a newly opened Markdown or HTML file starts in **Rendered** mode. If you must avoid that request, inspect an untrusted document in a separate plain-text editor before opening it in Reader-Wiki.
+Rendered Markdown and sandboxed HTML can load HTTPS image resources that the document explicitly references, including image URLs in inline CSS. The Content Security Policy blocks other remote subresource types and the HTML sandbox disables scripts, but permitted HTTPS image requests still contact the image host. A newly opened Markdown or HTML file starts in **Rendered** mode, so inspect an untrusted document in a separate plain-text editor before opening it in Local Reader App if you must avoid external requests.
 
 ### Viewer size limits
 
@@ -400,14 +419,14 @@ For Markdown, **Table of Contents** lists H1 through H6 headings and their sourc
 - **Raw** edits Markdown text.
 - **Render** previews it with tables, task lists, and code-block controls.
 - The copy button copies the whole memo.
-- The download button saves `reader-wiki-memo.md` through your browser.
+- The download button saves `local-reader-app-memo.md` through your browser.
 - The delete button clears it immediately.
 
 Memo does not create or edit a repository file. Download anything you want to keep before reloading or closing the page.
 
 ## Use HTTP Delivery
 
-HTTP Delivery gives a selected file a temporary URL in a separate tab on the same local Reader-Wiki server. Start it from the center viewer header or a file-tab menu. Use the radio-tower button beside the repository selector to reopen an active URL or stop it.
+HTTP Delivery gives a selected file a temporary URL in a separate tab on the same loopback Local Reader App server. Start it from the center viewer header or a file-tab menu. Use the radio-tower button beside the repository selector to reopen an active URL or stop it.
 
 - Up to five files can be active at once.
 - Starting Delivery again for the same file reuses its existing delivery while the registered repository settings remain unchanged.
@@ -424,7 +443,7 @@ HTTP Delivery gives a selected file a temporary URL in a separate tab on the sam
 
 These URLs are local and temporary. Do not expose them with a tunnel, router rule, reverse proxy, or public firewall rule.
 
-## Adjust Reader-Wiki in Settings
+## Adjust Local Reader App in Settings
 
 Select the gear button to open Settings. Returning to the viewer without reloading the page preserves the current tabs, Memo, and AI conversation.
 
@@ -442,55 +461,59 @@ Add, edit, validate, preview, save, and remove repository-list entries. This is 
 
 ### AI Chat
 
-Choose one AI entry, enter only the connection details it needs, run a readiness check, and adjust supported model behavior. AI settings and credentials are not written to `repositories.yaml` or browser persistent storage.
+Choose one AI entry, enter only the connection details it needs, run a readiness check, and adjust supported model behavior. Values entered into Local Reader App remain in the current page and are not written to `repositories.yaml` or browser persistent storage. Persistent CLI sign-in remains in storage managed by the CLI itself, outside Local Reader App.
 
 ## Understand What Is Saved
 
 | Item | Where it lives | After page reload |
 | --- | --- | --- |
-| Repository list | `repositories.yaml` or the file selected by `READER_WIKI_CONFIG` | Kept |
+| Repository list | `repositories.yaml` or the file selected by `LOCAL_READER_APP_CONFIG` | Kept |
 | Text scale, theme, and layout | Browser storage for this local site | Kept |
 | Open file tabs | Current page memory | Cleared |
 | Memo | Current page memory until you download it | Cleared |
 | AI conversation | Current page memory | Cleared |
-| AI entry settings and credentials | Current page memory only | Cleared |
-| HTTP Delivery sessions | Current Reader-Wiki server process | Cleared when the server stops |
+| AI entry state and credential values entered into Local Reader App | Current page memory only | Cleared |
+| Codex CLI or Claude Code CLI persistent sign-in | Storage managed externally by that CLI | Not cleared by Local Reader App |
+| Voice input audio and transcript | Browser or operating-system speech recognition; an external speech service may process audio, while Local Reader App receives the transcript | Browser/provider-dependent |
+| HTTP Delivery sessions | Current Local Reader App server process | Cleared when the server stops |
 | Files in registered repositories | Read by the viewer; a supported CLI AI Chat request may edit the Current repo | May change after a CLI edit request |
+
+Local Reader App has no built-in repository backup or restore. Before a CLI write, make a verified backup with your normal Git or file-copy workflow. To back up Local Reader App's repository list, copy the actual YAML file shown in **Settings** > **Repositories** > **Config details**; restore it while the server is stopped and start the app again. Browser appearance settings have no export and must be set again if site data is cleared.
 
 ## Set Up Optional AI Chat
 
-AI Chat is optional. The MVP supports an already installed and authenticated **Codex CLI** or **Claude Code CLI**. Both entries can use their native tools to work in the Current repo when the runtime can enforce the Current repo boundary. **AI API** and **Local AI** remain visible as future entries, but their action is a disabled **Comming soon** button and they cannot be activated in this build. All four entries use the normal `pnpm start` command; there is no separate AI startup command.
+AI Chat is optional. In this README, “MVP” and “this build” mean the documented `0.1.0` source. The MVP supports an already installed and authenticated **Codex CLI** or **Claude Code CLI**. Both entries can use their native tools to work in the Current repo when the runtime can enforce the Current repo boundary. **AI API** and **Local AI** remain visible as future entries, but their action is a disabled **Coming soon** button and they cannot be activated through the normal UI. All four cards use the normal `pnpm start` command; there is no separate AI startup command.
 
-You provide and manage any AI account, API key, local runtime, model, endpoint, and credential used with AI Chat. Provider subscriptions, API usage fees, token or quota limits, network access, local model downloads, model licenses, storage, memory, compute, electricity, updates, and model selection are your responsibility. Reader-Wiki does not pay AI costs, refund provider charges, increase quotas, choose models for you, or provide provider-specific support.
+You provide and manage any AI account, API key, local runtime, model, endpoint, and credential used with AI Chat. Provider subscriptions, API usage fees, token or quota limits, network access, local model downloads, model licenses, storage, memory, compute, electricity, updates, and model selection are your responsibility. Local Reader App does not pay AI costs, refund provider charges, increase quotas, choose models for you, or provide provider-specific support.
 
 ### AI API and Local AI
 
-The AI API and Local AI implementations remain in the source for future work, including their provider settings and guarded edit protocol. They are not part of the MVP. Their cards stay visible so the four-entry design is clear, but **Set active** is replaced by a disabled **Comming soon** action. Reader-Wiki does not send a provider request or start a local runtime through either entry in this build.
+The AI API and Local AI implementations remain in the source for future development, including provider settings and a guarded edit protocol. They are not a supported public interface in the MVP. Their cards stay visible so the four-entry design is clear, but **Set active** is replaced by a disabled **Coming soon** action, so the normal UI cannot send a provider request or start a local runtime through either entry. Internal loopback API code for these future entries still exists and must not be treated as a supported or disabled security boundary.
 
 ### CLI entries
 
-Codex CLI and Claude Code CLI can use their native tools to edit files in the Current repo selected in Reader-Wiki. Reader-Wiki starts the selected CLI with that registered repository root as its working directory only after its binary, existing authentication, required non-interactive flags, and workspace pass readiness.
+Codex CLI and Claude Code CLI can use their native tools to edit files in the Current repo selected in Local Reader App. Local Reader App starts the selected CLI with that registered repository root as its working directory only after its binary, existing authentication, required non-interactive flags, and workspace pass readiness.
 
 1. Install Codex CLI or Claude Code CLI separately by following that CLI's official instructions.
-2. Complete the CLI's normal authentication from your own terminal and confirm that it works before starting Reader-Wiki. Reader-Wiki lets the official CLI use its existing account or supported authentication environment without displaying or storing credential values.
-3. Start Reader-Wiki normally with `pnpm start`.
+2. Complete the CLI's normal authentication from your own terminal and confirm that it works before starting Local Reader App. Codex CLI uses its existing persistent sign-in; Local Reader App intentionally does not forward `OPENAI_API_KEY` or `CODEX_API_KEY` to Codex. Claude Code CLI can use persistent sign-in or supported launcher environment values: `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN`, and `CLAUDE_CONFIG_DIR`. Local Reader App does not display or persist those values.
+3. Start Local Reader App normally with `pnpm start`.
 4. Open **Settings** > **AI Chat**, set the installed CLI active, and select **Check readiness**.
 5. Confirm that readiness succeeds, review the Current repo, and send the request from AI Chat.
 
-Readiness does not edit repository files. Codex readiness inspects the installed CLI, persistent sign-in, flags, Current repo write access, and project MCP isolation without sending a model request. Claude Code readiness additionally sends one no-tool model prompt so an expired or rejected credential is not reported as ready. Reader-Wiki does not start sign-in, browser authorization, CLI installation, model download, or an in-app terminal.
+Readiness does not edit repository files. Codex readiness inspects the installed CLI, persistent sign-in, flags, Current repo write access, and project MCP isolation without sending a model request. Claude Code readiness additionally sends one no-tool model prompt so an expired or rejected credential is not reported as ready. Local Reader App does not start sign-in, browser authorization, CLI installation, model download, or an in-app terminal.
 
-Codex CLI runs non-interactively with the Current repo as `-C` and a unique per-run permission profile that makes only that workspace writable. User config is ignored for the run, unrelated built-in integrations are disabled, and existing exec-policy rules are not bypassed. Claude Code CLI runs with the Current repo as its working directory, no user/project/local setting sources or additional directories, and its native `Bash`, `Glob`, `Grep`, `Read`, `Edit`, and `Write` tools in `acceptEdits` mode. On macOS and Linux, its native Bash sandbox must start successfully and cannot retry a command outside the sandbox. Native Windows Claude Code CLI readiness fails closed and does not start an editing run because the same sandbox boundary is unavailable; WSL2 is handled as a Linux runtime.
+Codex CLI runs non-interactively with the Current repo as `-C` and a unique per-run permission profile that makes only that workspace writable. User config is ignored for the run, unrelated built-in integrations are disabled, and existing exec-policy rules are not bypassed. Claude Code CLI runs with the Current repo as its working directory, no user/project/local setting sources or additional directories, and its native `Bash`, `Glob`, `Grep`, `Read`, `Edit`, and `Write` tools in `acceptEdits` mode. On macOS and a Linux runtime, its native Bash sandbox must start successfully and cannot retry a command outside the sandbox. Native Windows Claude Code CLI readiness fails closed and does not start an editing run because the same sandbox boundary is unavailable; WSL2 is classified as a Linux runtime for this check, but that classification does not make WSL2 a supported Local Reader App user platform.
 
-Reader-Wiki does not translate a CLI response into its guarded provider edit protocol and does not impose that protocol's file-count, directory, read-round, or operation-type limits on a CLI run. The CLI may inspect and change additional files inside the Current repo when the request requires it; selected context chips are initial context, not an edit-path limit. Review the response and actual working-tree diff before deciding what to keep.
+Local Reader App does not translate a CLI response into Local Reader App's guarded provider edit protocol and does not impose that protocol's file-count, directory, read-round, or operation-type limits on a CLI run. The CLI may inspect and change additional files inside the Current repo when needed to complete the request; selected context chips and configured `excludes` are not an edit-path or native-tool access limit. Review the response and actual working-tree diff before deciding what to keep.
 
 ### Choose context and send a message
 
 1. Complete the active entry's readiness check.
 2. For a repository-specific question, right-click a file or folder in the tree and select **Send a path to AI Chat**.
-3. Review the context chips above the message box. Remove anything you do not want to send.
+3. Review the context chips above the message box. Removing a chip keeps it out of the initial context assembled by Local Reader App, but does not prevent a CLI entry from finding the same path later with native tools.
 4. Enter a message and send it.
 
-Selecting a path is optional. Skip step 2 for a general question, an attachment-only request, or a repo-wide edit instruction that does not need an initial path hint. A directory or several selected files are valid context. Still review and remove any automatically suggested root rule that you do not want to send.
+Selecting a path is optional. Skip step 2 for a general question, an attachment-only request, or a repo-wide edit instruction that does not need an initial path hint. A directory or several selected files are valid context. Review an automatically suggested root rule before sending; removing it affects only the initial context and is not a guarantee that a CLI cannot discover that rule inside the Current repo.
 
 An open file is not sent automatically. A selected file can contribute text; a selected directory contributes only its direct child list, not every nested file. When present, root `AGENTS.md` or `CLAUDE.md` rules appear as a visible, removable rule chip.
 
@@ -513,38 +536,46 @@ AI context is bounded to 12 primary items, 2 rule items, 64 KiB in total, and at
 - The complete AI request body is limited to about 140 KiB, so several large text attachments can still be rejected. Use fewer or smaller files when that happens.
 - Choose the available response depth for Codex CLI. Claude Code CLI uses its configured default behavior.
 
-Only one AI run can use the same repository at a time, with up to four runs across the server. CLI readiness uses a short server-side lease shared across repository switches, while every send still validates the selected Current repo root and write access. After the lease expires, sending automatically repeats the entry, authentication, Current repo, and revision checks before continuing. A failed renewal stops before the CLI run. Page reload and Reader-Wiki server restart still create a fresh browser session and clear the in-memory conversation.
+Only one AI run can use the same repository at a time, with up to four runs across the server. CLI readiness uses a short server-side lease shared across repository switches, while every send still validates the selected Current repo root and write access. After the lease expires, sending automatically repeats the entry, authentication, Current repo, and revision checks before continuing. A failed renewal stops before the CLI run. Reloading the page clears the in-memory conversation. Restarting the server invalidates the old browser session but does not erase an already open page by itself; reload or reopen the URL printed by the new server to create a fresh session, which also clears the conversation.
 
-AI Chat displays only the AI Entry's user-facing natural-language response. Reader-Wiki keeps its best-effort change audit and warnings as internal run metadata for repository refresh and retry control instead of appending them to the conversation. If execution fails, the conversation shows a short explanation and next action rather than raw CLI output. AI remains advisory; a person must review the response, repository, and actual working-tree diff and decide what to keep.
+AI Chat displays only the AI Entry's user-facing natural-language response. Local Reader App keeps its best-effort change audit and warnings as internal run metadata for repository refresh and retry control instead of appending them to the conversation. If execution fails, the conversation shows a short explanation and next action rather than raw CLI output. AI remains advisory; a person must review the response, repository, and actual working-tree diff and decide what to keep.
 
 ## Safety and Privacy
 
-- Reader-Wiki accepts only local loopback hosts such as `127.0.0.1`, `localhost`, and `::1`. It refuses `0.0.0.0` and other network interfaces.
-- Each start creates a new browser session. API calls require that session, and write-like configuration actions also require the exact local origin and request format.
+- Local Reader App accepts exactly `127.0.0.1`, `localhost`, or `::1` as `HOST`. It refuses `0.0.0.0`, other loopback addresses, and network interfaces.
+- Each server start creates a new server-side session token. Open or reload the exact URL printed by that server to receive the new browser session; an old tab's API calls fail after restart until it is reloaded. Write-like configuration actions also require the exact local origin and request format.
 - Requested paths must stay inside a registered root. Absolute input paths, `..` traversal, and excluded paths are rejected. File-body reads and HTTP Delivery also reject every symbolic-link path component, while tree navigation refuses links that resolve outside the root.
-- `.git` is always excluded from file viewing. Git commands are used only for local status and diff information; Reader-Wiki does not contact Git remotes.
-- Normal viewing does not edit repository files. Repository Settings writes only the selected Reader-Wiki configuration file.
-- AI API and Local AI are disabled **Comming soon** entries in this build and cannot send repository context or edit requests.
-- Codex CLI, and Claude Code CLI on macOS or Linux, are the explicit AI Chat write entries. They receive the conversation and visible context, may inspect additional Current repo files with their native tools, and can create, update, rename, or delete multiple files and nested directories without Reader-Wiki's provider edit limits. Reader-Wiki supplies no additional workspace root. Native Windows Claude Code CLI editing is not enabled in this MVP because the Current repo-only Bash boundary cannot be enforced there.
-- HTTP Delivery uses temporary, restricted local URLs and does not turn Reader-Wiki into a public server.
+- `.git` is always excluded from file viewing. Git commands are used only for local status and diff information; Local Reader App does not contact Git remotes.
+- Rendered Markdown and sandboxed HTML may contact explicitly referenced HTTPS image hosts. Other remote subresource types are restricted by Content Security Policy and HTML scripts are disabled, but inspect untrusted documents as plain text elsewhere before opening them when any network request is unacceptable.
+- Voice input uses the browser's speech-recognition feature. Depending on the browser and operating system, audio may be processed by an external speech service; Local Reader App cannot select, verify, or control that service's storage. Use typed input if this is unacceptable.
+- Normal viewing does not edit repository files. Repository Settings writes only the selected Local Reader App configuration file.
+- AI API and Local AI are disabled **Coming soon** entries in the normal UI, which cannot send repository context or edit requests through them. Their future internal loopback API implementation is not a supported interface or an access-control guarantee.
+- Codex CLI, and Claude Code CLI on macOS or Linux, are the explicit AI Chat write entries. They receive the conversation and visible context, may inspect additional Current repo files with their native tools, and can create, update, rename, or delete multiple files and nested directories without Local Reader App's provider edit limits. Local Reader App supplies no additional workspace root. Native Windows Claude Code CLI editing is not enabled in this MVP because the Current repo-only Bash boundary cannot be enforced there.
+- HTTP Delivery uses temporary, restricted local URLs and does not turn Local Reader App into a public server.
 
-Do not run Reader-Wiki on an untrusted copy of its own source, and do not expose its port through a tunnel or network rule. To report a security problem privately, follow [SECURITY.md](SECURITY.md).
+Do not run Local Reader App on an untrusted copy of its own source, and do not expose its port through a tunnel or network rule. To report a security problem privately, follow [SECURITY.md](SECURITY.md).
+
+## Security Reports
+
+Do not report an unpatched vulnerability in a public issue, discussion, pull request, AI prompt, screenshot, or log. If GitHub shows **Security** > **Advisories** > **Report a vulnerability** for this repository, use that private workflow. Otherwise email [`info.freedombuild@gmail.com`](mailto:info.freedombuild@gmail.com) with the subject `[Security] Local Reader App`.
+
+Include the affected revision, operating system, reproduction conditions, expected impact, and the smallest safe proof of concept. Remove credentials, personal data, private paths, and confidential repository contents. See [SECURITY.md](SECURITY.md) for the complete reporting policy.
 
 ## Support and Responsibility
 
-Reader-Wiki is provided as free, open-source software under the MIT License. It does not include individual installation, configuration, operation, or troubleshooting support comparable to a paid product or support contract.
+Local Reader App is provided as free, open-source software under the Apache License 2.0. It does not include individual installation, configuration, operation, or troubleshooting support comparable to a paid product or support contract.
 
-Decide whether and how to use Reader-Wiki at your own discretion and responsibility. Keep backups of important repositories before changing tools, settings, dependencies, or enabling a CLI entry. You are responsible for checking the effect of commands you run, folders you register, files you expose through HTTP Delivery, context you send to AI, and every file change produced by Codex CLI or Claude Code CLI.
+Decide whether and how to use Local Reader App at your own discretion and responsibility. Keep backups of important repositories before changing tools, settings, dependencies, or enabling a CLI entry. You are responsible for checking the effect of commands you run, folders you register, files you expose through HTTP Delivery, context you send to AI, and every file change produced by Codex CLI or Claude Code CLI.
 
-Bug reports and issues, if available on the public repository, do not guarantee an individual reply, a fix, a release date, or a service-level agreement. Security reports are separate from general support; follow [SECURITY.md](SECURITY.md) and do not post unpatched vulnerability details in a public issue, discussion, AI prompt, screenshot, or log.
+After the repository is public, use [GitHub Issues](https://github.com/freedombuild-official/local-reader-app/issues) for reproducible bugs and focused feature proposals. Include the source version or revision, operating system, steps, expected and actual behavior, and a sanitized exact error. An issue does not guarantee an individual reply, a fix, a release date, or a service-level agreement. Security reports are different: follow [SECURITY.md](SECURITY.md) and do not post unpatched vulnerability details in an issue, discussion, AI prompt, screenshot, or log.
 
-## Update Reader-Wiki
+## Update Local Reader App
 
 Stop the running server with `Control+C` or `Ctrl+C` before updating.
 
 ### If you cloned with Git
 
-From the Reader-Wiki folder:
+From the Local Reader App folder:
 
 ```bash
 git pull --ff-only
@@ -558,22 +589,22 @@ On PowerShell, use the same commands. If the execution policy blocks `pnpm.ps1`,
 ### If you downloaded a ZIP
 
 1. Download and extract the new ZIP into a new folder.
-2. Copy your private `repositories.yaml` from the old Reader-Wiki folder into the new one.
+2. Copy your private `repositories.yaml` from the old Local Reader App folder into the new one.
 3. In the new folder, run `pnpm install --frozen-lockfile`, `pnpm build`, and `pnpm start`.
-4. Confirm your repositories and settings before deleting the old Reader-Wiki folder.
+4. Confirm your repositories and settings before deleting the old Local Reader App folder.
 
-## Uninstall Reader-Wiki
+## Uninstall Local Reader App
 
 1. Stop the server with `Control+C` or `Ctrl+C`.
 2. If you want to keep the repository list, save a copy of `repositories.yaml` elsewhere.
-3. Delete the Reader-Wiki project folder.
-4. Optionally clear site data for `127.0.0.1:5173` in your browser to remove the saved text scale, theme, and layout.
+3. Delete the Local Reader App project folder.
+4. Optionally clear site data for the local origin you used—`http://127.0.0.1:5173` by default—to remove the saved text scale, theme, and layout.
 
-Uninstalling Reader-Wiki does not delete any registered repository folder.
+Uninstalling Local Reader App does not delete any registered repository folder.
 
 ## Troubleshooting
 
-If you are stuck, you can attach this README file to an AI assistant and ask it to walk through the current step with you. Tell it your operating system, Reader-Wiki version or source revision if known, the step you are on, the exact command or click you tried, and the exact error message. Remove API keys, passwords, tokens, cookies, `.env` contents, personal information, private paths, and confidential repository data before sending anything. AI suggestions can be wrong, so read the command and its effect before running it. Asking an AI assistant does not mean the maintainers provide individual support.
+If you are stuck, you can attach this README file to an AI assistant and ask it to walk through the current step with you. Tell it your operating system, Local Reader App version or source revision if known, the step you are on, the exact command or click you tried, and the exact error message. Remove API keys, passwords, tokens, cookies, `.env` contents, personal information, private paths, and confidential repository data before sending anything. AI suggestions can be wrong, so read the command and its effect before running it. Asking an AI assistant does not mean the maintainers provide individual support.
 
 ### `pnpm` is not found
 
@@ -592,7 +623,7 @@ Run `node --version`. Install a version from `22.13.0` up to, but not including,
 
 ### `Repository config was not found`
 
-Make sure you started Reader-Wiki from its own folder and created `repositories.yaml`. If you use `READER_WIKI_CONFIG`, confirm that its absolute path is correct.
+Make sure you started Local Reader App from its own folder and created `repositories.yaml`. If you use `LOCAL_READER_APP_CONFIG`, confirm that its absolute path is correct.
 
 ### The repository configuration is unsafe or invalid
 
@@ -633,7 +664,7 @@ Each server start creates a new local session. Reload the URL printed by the cur
 
 ### Local file changes do not appear
 
-Select **Reload repository**. Reader-Wiki does not continuously watch the registered folders.
+Select **Reload repository**. Local Reader App does not continuously watch the registered folders.
 
 ### Git change markers do not appear
 
@@ -643,10 +674,20 @@ Confirm that Git is installed, the registered folder is a Git working tree, and 
 
 - Confirm that Codex CLI or Claude Code CLI is installed and works from your own terminal.
 - Run the CLI's own authentication status command in that terminal and complete sign-in if needed.
-- If the CLI uses an authentication environment variable, start Reader-Wiki from an environment where that variable is available.
-- For Claude Code, a stale or rejected `ANTHROPIC_API_KEY` can override persistent sign-in. Remove or replace that variable, complete `claude auth login` if needed, and start Reader-Wiki from the corrected terminal.
+- Codex CLI must use persistent sign-in; Local Reader App does not forward `OPENAI_API_KEY` or `CODEX_API_KEY` to it.
+- Claude Code CLI may use persistent sign-in or the supported Claude authentication environment inherited from the process that starts Local Reader App.
+- For Claude Code, a stale or rejected `ANTHROPIC_API_KEY` can override persistent sign-in. Remove or replace that variable, complete `claude auth login` if needed, and start Local Reader App from the corrected terminal.
 - Confirm that the selected Current repo still exists and is writable by your account.
-- Select **Check readiness** again. AI API and Local AI remain disabled **Comming soon** entries in this build.
+- Select **Check readiness** again. AI API and Local AI remain disabled **Coming soon** entries in this build.
+
+### Local Reader App could not confirm that the CLI stopped
+
+The server deliberately keeps that Current repo locked because the CLI process tree may still be running. Closing the CLI alone does not clear the lock:
+
+1. Close the CLI process and any child process it started.
+2. Review the Current repo and decide how to handle any partial changes.
+3. Stop the Local Reader App server with `Control+C` or `Ctrl+C`, then run `pnpm start` again.
+4. Reload or reopen the exact URL printed by the new server, run readiness again, and only then retry. The reload clears the in-memory conversation.
 
 ### Voice input is unavailable
 
@@ -656,11 +697,39 @@ The microphone button is enabled only when the browser provides a compatible spe
 
 Use the main viewer for HTML, HTM, or SVG. For a local Markdown asset, confirm that the document explicitly references it without `../`, that it is in the Markdown file's directory or a subdirectory, and that it is not excluded or reached through a symbolic link. Delivered Markdown is limited to 2 MiB; other delivered files and assets are limited to 25 MiB.
 
+## Technical Overview and Public Interfaces
+
+Local Reader App has a React/Vite browser client and a local Express server. The server reads the configured YAML file, validates every registered root, performs guarded filesystem and local Git operations, and serves the client and loopback API in one process. Optional Codex CLI and Claude Code CLI entries run as separate child processes only after their readiness and Current repo checks succeed. The project has no hosted backend, account system, or built-in telemetry service.
+
+The supported operator-facing interfaces are:
+
+| Interface | Purpose and compatibility |
+| --- | --- |
+| `pnpm start` | Starts the last production build. Run `pnpm build` first after installation or an update. |
+| `pnpm dev` | Starts the development server with automatic source updates. Use it only when developing Local Reader App. |
+| `http://127.0.0.1:5173/` | Default local URL. `PORT` can change the port; `HOST` accepts only `127.0.0.1`, `localhost`, or `::1`. |
+| `repositories.yaml` | Default private repository list. Start from `example.repositories.yaml`; do not commit your real paths. |
+| `LOCAL_READER_APP_CONFIG` | Selects another repository configuration file. `READER_WIKI_CONFIG` is a legacy fallback. |
+| `LOCAL_READER_APP_AI_CHAT_SYSTEM_PROMPT` | Selects a custom Markdown system prompt containing `version` frontmatter. `READER_WIKI_AI_CHAT_SYSTEM_PROMPT` is a legacy fallback. |
+| `VITE_HMR_PORT` | Overrides the development-only browser hot-reload port when needed. |
+
+Internal `ReaderWiki*` types, `reader_wiki_*` protocol values, cookies, local-storage keys, loopback JSON endpoints, and `X-Reader-Wiki-*` headers are compatibility implementation details, not a promised external API. A future release may change them with the corresponding client and server together.
+
 ## For Contributors
 
-Use the live development server only when changing Reader-Wiki itself:
+Contributions use the standard Apache-2.0 inbound-equals-outbound model: no CLA or copyright assignment is required, and contributors retain copyright in their own work while licensing submitted contributions under Apache-2.0.
+
+1. Fork the official repository, clone your fork, and create a focused branch.
+2. Install the locked dependencies, make one coherent change, and add or update tests and both README languages when behavior changes.
+3. Run every verification command below.
+4. Push your branch and open a pull request against the official `main` branch. Explain the problem, chosen change, user or safety impact, and verification results.
+
+Do not include credentials, tokens, private repository content, personal paths, customer data, or unrelated generated files. Report vulnerabilities through [SECURITY.md](SECURITY.md), not a public issue or pull request. [CONTRIBUTING.md](CONTRIBUTING.md) contains the complete contribution policy.
+
+Use the live development server only when changing Local Reader App itself:
 
 ```bash
+pnpm install --frozen-lockfile
 pnpm dev
 ```
 
@@ -674,12 +743,16 @@ pnpm audit --prod
 pnpm run scan:public
 ```
 
-GitHub Actions checks frozen installation, types, tests, the production build, and the public-source scan on Ubuntu, Windows, and macOS.
+Keep [README.md](README.md) and [README.ja.md](README.ja.md) aligned when behavior, commands, limits, warnings, or public identity changes. GitHub Actions checks frozen installation, types, tests, the production build, and the public-source scan on Ubuntu, Windows, and macOS.
 
-## License
+## License, Attribution, and Trademarks
 
-Reader-Wiki is licensed under the MIT License. See [LICENSE](LICENSE).
+Local Reader App is licensed under the [Apache License 2.0](LICENSE). Copyright 2026 Ryusei Komada. Other contributors retain copyright in their respective contributions. [NOTICE](NOTICE) records the original project attribution, and [AUTHORS.md](AUTHORS.md) identifies the original creator and maintainer.
+
+Apache-2.0 permits use, modification, and distribution subject to its terms, but it does not grant rights to FreedomBuild's trade name, the Local Reader App project identity, or a future official logo. Use those identifiers accurately and distinguish forks or modified distributions from official releases as described in [TRADEMARKS.md](TRADEMARKS.md).
+
+To cite the project, use [CITATION.cff](CITATION.cff). To contribute, follow [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Summary
 
-Reader-Wiki is a local browser workspace for reading one or more folders without handing normal viewing control of those files to a hosted service. Start with the macOS or Windows guide, register an absolute folder path, and use the complete feature sections above as your operating manual. AI Chat remains optional. Its removable chips show the initial context, while a supported CLI entry may inspect additional files inside the Current repo when needed for the request.
+Local Reader App is a local browser workspace for reading one or more folders without handing normal viewing control of those files to a hosted service. Start with the macOS or Windows guide, register an absolute folder path, and use the complete feature sections above as your operating manual. AI Chat remains optional. Its removable chips show the initial context, while a supported CLI entry may inspect additional files inside the Current repo when needed for the request.

@@ -306,7 +306,7 @@ export function SettingsView({
             <SettingsIcon />
           </span>
           <div>
-            <p>Reader-Wiki</p>
+            <p>Local Reader App</p>
             <h1>Settings</h1>
           </div>
         </div>
@@ -330,7 +330,7 @@ export function SettingsView({
       <section className="settings-main" aria-label={settingsTitle}>
         <header className="settings-header">
           <div>
-            <p>Reader-Wiki Settings</p>
+            <p>Local Reader App Settings</p>
             <h2>{settingsTitle}</h2>
           </div>
           <div className="settings-header-actions">
@@ -396,7 +396,7 @@ function BasicSettingsPanel({ settings, onChange }: { settings: BasicSettings; o
         </SettingRow>
       </SettingsCard>
       <SettingsCard title="Appearance" eyebrow="Color mode" status={settings.colorMode}>
-        <SettingRow title="Choose the reader theme" description="Applies Light or Dark to the full Reader-Wiki app in this browser.">
+        <SettingRow title="Choose the reader theme" description="Applies Light or Dark to the entire Local Reader App in this browser.">
           <SegmentedControl
             label="Color mode"
             value={settings.colorMode}
@@ -542,14 +542,14 @@ function RepositoriesSettingsPanel({
             Add repository
           </button>
         </div>
-        <p className="settings-message">Remove from list only edits the config draft. Reader-Wiki does not delete repository directories.</p>
+        <p className="settings-message">Remove from list only edits the config draft. Local Reader App does not delete repository directories.</p>
       </SettingsCard>
 
       <details className="settings-details" aria-label="Config details">
         <summary>Config details</summary>
         <div className="settings-summary-grid">
           <SummaryItem label="Config file" value={repoState?.configPath || "Loading..."} />
-          <SummaryItem label="Source mode" value={repoState?.sourceMode === "env" ? "READER_WIKI_CONFIG" : "Default repositories.yaml"} />
+          <SummaryItem label="Source mode" value={repoState?.sourceMode === "env" ? "LOCAL_READER_APP_CONFIG" : "Default repositories.yaml"} />
           <SummaryItem label="Write access" value={repoState?.writable ? "Writable" : "Not writable"} />
           <SummaryItem label="Last validation" value={validation?.valid ? "Ready" : "Needs review"} />
         </div>
@@ -714,7 +714,7 @@ function AIChatSettingsPanel({
               entry="aiApi"
               title="AI API"
               subtitle="Direct context or server-validated repo access"
-              note="Context-only calls the configured HTTPS provider directly. Current repo write gives the model no shell or filesystem access: Reader-Wiki mediates bounded reads and applies only strict, validated multi-file text operations."
+              note="Context-only calls the configured HTTPS provider directly. Current repo write gives the model no shell or filesystem access: Local Reader App mediates bounded reads and applies only strict, validated multi-file text operations."
               configured={configured}
               lastCheckedAt={settings.lastCheckedAtByEntry.aiApi}
               status={effectiveAIStatus(settings, "aiApi")}
@@ -735,7 +735,7 @@ function AIChatSettingsPanel({
               entry="localAi"
               title="Local AI"
               subtitle="Direct context or server-validated local repo access"
-              note="Context-only calls the loopback endpoint directly. Current repo write uses the same strict Reader-Wiki read/edit protocol without starting runtimes, loading models, or giving the model shell access."
+              note="Context-only calls the loopback endpoint directly. Current repo write uses the same strict Local Reader App read/edit protocol without starting runtimes, loading models, or giving the model shell access."
               configured={configured}
               lastCheckedAt={settings.lastCheckedAtByEntry.localAi}
               status={effectiveAIStatus(settings, "localAi")}
@@ -810,7 +810,7 @@ function ModelBehaviorSettings({
           <small>Used only when the active endpoint supports Qwen-style thinking control.</small>
         </label>
       ) : null}
-      {capability.kind === "none" ? <p className="settings-message">Reader-Wiki will use the active model default for this entry.</p> : null}
+      {capability.kind === "none" ? <p className="settings-message">Local Reader App will use the active model default for this entry.</p> : null}
     </div>
   );
 }
@@ -877,7 +877,7 @@ function AuthenticationEntryCard({
                 label="Provider access policy"
                 status={readinessRowStatus(status)}
                 value={status.state === "ready" ? "Ready" : "Not ready"}
-                detail={status.state === "ready" ? "Reader-Wiki will enforce the access policy selected for this provider entry." : "Complete the endpoint, model, and access policy check before AI Chat is enabled."}
+                detail={status.state === "ready" ? "Local Reader App will enforce the access policy selected for this provider entry." : "Complete the endpoint, model, and access policy check before AI Chat is enabled."}
               />
               <ReadinessRow label="Next action" status={readinessRowStatus(status)} value={status.nextAction || "No action available"} />
               <ReadinessRow label="Last check" status={lastCheckedAt ? "ready" : "warning"} value={formatLastCheck(lastCheckedAt)} />
@@ -1045,7 +1045,7 @@ function ProviderAccessModeControl({ provider, onUpdate }: { provider: AIProvide
         <strong>{mode === "repoWrite" ? "Current repo write" : "Context-only"}</strong>
         <small>
           {mode === "repoWrite"
-            ? "The model returns a versioned JSON read/edit plan without filesystem access. Reader-Wiki validates and applies bounded UTF-8 text operations only inside the Current repo."
+            ? "The model returns a versioned JSON read/edit plan without filesystem access. Local Reader App validates and applies bounded UTF-8 text operations only inside the Current repo."
             : "The provider receives selected context but has no repository write tools."}
         </small>
       </div>
@@ -1123,7 +1123,7 @@ function AIEntryCard({
         <span className={status.state === "ready" ? "ready" : status.state === "failed" ? "error" : ""}>{aiEntryStatusLabel(entry, status)}</span>
       </div>
       <button type="button" className="secondary-button" disabled={!available} onClick={active ? onClearActive : onSetActive}>
-        {available ? active ? "Clear active entry" : "Set active" : "Comming soon"}
+        {available ? active ? "Clear active entry" : "Set active" : "Coming soon"}
       </button>
     </article>
   );
@@ -1346,7 +1346,7 @@ function cliStatusLabel(status: AIConnectionStatus): string {
 
 function cliStatusMessage(status: AIConnectionStatus): string {
   if (status.state === "ready") return "Ready to use for AI Chat.";
-  if (status.code === "cli_auth_missing") return "Complete persistent sign-in with the CLI outside Reader-Wiki, then check readiness again.";
+  if (status.code === "cli_auth_missing") return "Complete persistent sign-in with the CLI outside Local Reader App, then check readiness again.";
   if (status.state === "failed" || status.code === "wrapper_not_ready") return status.nextAction || status.message;
   return "Check the installed CLI and existing sign-in state.";
 }

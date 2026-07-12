@@ -381,7 +381,7 @@ describe("guarded provider repository edits", () => {
         status: 409,
         details: { code: "guarded_rollback_incomplete", rollbackState: "unverified" },
       });
-      expect(failure?.message).toContain("changed after Reader-Wiki placed it");
+      expect(failure?.message).toContain("changed after Local Reader App placed it");
       expect(failure?.message).not.toContain(root);
       expect(await readFile(target, "utf8")).toBe("tampered\n");
       const artifacts = (await readdir(root)).filter((name) => name.startsWith(".reader-wiki-ai-") && name.endsWith(".bak"));
@@ -452,7 +452,7 @@ describe("guarded provider repository edits", () => {
     }
   });
 
-  it("hides and rejects Reader-Wiki control-plane files inside the Current repo", async () => {
+  it("hides and rejects Local Reader App control-plane files inside the Current repo", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "reader-wiki-guarded-control-"));
     const otherRoot = await mkdtemp(path.join(tmpdir(), "reader-wiki-guarded-control-other-"));
     try {
@@ -587,7 +587,7 @@ describe("guarded provider repository edits", () => {
           status: readyStatus(),
         };
       }
-      expect(latest).toMatchObject({ type: "read_result", synthetic: true, files: [{ path: "reader-wiki-capability-probe.md", content: "Reader-Wiki capability probe: before" }] });
+      expect(latest).toMatchObject({ type: "read_result", synthetic: true, files: [{ path: "reader-wiki-capability-probe.md", content: "Local Reader App capability probe: before" }] });
       return {
         content: JSON.stringify({
           version: VERSION,
@@ -597,8 +597,8 @@ describe("guarded provider repository edits", () => {
             op: "replace",
             path: "reader-wiki-capability-probe.md",
             content: null,
-            oldText: "Reader-Wiki capability probe: before",
-            newText: "Reader-Wiki capability probe: after",
+            oldText: "Local Reader App capability probe: before",
+            newText: "Local Reader App capability probe: after",
           }],
           message: "ready",
         }),

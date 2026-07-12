@@ -1,6 +1,7 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { startReaderWikiServer, type ReaderWikiServerHandle } from "./createReaderWikiServer.js";
+import { repositoryConfigPathFromEnv } from "./repositoryConfig.js";
 
 const args = new Set(process.argv.slice(2));
 const isDev = args.has("--dev");
@@ -8,13 +9,13 @@ const port = Number(process.env.PORT || 5173);
 const host = process.env.HOST || "127.0.0.1";
 const hmrPort = process.env.VITE_HMR_PORT ? Number(process.env.VITE_HMR_PORT) : undefined;
 const packageRoot = process.cwd();
-const configPath = process.env.READER_WIKI_CONFIG || path.join(packageRoot, "repositories.yaml");
+const configPath = repositoryConfigPathFromEnv(packageRoot);
 let serverHandle: ReaderWikiServerHandle | null = null;
 let isShuttingDown = false;
 
 async function main(): Promise<void> {
   serverHandle = await startReaderWikiServer({ dev: isDev, port, host, hmrPort, configPath, packageRoot });
-  console.log(`Reader-Wiki listening on ${serverHandle.url}`);
+  console.log(`Local Reader App listening on ${serverHandle.url}`);
   console.log(`Repository config: ${configPath}`);
 }
 

@@ -125,8 +125,8 @@ const PROTOCOL_MAX_TREE_BYTES = 128 * 1024;
 const RESERVED_TEMP_MARKER = ".reader-wiki-ai-";
 const PROTECTED_ROOT_SEGMENTS = new Set([".git", ".codex", ".agents"]);
 const READINESS_PROBE_PATH = "reader-wiki-capability-probe.md";
-const READINESS_PROBE_BEFORE = "Reader-Wiki capability probe: before";
-const READINESS_PROBE_AFTER = "Reader-Wiki capability probe: after";
+const READINESS_PROBE_BEFORE = "Local Reader App capability probe: before";
+const READINESS_PROBE_AFTER = "Local Reader App capability probe: after";
 
 export async function buildGuardedRepoPathPolicy(repo: RepositoryConfig, controlPaths: string[]): Promise<GuardedRepoPathPolicy> {
   const pin = await pinRepositoryRoot(repo);
@@ -387,7 +387,7 @@ function guardedRunSummary(entry: AIProviderSettings["entry"], changedPaths: AIC
     changedPaths,
     repairs: [],
     warnings: [
-      "Guarded provider execution: the model received no filesystem or shell access; Reader-Wiki applied only validated Current repo text operations.",
+      "Guarded provider execution: the model received no filesystem or shell access; Local Reader App applied only validated Current repo text operations.",
       ...warnings,
     ],
   };
@@ -650,7 +650,7 @@ async function rollbackPreparedOperations(
       if (operation.placed && operation.nextContent !== null) {
         const current = await readTextState(repo, operation.path, PROTOCOL_MAX_WRITE_FILE_BYTES, rootPin.rootRealPath, pathPolicy);
         if (!current.exists || !operation.placedFingerprint || !sameFingerprint(fingerprintFromReadState(current), operation.placedFingerprint)) {
-          warnings.push(`Recovery warning: ${operation.path} changed after Reader-Wiki placed it; the current file and recovery backup were preserved.`);
+          warnings.push(`Recovery warning: ${operation.path} changed after Local Reader App placed it; the current file and recovery backup were preserved.`);
           targetConflict = true;
         } else {
           const recoveryPath = path.join(path.dirname(operation.absolutePath), `${RESERVED_TEMP_MARKER}${randomUUID()}.recovery`);
@@ -666,7 +666,7 @@ async function rollbackPreparedOperations(
         }
       } else if ((operation.placed || operation.originalBackedUp) && operation.nextContent === null) {
         if (await pathExists(operation.absolutePath)) {
-          warnings.push(`Recovery warning: ${operation.path} reappeared after Reader-Wiki deleted it; the current file and recovery backup were preserved.`);
+          warnings.push(`Recovery warning: ${operation.path} reappeared after Local Reader App deleted it; the current file and recovery backup were preserved.`);
           targetConflict = true;
         }
       } else if (operation.originalBackedUp && await pathExists(operation.absolutePath)) {
@@ -970,7 +970,7 @@ function guardedRelativePath(repo: RepositoryConfig, inputPath: string, pathPoli
     throw new HttpError(403, "This repository path is excluded from AI Chat.");
   }
   if (segments.some((segment) => segment.toLowerCase().startsWith(RESERVED_TEMP_MARKER))) {
-    throw new HttpError(403, "Reader-Wiki guarded edit temporary names are reserved.");
+    throw new HttpError(403, "Local Reader App guarded edit temporary names are reserved.");
   }
   if (segments.some((segment) => /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/i.test(segment) || /[. ]$/.test(segment) || segment.includes(":"))) {
     throw new HttpError(400, "The guarded repository path is not portable across supported filesystems.");
@@ -978,7 +978,7 @@ function guardedRelativePath(repo: RepositoryConfig, inputPath: string, pathPoli
   const comparisonPath = relativePath.normalize("NFC").toLocaleLowerCase("en-US");
   if (pathPolicy?.protectedPaths.some((item) => item.normalize("NFC").toLocaleLowerCase("en-US") === comparisonPath)
     || pathPolicy?.protectedPrefixes.some((item) => comparisonPath.startsWith(item.normalize("NFC").toLocaleLowerCase("en-US")))) {
-    throw new HttpError(403, "Reader-Wiki control-plane files cannot be read or edited by AI Chat.");
+    throw new HttpError(403, "Local Reader App control-plane files cannot be read or edited by AI Chat.");
   }
   return relativePath;
 }

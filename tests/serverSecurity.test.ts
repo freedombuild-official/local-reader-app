@@ -12,7 +12,7 @@ async function fixture() {
   const distPath = path.join(root, "dist");
   const configPath = path.join(root, "repositories.yaml");
   await mkdir(distPath);
-  await writeFile(path.join(distPath, "index.html"), "<!doctype html><title>Reader-Wiki</title>");
+  await writeFile(path.join(distPath, "index.html"), "<!doctype html><title>Local Reader App</title>");
   await writeFile(path.join(root, "README.md"), "# Test\n");
   await writeFile(configPath, `repositories:\n  - id: docs\n    label: Docs\n    root: ${root}\n    defaultPath: README.md\n`);
   return { root, distPath, configPath };
@@ -36,7 +36,7 @@ function rawStatus(url: string, headers: Record<string, string>): Promise<number
   });
 }
 
-describe("Reader-Wiki public server boundary", () => {
+describe("Local Reader App public server boundary", () => {
   it("refuses a non-loopback listener even when the legacy unsafe option is supplied", async () => {
     const next = await fixture();
     await expect(startReaderWikiServer({ host: "0.0.0.0", port: 0, ...next })).rejects.toThrow(/non-loopback/i);

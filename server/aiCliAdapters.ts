@@ -113,7 +113,7 @@ const CODEX_DISABLED_FEATURES = [
 
 export async function requestRepoWriteAIChatCompletion(request: RepoWriteChatRequest): Promise<{ content: string; status: AIConnectionStatus; run: AIChatRunSummary }> {
   if (request.target.kind !== "codexCli" && request.target.kind !== "claudeCli") {
-    throw new HttpError(500, "Provider Current repo write must use the Reader-Wiki server edit protocol and cannot be routed through a CLI adapter.");
+    throw new HttpError(500, "Provider Current repo write must use the Local Reader App server edit protocol and cannot be routed through a CLI adapter.");
   }
   const runner = request.runner || runAICommand;
   const workspace = await resolveAIWorkspace(request.repo);
@@ -186,7 +186,7 @@ export async function runAICommand(binary: string, args: string[], options: AICo
       outputBytes += Math.min(bytes.byteLength, remaining);
       if (target === "stdout") stdout += retained;
       else stderr += retained;
-      if (bytes.byteLength > remaining) terminate(new HttpError(502, "The CLI returned more information than Reader-Wiki can display safely. Ask for a smaller result and try again."));
+      if (bytes.byteLength > remaining) terminate(new HttpError(502, "The CLI returned more information than Local Reader App can display safely. Ask for a smaller result and try again."));
     };
     const onStdout = (value: Buffer | string) => appendOutput("stdout", value);
     const onStderr = (value: Buffer | string) => appendOutput("stderr", value);
@@ -218,7 +218,7 @@ export async function runAICommand(binary: string, args: string[], options: AICo
       child.stderr.resume();
       void terminateChildTree(child).then(
         () => finishReject(error),
-        () => finishReject(new HttpError(error.status, "Reader-Wiki could not confirm that the CLI process stopped. Close the CLI before trying again.", { processTreeUnverified: true })),
+        () => finishReject(new HttpError(error.status, "Local Reader App could not confirm that the CLI process stopped. Close the CLI, review the Current repo, restart the Local Reader App server, and reload the page before trying again.", { processTreeUnverified: true })),
       );
     };
     const abort = () => terminate(new HttpError(499, "CLI request was canceled."));
@@ -564,10 +564,10 @@ function buildRepoWritePrompt(context: AIChatContext, messages: AIChatMessage[],
     runtime.contextPrompt,
     transcript ? `Conversation:\n${transcript}` : "Conversation: [no prior messages]",
     [
-      "Reader-Wiki CLI work order:",
+      "Local Reader App CLI work order:",
       "- Use the CLI's native repository tools to complete the latest user request.",
       "- The active repository root is the only writable workspace for this run.",
-      "- Reader-Wiki does not impose a file-count, directory-count, or edit-operation-count limit on this CLI run.",
+      "- Local Reader App does not impose a file-count, directory-count, or edit-operation-count limit on this CLI run.",
       "- Inspect, create, update, rename, or delete repository files and directories as needed for the request, subject to the active repository boundary.",
       "- Report the result concisely with repository-relative paths.",
     ].join("\n"),
@@ -708,7 +708,7 @@ function userFacingCliFailure(entryOrBinary: AIEntryKind | string, error: unknow
     return "AI Chat request was canceled.";
   }
   if (/process tree|could not confirm that the cli process stopped|termination could not be verified/.test(normalized)) {
-    return "Reader-Wiki could not confirm that the CLI process stopped. Close the CLI before trying again.";
+    return "Local Reader App could not confirm that the CLI process stopped. Close the CLI, review the Current repo, restart the Local Reader App server, and reload the page before trying again.";
   }
   if (statusCode === 504 || /timed? out|time limit|timeout/.test(normalized)) {
     return `${label} did not finish before the time limit. Try a smaller request or try again.`;
@@ -716,14 +716,14 @@ function userFacingCliFailure(entryOrBinary: AIEntryKind | string, error: unknow
   if (/invalid api key|not logged in|authentication|credential|sign.?in|unauthorized|\b401\b/.test(normalized)) {
     return `${label} could not authenticate. Open Settings, complete CLI sign-in, and check readiness again.`;
   }
-  if (/output exceeded|byte limit|more information than reader-wiki|response.*too large/.test(normalized)) {
-    return `${label} returned more information than Reader-Wiki can display safely. Ask for a smaller result and try again.`;
+  if (/output exceeded|byte limit|more information than (?:local reader app|reader-wiki)|response.*too large/.test(normalized)) {
+    return `${label} returned more information than Local Reader App can display safely. Ask for a smaller result and try again.`;
   }
   if (/invalid json|usable natural-language response|empty response|did not return.*response/.test(normalized)) {
     return `${label} did not return a usable natural-language response. Try the request again.`;
   }
   if (/enoent|not found|could not be resolved|cannot find|failed to spawn|command type is not supported|unsupported windows.*shim/.test(normalized)) {
-    return `${label} could not start. Check that it is installed and available to Reader-Wiki, then check readiness again.`;
+    return `${label} could not start. Check that it is installed and available to Local Reader App, then check readiness again.`;
   }
   if (/permission|sandbox|access denied|eperm|eacces/.test(normalized)) {
     return `${label} could not complete the request within the Current repo permissions. Check readiness and try again.`;
@@ -840,7 +840,7 @@ function sanitizeFinalAnswerText(content: string): FinalAnswerReview {
   if (!leakPattern.test(content)) return { content, warnings };
   const tokenIndex = content.search(leakPattern);
   const sanitized = sanitizeCliText(content.slice(0, tokenIndex >= 0 ? tokenIndex : 0)).trim();
-  warnings.push("AI Chat final answer contained tool-call markup; Reader-Wiki removed it before display.");
+  warnings.push("AI Chat final answer contained tool-call markup; Local Reader App removed it before display.");
   return { content: sanitized || "AI Chat completed. Tool-call markup was removed from the final answer.", warnings };
 }
 

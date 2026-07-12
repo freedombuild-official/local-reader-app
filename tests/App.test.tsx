@@ -162,7 +162,7 @@ beforeEach(() => {
           : hasDuplicateCheck
             ? ["Duplicate edit detected in README.md: repeated block \"## Write Result 2\"."]
             : providerTarget && !providerRepoWriteMode
-              ? ["Context-only execution: Reader-Wiki did not grant repository write tools."]
+              ? ["Context-only execution: Local Reader App did not grant repository write tools."]
               : [],
       };
       const payload = {
@@ -251,7 +251,7 @@ describe("App", () => {
 
   it("loads repositories, tree, default markdown, and the outline panel", async () => {
     render(<App />);
-    expect(await screen.findByRole("heading", { name: "Reader-Wiki" })).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "Local Reader App" })).toBeTruthy();
     expect(await screen.findByRole("button", { name: "README.md" })).toBeTruthy();
     expect(await screen.findByRole("heading", { name: "Hello" })).toBeTruthy();
     expect(document.querySelector(".viewer-header h2")?.textContent).toBe("README.md");
@@ -556,7 +556,7 @@ describe("App", () => {
     };
 
     render(<App />);
-    expect(await screen.findByRole("heading", { name: "Reader-Wiki" })).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "Local Reader App" })).toBeTruthy();
     expect(await screen.findByRole("option", { name: "Alt" })).toBeTruthy();
     fireEvent.change(screen.getByLabelText("Repository"), { target: { value: "alt" } });
     expect(await screen.findByRole("heading", { name: "Alt" })).toBeTruthy();
@@ -810,7 +810,7 @@ describe("App", () => {
     expect(screen.getByRole("menuitem", { name: "Copy Absolute Path" })).toBeTruthy();
     expect(screen.getByRole("menuitem", { name: "Copy Relative Path" })).toBeTruthy();
     expect(screen.queryByRole("menuitem", { name: "Open in New Tab" })).toBeNull();
-    expect(screen.queryByText("AI Entry の認証が必要です")).toBeNull();
+    expect(screen.queryByText("AI Entry authentication is required")).toBeNull();
     fireEvent.click(screen.getByRole("menuitem", { name: "Copy Relative Path" }));
     await waitFor(() => expect(clipboardWrite).toHaveBeenCalledWith("docs"));
 
@@ -1197,11 +1197,11 @@ describe("App", () => {
   it("keeps four AI Entries, retains CLI chat across repositories, and resets only from New Chat", async () => {
     render(<App />);
     expect(await screen.findByRole("heading", { name: "Hello" })).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "新規チャット" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "New chat" })).toBeNull();
 
     fireEvent.click(screen.getByRole("tab", { name: "AI Chat" }));
     expect(screen.getByText("AI Entry is required.")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "新規チャット" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "New chat" })).toBeTruthy();
     expect(cssRule(".ai-chat-session-header")).toContain("min-height: 38px;");
     expect(cssRule(".ai-chat-session-header")).toContain("max-height: 44px;");
     expect(cssRule(".ai-chat-session-header")).toContain("justify-content: flex-start;");
@@ -1217,13 +1217,13 @@ describe("App", () => {
     expect(localAiEntry).toBeTruthy();
     expect(codexCliEntry).toBeTruthy();
     expect(claudeCodeEntry).toBeTruthy();
-    const comingSoonButtons = screen.getAllByRole("button", { name: "Comming soon" }) as HTMLButtonElement[];
+    const comingSoonButtons = screen.getAllByRole("button", { name: "Coming soon" }) as HTMLButtonElement[];
     expect(comingSoonButtons).toHaveLength(2);
     expect(comingSoonButtons.every((button) => button.disabled)).toBe(true);
-    expect(within(aiApiEntry).getByRole("button", { name: "Comming soon" })).toBeTruthy();
-    expect(within(localAiEntry).getByRole("button", { name: "Comming soon" })).toBeTruthy();
+    expect(within(aiApiEntry).getByRole("button", { name: "Coming soon" })).toBeTruthy();
+    expect(within(localAiEntry).getByRole("button", { name: "Coming soon" })).toBeTruthy();
     expect(screen.getAllByRole("button", { name: "Set active" })).toHaveLength(2);
-    fireEvent.click(within(aiApiEntry).getByRole("button", { name: "Comming soon" }));
+    fireEvent.click(within(aiApiEntry).getByRole("button", { name: "Coming soon" }));
     expect(fetchCallsTo("/api/ai/entry-readiness")).toHaveLength(0);
     expect(screen.queryByLabelText("AI API connection")).toBeNull();
 
@@ -1253,7 +1253,7 @@ describe("App", () => {
     });
     expect(await screen.findByLabelText("AI Chat selected paths")).toBeTruthy();
     expect(await screen.findByLabelText("AI Chat attachments")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "新規チャット" }));
+    fireEvent.click(screen.getByRole("button", { name: "New chat" }));
     expect(screen.getByLabelText("AI Chat transcript").textContent).toBe("");
     expect((screen.getByLabelText("AI Chat message") as HTMLTextAreaElement).value).toBe("");
     expect(screen.queryByLabelText("AI Chat selected paths")).toBeNull();
@@ -1262,9 +1262,9 @@ describe("App", () => {
     expect(screen.getByLabelText("AI Chat message")).toBeTruthy();
 
     fireEvent.click(screen.getByRole("tab", { name: "Outline" }));
-    expect(screen.queryByRole("button", { name: "新規チャット" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "New chat" })).toBeNull();
     fireEvent.click(screen.getByRole("tab", { name: "Memo" }));
-    expect(screen.queryByRole("button", { name: "新規チャット" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "New chat" })).toBeNull();
   });
 
   it("sends an explicit tree path to AI Chat without auto-including the active file", async () => {
@@ -1456,7 +1456,7 @@ describe("App", () => {
       expect.objectContaining({ path: "docs", kind: "directory" }),
       expect.objectContaining({ path: "guide.md", kind: "file" }),
     ]) } });
-    expect((await screen.findAllByText("The request finished, but Reader-Wiki could not refresh the Current repo. Retry the repository refresh.")).length).toBeGreaterThan(0);
+    expect((await screen.findAllByText("The request finished, but Local Reader App could not refresh the Current repo. Retry the repository refresh.")).length).toBeGreaterThan(0);
     expect((document.querySelector(".ai-chat-panel") as HTMLElement).textContent || "").not.toContain("__RAW_REFRESH_SENTINEL__");
     expect(screen.queryByRole("button", { name: "Retry AI Chat request" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Retry repository refresh" }));
@@ -1467,7 +1467,7 @@ describe("App", () => {
     returnRollbackIncomplete = true;
     fireEvent.change(screen.getByLabelText("AI Chat message"), { target: { value: "Exercise rollback-incomplete refresh handling." } });
     fireEvent.click(screen.getByRole("button", { name: "Send AI Chat message" }));
-    const rollbackMessage = "The edit could not be completed, and Reader-Wiki could not confirm that every partial change was restored. Review the Current repo before continuing.";
+    const rollbackMessage = "The edit could not be completed, and Local Reader App could not confirm that every partial change was restored. Review the Current repo before continuing.";
     expect((await screen.findAllByText(rollbackMessage)).length).toBeGreaterThan(0);
     expect(document.body.textContent || "").not.toContain("__RAW_ROLLBACK_SENTINEL__");
     await waitFor(() => expect(fetchCallsTo("/api/repos").length).toBeGreaterThan(repoListFetchesBeforeRollbackError));
@@ -1636,7 +1636,7 @@ describe("App", () => {
     fireEvent.change(screen.getByLabelText("AI Chat message"), { target: { value: "Start a delayed run before New Chat." } });
     fireEvent.click(screen.getByRole("button", { name: "Send AI Chat message" }));
     await waitFor(() => expect(delayedController).toBeTruthy());
-    fireEvent.click(screen.getByRole("button", { name: "新規チャット" }));
+    fireEvent.click(screen.getByRole("button", { name: "New chat" }));
     await waitFor(() => expect(requestSignal?.aborted).toBe(true));
     expect(screen.queryByRole("button", { name: "Cancel AI Chat request" })).toBeNull();
     expect((screen.getByLabelText("AI Chat message") as HTMLTextAreaElement).value).toBe("");
@@ -1811,7 +1811,7 @@ describe("App", () => {
     fireEvent.change(screen.getByLabelText("AI Chat message"), { target: { value: "Start a cancellable run." } });
     fireEvent.click(screen.getByRole("button", { name: "Send AI Chat message" }));
     fireEvent.click(await screen.findByRole("button", { name: "Cancel AI Chat request" }));
-    expect(await screen.findByText("Reader-Wiki could not confirm cancellation. The CLI may still be running, so close it before continuing.")).toBeTruthy();
+    expect(await screen.findByText("Local Reader App could not confirm cancellation. Close the CLI, review the Current repo, restart the Local Reader App server, and reload the page before continuing.")).toBeTruthy();
     expect(document.body.textContent || "").not.toContain("__RAW_CANCEL_SENTINEL__");
     expect(screen.queryByRole("button", { name: "Retry AI Chat request" })).toBeNull();
 

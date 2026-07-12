@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { lstat, readFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
@@ -5,10 +6,33 @@ import { spawnSync } from "node:child_process";
 
 const MAX_TEXT_FILE_BYTES = 5_000_000;
 const requiredPackageMetadata = {
+  name: "local-reader-app",
   private: true,
-  license: "MIT",
+  license: "Apache-2.0",
   packageManager: "pnpm@10.27.0",
 };
+const requiredPublicationMetadata = {
+  repository: "git+https://github.com/freedombuild-official/local-reader-app.git",
+  homepage: "https://github.com/freedombuild-official/local-reader-app#readme",
+  bugs: "https://github.com/freedombuild-official/local-reader-app/issues",
+};
+const requiredAuthorMetadata = {
+  name: "Ryusei Komada",
+  email: "info.freedombuild@gmail.com",
+  url: "https://github.com/freedombuild-official",
+};
+const requiredPublicFiles = [
+  "AUTHORS.md",
+  "CITATION.cff",
+  "CONTRIBUTING.md",
+  "LICENSE",
+  "NOTICE",
+  "README.ja.md",
+  "README.md",
+  "SECURITY.md",
+  "TRADEMARKS.md",
+];
+const apache2LicenseSha256 = "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30";
 const generatedPrefixes = ["coverage/", "dist/", "dist-server/", "node_modules/"];
 const privateUserMarker = String.fromCharCode(97, 114, 99, 104, 105);
 const privateProductMarkers = [
@@ -29,6 +53,10 @@ const contentRules = [
 const files = listPublicFiles();
 const failures = [];
 const warnings = [];
+
+for (const requiredFile of requiredPublicFiles) {
+  if (!files.includes(requiredFile)) failures.push(`${requiredFile}: required public file is missing`);
+}
 
 for (const file of files) {
   const normalized = file.replaceAll("\\", "/");
@@ -65,7 +93,8 @@ for (const file of files) {
   }
 }
 
-await validatePackageMetadata(failures, warnings);
+await validatePackageMetadata(failures);
+await validateApacheLicense(failures);
 validatePublicationMetadata(warnings);
 
 for (const warning of warnings) console.warn(`HUMAN GATE: ${warning}`);
@@ -97,7 +126,7 @@ function runGit(args, allowFailure = false) {
   return result;
 }
 
-async function validatePackageMetadata(foundFailures, foundWarnings) {
+async function validatePackageMetadata(foundFailures) {
   const packageJson = JSON.parse(await readFile(path.resolve("package.json"), "utf8"));
   for (const [key, expected] of Object.entries(requiredPackageMetadata)) {
     if (packageJson[key] !== expected) foundFailures.push(`package.json: ${key} must be ${JSON.stringify(expected)}`);
@@ -105,15 +134,29 @@ async function validatePackageMetadata(foundFailures, foundWarnings) {
   if (packageJson.engines?.node !== ">=22.13.0 <27") {
     foundFailures.push('package.json: engines.node must be ">=22.13.0 <27"');
   }
-  for (const key of ["repository", "homepage", "bugs"]) {
-    if (!packageJson[key]) foundWarnings.push(`package.json.${key} is unset until the public GitHub namespace is chosen`);
+  const repositoryUrl = typeof packageJson.repository === "string" ? packageJson.repository : packageJson.repository?.url;
+  const bugsUrl = typeof packageJson.bugs === "string" ? packageJson.bugs : packageJson.bugs?.url;
+  const actualPublicationMetadata = { repository: repositoryUrl, homepage: packageJson.homepage, bugs: bugsUrl };
+  for (const [key, expected] of Object.entries(requiredPublicationMetadata)) {
+    if (actualPublicationMetadata[key] !== expected) foundFailures.push(`package.json: ${key} must be ${JSON.stringify(expected)}`);
+  }
+  for (const [key, expected] of Object.entries(requiredAuthorMetadata)) {
+    if (packageJson.author?.[key] !== expected) foundFailures.push(`package.json: author.${key} must be ${JSON.stringify(expected)}`);
+  }
+}
+
+async function validateApacheLicense(foundFailures) {
+  const normalizedLicense = (await readFile(path.resolve("LICENSE"), "utf8")).replaceAll("\r\n", "\n");
+  const actualHash = createHash("sha256").update(normalizedLicense).digest("hex");
+  if (actualHash !== apache2LicenseSha256) {
+    foundFailures.push("LICENSE: content must match the official Apache License 2.0 text");
   }
 }
 
 function validatePublicationMetadata(foundWarnings) {
   const remote = runGit(["remote", "get-url", "origin"], true);
   if (remote.status !== 0 || !remote.stdout.trim()) {
-    foundWarnings.push("the Git origin URL is unset; do not invent repository URLs in package metadata");
+    foundWarnings.push("the Git origin URL is unset until the later GitHub publication step");
   }
   foundWarnings.push("history publication mode and author/committer email policy require maintainer approval; run pnpm run scan:history before publishing");
 }

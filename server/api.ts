@@ -115,7 +115,7 @@ export function createApiRouter(registryOrConfigPath: RepositoryRegistry | strin
   }
 
   async function withAIRequestSlot<T>(work: () => Promise<T>): Promise<T> {
-    if (activeAIRequests >= AI_GLOBAL_CONCURRENCY_LIMIT) throw new HttpError(429, "Reader-Wiki AI concurrency limit is active. Try again after another request finishes.");
+    if (activeAIRequests >= AI_GLOBAL_CONCURRENCY_LIMIT) throw new HttpError(429, "Local Reader App AI concurrency limit is active. Try again after another request finishes.");
     activeAIRequests += 1;
     try {
       return await work();
@@ -396,7 +396,7 @@ export function createApiRouter(registryOrConfigPath: RepositoryRegistry | strin
         next(error);
         return;
       }
-      const httpError = isHttpError(error) ? error : new HttpError(500, "Reader-Wiki AI Chat stream failed.");
+      const httpError = isHttpError(error) ? error : new HttpError(500, "Local Reader App AI Chat stream failed.");
       response.write(`${JSON.stringify({ type: "error", error: httpError.message, ...(httpError.details === undefined ? {} : { details: httpError.details }) })}\n`);
       response.end();
     } finally {
@@ -481,7 +481,7 @@ export function createApiRouter(registryOrConfigPath: RepositoryRegistry | strin
       next(error);
       return;
     }
-    const httpError = isHttpError(error) ? error : new HttpError(500, "Reader-Wiki API failed.");
+    const httpError = isHttpError(error) ? error : new HttpError(500, "Local Reader App API failed.");
     response.status(httpError.status).json({ error: httpError.message, ...(httpError.details === undefined ? {} : { details: httpError.details }) });
   });
 
@@ -542,7 +542,7 @@ function contextOnlyRunSummary(target: Extract<AIChatExecutionTarget, { kind: "c
     auditState: "verified",
     changedPaths: [],
     repairs: [],
-    warnings: ["Context-only execution: Reader-Wiki did not grant repository write tools."],
+    warnings: ["Context-only execution: Local Reader App did not grant repository write tools."],
   };
 }
 
@@ -579,7 +579,7 @@ async function assertCliWorkspaceWritable(repo: RepositoryConfig): Promise<void>
   try {
     await access(workspace.root, constants.W_OK);
   } catch {
-    throw new HttpError(409, "The selected Current repo is not writable by the Reader-Wiki process.", { code: "workspace_not_ready" });
+    throw new HttpError(409, "The selected Current repo is not writable by the Local Reader App process.", { code: "workspace_not_ready" });
   }
 }
 

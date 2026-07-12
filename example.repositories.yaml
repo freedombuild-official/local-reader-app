@@ -3,7 +3,7 @@ repositories:
     label: Sample repository
     root: /absolute/path/to/your/repo
     defaultPath: README.md
-    # Reader-Wiki reads local state only and does not fetch from Git remotes.
+    # Local Reader App reads local state only and does not fetch from Git remotes.
     excludes:
       - .git
       - node_modules
