@@ -1,9 +1,9 @@
 import { constants } from "node:fs";
-import { mkdir, mkdtemp, open, rename, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, open, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { assertOpenedFileBoundary, isExcludedPath, normalizeRelativePath, readGuardedRepoFile, resolveRepoPath } from "../server/pathGuard.js";
+import { assertOpenedFileBoundary, isExcludedPath, normalizeRelativePath, readGuardedRepoFile, resolveRepoPath, sameFileIdentity } from "../server/pathGuard.js";
 import type { RepositoryConfig } from "../server/types.js";
 
 function testRepo(root: string): RepositoryConfig {
@@ -68,12 +68,35 @@ describe("path guard", () => {
     const resolved = await resolveRepoPath(repo, "docs/guide.md");
     const handle = await open(resolved.realPath, constants.O_RDONLY);
     try {
-      const openedStat = await handle.stat();
-      await rename(path.join(root, "docs"), path.join(root, "docs-old"));
-      await symlink(outside, path.join(root, "docs"));
-      await expect(assertOpenedFileBoundary(repo, resolved, handle.fd, openedStat, [])).rejects.toMatchObject({ status: 403 });
+      const openedIdentity = await handle.stat({ bigint: true });
+      const escaped = { ...resolved, realPath: path.join(outside, "guide.md") };
+      await expect(assertOpenedFileBoundary(repo, escaped, handle.fd, openedIdentity, [])).rejects.toMatchObject({ status: 403 });
     } finally {
       await handle.close();
     }
+  });
+
+  it("rechecks opened file identity when descriptor links are unavailable", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "reader-wiki-fallback-identity-"));
+    await writeFile(path.join(root, "first.md"), "first");
+    await writeFile(path.join(root, "second.md"), "second");
+    const repo = testRepo(root);
+    const resolved = await resolveRepoPath(repo, "first.md");
+    const handle = await open(resolved.realPath, constants.O_RDONLY);
+    try {
+      const openedIdentity = await handle.stat({ bigint: true });
+      const replaced = { ...resolved, realPath: path.join(root, "second.md") };
+      await expect(assertOpenedFileBoundary(repo, replaced, handle.fd, openedIdentity, [])).rejects.toMatchObject({ status: 409 });
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it("normalizes the Windows volume ID without discarding inode identity", () => {
+    const opened = { dev: 0x1234_5678_9abc_def0n, ino: 0x1234_5678_9abc_def1n };
+    const byPath = { dev: 0x9abc_def0n, ino: opened.ino };
+    expect(sameFileIdentity(opened, byPath, "win32")).toBe(true);
+    expect(sameFileIdentity(opened, byPath, "linux")).toBe(false);
+    expect(sameFileIdentity(opened, { ...byPath, ino: byPath.ino + 1n }, "win32")).toBe(false);
   });
 });

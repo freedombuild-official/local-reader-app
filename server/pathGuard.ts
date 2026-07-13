@@ -17,6 +17,11 @@ export type GuardedRepoFile = {
   bytes: Buffer;
 };
 
+type FileIdentity = {
+  dev: bigint;
+  ino: bigint;
+};
+
 const DEFAULT_EXCLUDES = [".git"];
 
 export function normalizeRelativePath(input: unknown): string {
@@ -62,18 +67,20 @@ export async function readGuardedRepoFile(repo: RepositoryConfig, inputPath: unk
   const handle = await open(resolved.realPath, flags);
   try {
     const openedStat = await handle.stat();
+    const openedIdentity = await handle.stat({ bigint: true });
     if (!openedStat.isFile()) throw new HttpError(400, "The requested path must be a regular file.");
     if (openedStat.size > maxBytes) throw new HttpError(413, "The requested file exceeds the Local Reader App byte limit.");
-    await assertOpenedFileBoundary(repo, resolved, handle.fd, openedStat);
+    await assertOpenedFileBoundary(repo, resolved, handle.fd, openedIdentity);
     const bytes = await handle.readFile();
     const finalStat = await handle.stat();
+    const finalIdentity = await handle.stat({ bigint: true });
     if (finalStat.size > maxBytes || bytes.byteLength > maxBytes) {
       throw new HttpError(413, "The requested file exceeds the Local Reader App byte limit.");
     }
-    if (finalStat.dev !== openedStat.dev || finalStat.ino !== openedStat.ino || finalStat.size !== bytes.byteLength) {
+    if (!sameFileIdentity(finalIdentity, openedIdentity) || finalStat.size !== bytes.byteLength) {
       throw new HttpError(409, "The file changed while Local Reader App was reading it. Retry the request.");
     }
-    await assertOpenedFileBoundary(repo, resolved, handle.fd, finalStat);
+    await assertOpenedFileBoundary(repo, resolved, handle.fd, finalIdentity);
     return { resolved, stat: finalStat, bytes };
   } finally {
     await handle.close();
@@ -95,7 +102,7 @@ export async function assertOpenedFileBoundary(
   repo: RepositoryConfig,
   resolved: ResolvedRepoPath,
   fd: number,
-  openedStat: Stats,
+  openedIdentity: FileIdentity,
   descriptors = process.platform === "linux" ? [`/proc/self/fd/${fd}`, `/dev/fd/${fd}`] : [`/dev/fd/${fd}`],
 ): Promise<void> {
   for (const descriptor of descriptors) {
@@ -117,11 +124,19 @@ export async function assertOpenedFileBoundary(
     if (!isInsideRoot(resolved.rootRealPath, currentRealPath) || isExcludedRealPath(repo, resolved.rootRealPath, currentRealPath)) {
       throw new HttpError(403, "The opened file escaped the repository boundary.");
     }
-    const pathStat = await stat(currentRealPath);
-    if (pathStat.dev !== openedStat.dev || pathStat.ino !== openedStat.ino) {
+    const pathIdentity = await stat(currentRealPath, { bigint: true });
+    if (!sameFileIdentity(pathIdentity, openedIdentity)) {
       throw new HttpError(409, "The file path changed while Local Reader App was opening it. Retry the request.");
     }
   }
+}
+
+export function sameFileIdentity(left: FileIdentity, right: FileIdentity, platform: NodeJS.Platform = process.platform): boolean {
+  // Older libuv builds expose the Windows volume serial at different widths for path-stat and handle-stat.
+  // The low 32 bits are the stable device identity used by the upstream fix; the inode remains exact BigInt data.
+  const leftDevice = platform === "win32" ? BigInt.asUintN(32, left.dev) : left.dev;
+  const rightDevice = platform === "win32" ? BigInt.asUintN(32, right.dev) : right.dev;
+  return leftDevice === rightDevice && left.ino === right.ino;
 }
 
 export function isInsideRoot(rootRealPath: string, candidateRealPath: string): boolean {
