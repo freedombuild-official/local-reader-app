@@ -217,6 +217,7 @@ describe("AI CLI process boundary", () => {
     const repo = { id: "docs", label: "Docs", root, defaultPath: "README.md", excludes: [] };
     try {
       const readiness = await probeAIEntryReadiness("claudeCli", {
+        platform: "linux",
         repo,
         runner: async (_binary, args) => {
           if (args.includes("--version")) return { stdout: "2.1.206 (Claude Code)\n", stderr: "" };

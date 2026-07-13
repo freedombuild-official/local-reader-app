@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App, buildSandboxedHtmlSrcDoc } from "../src/App";
 
 const fetchMock = vi.fn<typeof fetch>();
-const stylesCss = readFileSync(path.join(process.cwd(), "src/styles.css"), "utf8");
+const stylesCss = readFileSync(path.join(process.cwd(), "src/styles.css"), "utf8").replace(/\r\n/g, "\n");
 const repoRevisions = { docs: "revision-docs-v1", alt: "revision-alt-v1" } as const;
 
 const treeNodes = [

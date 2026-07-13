@@ -853,7 +853,7 @@ describe("api", () => {
       throw new Error("Unexpected CLI command");
     };
     const app = express();
-    app.use("/api", createApiRouter(configPath, undefined, { aiCommandRunner: runner }));
+    app.use("/api", createApiRouter(configPath, undefined, { aiCommandRunner: runner, aiCliPlatform: "linux" }));
     const server = await listen(app);
     try {
       for (const entry of ["codexCli", "claudeCli"] as const) {
@@ -985,7 +985,7 @@ describe("api", () => {
       return { stdout: JSON.stringify({ is_error: false, result: `Claude completed run ${chatRuns}.` }), stderr: "" };
     };
     const app = express();
-    app.use("/api", createApiRouter(configPath, undefined, { aiCommandRunner: runner }));
+    app.use("/api", createApiRouter(configPath, undefined, { aiCommandRunner: runner, aiCliPlatform: "linux" }));
     const server = await listen(app);
     try {
       const readinessResponse = await postJson(`${server.url}/api/ai/entry-readiness`, { entry: "claudeCli", repoId: "first" });

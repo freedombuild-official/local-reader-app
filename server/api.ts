@@ -24,6 +24,7 @@ type ApiRouterOptions = {
   configPath?: string;
   packageRoot?: string;
   aiCommandRunner?: AICommandRunner;
+  aiCliPlatform?: NodeJS.Platform;
   aiProviderRequester?: GuardedProviderRequester;
   readinessAttestationTtlMs?: number;
   readinessAttestationMaxEntries?: number;
@@ -83,6 +84,7 @@ export function createApiRouter(registryOrConfigPath: RepositoryRegistry | strin
     const readiness = await probeAIEntryReadiness(entry, {
       provider,
       repo,
+      platform: options.aiCliPlatform,
       runner: options.aiCommandRunner,
       providerRequester: options.aiProviderRequester,
       signal,
@@ -255,6 +257,7 @@ export function createApiRouter(registryOrConfigPath: RepositoryRegistry | strin
       const readiness = await withAIRequestSlot(() => probeAIEntryReadiness(entry, {
           provider,
           repo,
+          platform: options.aiCliPlatform,
           runner: options.aiCommandRunner,
           providerRequester: options.aiProviderRequester,
           signal: abortScope.signal,
