@@ -26,20 +26,20 @@ jobs:
             os: windows-latest
             node: "22.13.0"
           - label: macOS / Node 26.0.0 current
-            os: macos-latest
+            os: macos-26
             node: "26.0.0"
     steps:
       - name: Check out source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
         with:
           version: 10.27.0
           run_install: false
 
       - name: Install Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: ${{ matrix.node }}
           cache: pnpm
