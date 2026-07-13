@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, open, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { assertOpenedFileBoundary, isExcludedPath, normalizeRelativePath, readGuardedRepoFile, resolveRepoPath, sameFileIdentity } from "../server/pathGuard.js";
+import { assertOpenedFileBoundary, isExcludedPath, normalizeRelativePath, readGuardedRepoFile, resolveRepoPath, samePathAndHandleIdentity } from "../server/pathGuard.js";
 import type { RepositoryConfig } from "../server/types.js";
 
 function testRepo(root: string): RepositoryConfig {
@@ -92,11 +92,23 @@ describe("path guard", () => {
     }
   });
 
-  it("normalizes the Windows volume ID without discarding inode identity", () => {
-    const opened = { dev: 0x1234_5678_9abc_def0n, ino: 0x1234_5678_9abc_def1n };
-    const byPath = { dev: 0x9abc_def0n, ino: opened.ino };
-    expect(sameFileIdentity(opened, byPath, "win32")).toBe(true);
-    expect(sameFileIdentity(opened, byPath, "linux")).toBe(false);
-    expect(sameFileIdentity(opened, { ...byPath, ino: byPath.ino + 1n }, "win32")).toBe(false);
+  it("uses the repository root handle when Windows path stat omits the volume ID", () => {
+    const root = { dev: 0x9abc_def0n, ino: 0x10n };
+    const opened = { dev: root.dev, ino: 0x1234_5678_9abc_def1n };
+    const zeroDevicePath = { dev: 0n, ino: opened.ino };
+    const wideDevicePath = { dev: 0x1234_5678_9abc_def0n, ino: opened.ino };
+
+    expect(samePathAndHandleIdentity(zeroDevicePath, opened, { platform: "win32", rootIdentity: root })).toBe(true);
+    expect(samePathAndHandleIdentity(wideDevicePath, opened, { platform: "win32", rootIdentity: root })).toBe(true);
+    expect(samePathAndHandleIdentity(zeroDevicePath, opened, { platform: "win32" })).toBe(false);
+    expect(samePathAndHandleIdentity(zeroDevicePath, opened, {
+      platform: "win32",
+      rootIdentity: { ...root, dev: root.dev + 1n },
+    })).toBe(false);
+    expect(samePathAndHandleIdentity({ ...zeroDevicePath, ino: zeroDevicePath.ino + 1n }, opened, {
+      platform: "win32",
+      rootIdentity: root,
+    })).toBe(false);
+    expect(samePathAndHandleIdentity(wideDevicePath, opened, { platform: "linux", rootIdentity: root })).toBe(false);
   });
 });

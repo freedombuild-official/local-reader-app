@@ -77,7 +77,7 @@ export async function readGuardedRepoFile(repo: RepositoryConfig, inputPath: unk
     if (finalStat.size > maxBytes || bytes.byteLength > maxBytes) {
       throw new HttpError(413, "The requested file exceeds the Local Reader App byte limit.");
     }
-    if (!sameFileIdentity(finalIdentity, openedIdentity) || finalStat.size !== bytes.byteLength) {
+    if (!sameHandleIdentity(finalIdentity, openedIdentity) || finalStat.size !== bytes.byteLength) {
       throw new HttpError(409, "The file changed while Local Reader App was reading it. Retry the request.");
     }
     await assertOpenedFileBoundary(repo, resolved, handle.fd, finalIdentity);
@@ -117,6 +117,7 @@ export async function assertOpenedFileBoundary(
       if (error instanceof HttpError) throw error;
     }
   }
+  const rootIdentity = process.platform === "win32" ? await readDirectoryHandleIdentity(resolved.rootRealPath) : undefined;
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const currentRealPath = await realpath(resolved.realPath).catch(() => {
       throw new HttpError(409, "The file path changed while Local Reader App was opening it. Retry the request.");
@@ -125,18 +126,45 @@ export async function assertOpenedFileBoundary(
       throw new HttpError(403, "The opened file escaped the repository boundary.");
     }
     const pathIdentity = await stat(currentRealPath, { bigint: true });
-    if (!sameFileIdentity(pathIdentity, openedIdentity)) {
+    if (!samePathAndHandleIdentity(pathIdentity, openedIdentity, { rootIdentity })) {
       throw new HttpError(409, "The file path changed while Local Reader App was opening it. Retry the request.");
     }
   }
 }
 
-export function sameFileIdentity(left: FileIdentity, right: FileIdentity, platform: NodeJS.Platform = process.platform): boolean {
-  // Older libuv builds expose the Windows volume serial at different widths for path-stat and handle-stat.
-  // The low 32 bits are the stable device identity used by the upstream fix; the inode remains exact BigInt data.
-  const leftDevice = platform === "win32" ? BigInt.asUintN(32, left.dev) : left.dev;
-  const rightDevice = platform === "win32" ? BigInt.asUintN(32, right.dev) : right.dev;
-  return leftDevice === rightDevice && left.ino === right.ino;
+async function readDirectoryHandleIdentity(rootRealPath: string): Promise<FileIdentity> {
+  const rootHandle = await open(rootRealPath, constants.O_RDONLY).catch(() => {
+    throw new HttpError(409, "The repository root changed while Local Reader App was opening a file. Retry the request.");
+  });
+  try {
+    const rootIdentity = await rootHandle.stat({ bigint: true });
+    if (!rootIdentity.isDirectory()) throw new HttpError(403, "The repository root is no longer a directory.");
+    return rootIdentity;
+  } finally {
+    await rootHandle.close();
+  }
+}
+
+function sameHandleIdentity(left: FileIdentity, right: FileIdentity): boolean {
+  return left.dev === right.dev && left.ino === right.ino;
+}
+
+export function samePathAndHandleIdentity(
+  pathIdentity: FileIdentity,
+  openedIdentity: FileIdentity,
+  options: { platform?: NodeJS.Platform; rootIdentity?: FileIdentity } = {},
+): boolean {
+  const platform = options.platform ?? process.platform;
+  if (pathIdentity.ino !== openedIdentity.ino) return false;
+  if (platform !== "win32") return pathIdentity.dev === openedIdentity.dev;
+
+  // Older libuv builds can expose a zero or wider Windows volume serial for path-stat while handle-stat is accurate.
+  // Validate the opened handle against the repository root handle, then use the exact BigInt inode for path identity.
+  const pathDevice = BigInt.asUintN(32, pathIdentity.dev);
+  const openedDevice = BigInt.asUintN(32, openedIdentity.dev);
+  if (options.rootIdentity && BigInt.asUintN(32, options.rootIdentity.dev) !== openedDevice) return false;
+  if (pathDevice === 0n) return options.rootIdentity !== undefined;
+  return pathDevice === openedDevice;
 }
 
 export function isInsideRoot(rootRealPath: string, candidateRealPath: string): boolean {
