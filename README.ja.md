@@ -461,7 +461,7 @@ HTTP Delivery は、選択したファイルに同じローカル Local Reader A
 
 ### AI Chat
 
-1つのAI Entryを選び、必要な接続情報だけを入力して、準備確認を実行します。CLI Entryでは、**Authentication and model**からCLI自身が管理するsign-inを確認し、CLIの通常の認証flowを開始または取消し、現在そのCLIが提示するmodel、model別reasoning effort、対応inference speedを読み込めます。Local Reader Appへ入力した値と選択内容は現在のpageだけに残り、`repositories.yaml`やbrowserの永続記憶領域へ書き込みません。CLIのpersistent sign-inはLocal Reader Appの外にある各CLI自身のstorageへ残ります。
+1つのAI Entryを選び、必要な接続情報だけを入力して、準備確認を実行します。CLI Entryでは、**Authentication and model**からCLI自身が管理するsign-inを確認し、CLIの通常の認証flowを開始または取消し、現在そのCLIが提示するmodel、model別reasoning effort、対応inference speedを読み込めます。Local Reader Appはactive CLI Entry、catalogへ結合済みのmodel/effort/speed selection、readiness表示、repository別の会話stateをtab単位のbrowser session storageへ保持し、同じtabのreload後に復元します。CLI credential、一時的な認証値、HTTP session token、executable情報、server readiness attestationは保存しません。tab session storageが利用不能、不正、またはbounded limit超過の場合は保存payloadを破棄し、現在のpage memoryで継続しながら、reloadでstateが消える可能性を警告します。CLIのpersistent sign-inはLocal Reader Appの外にある各CLI自身のstorageへ残ります。AI APIとLocal AIの値は、既存どおり現在のpageだけに保持します。
 
 ## 保存されるものを理解する
 
@@ -471,8 +471,9 @@ HTTP Delivery は、選択したファイルに同じローカル Local Reader A
 | 文字サイズ、テーマ、配置 | このローカルサイト用のブラウザ保存領域 | 残る |
 | 開いているファイルタブ | 現在のページのメモリ | 消える |
 | Memo | ダウンロードするまで現在のページのメモリ | 消える |
-| AI との会話 | 現在のページのメモリ | 消える |
-| Local Reader App内のAI Entry state、入力したcredential値、CLI model/effort/speed選択 | 現在のpage memoryのみ | 消える |
+| CLI AI Chatの会話と下書き | repository IDごとに分離したtab単位のbrowser session storage | 同じtabでは残る。実行中だったrequestは中断済みとして復元し、添付fileは消える |
+| active CLI Entry、CLI model/effort/speed selection、readiness表示 | tab単位のbrowser session storage。live setup/catalogでselectionを検証できた場合だけ復元 | 同じtabでは残る |
+| AI APIまたはLocal AIでLocal Reader Appへ入力したcredential値 | 現在のpage memoryのみ | 消える |
 | Codex CLIまたはClaude Code CLIのpersistent sign-in | 各CLIが外部で管理するstorage | Local Reader Appでは消えない |
 | 音声入力のaudioとtranscript | browserまたはOSのspeech recognition。外部speech serviceがaudioを処理する場合があり、Local Reader Appはtranscriptを受け取る | browser/providerによる |
 | HTTP Delivery セッション | 現在の Local Reader App サーバープロセス | サーバー停止時に消える |
@@ -499,7 +500,7 @@ Codex CLIとClaude Code CLIは、Local Reader Appで選択中のCurrent repoに�
 3. **Settings** > **AI Chat**を開き、インストール済みCLIの**Set active**を選びます。Local Reader Appはsetupを再検査し、初回有効化ではcatalogが明示したdefault model/effortとStandard inference speedを結合して、**CLI Readiness**まで自動実行します。すでにactiveな場合は、**Authentication and model**の**Check again**で同じ一連処理を再実行します。
 4. sign-inが必要な場合は**Sign in**を選び、CLIが管理するURL/device-code flowを完了します。Local Reader Appが表示するのはCLIから返された一時的な認証URLまたはcodeだけで、認証後のcredentialはCLI自身のstorageへ残ります。自分のterminalで認証しても構いません。Codexはpersistent sign-inを使い、Local Reader Appは`OPENAI_API_KEY`と`CODEX_API_KEY`をCodexへ意図的に渡しません。Claude Codeはpersistent sign-inまたはlauncherの対応環境変数`ANTHROPIC_API_KEY`、`ANTHROPIC_AUTH_TOKEN`、`CLAUDE_CODE_OAUTH_TOKEN`、`CLAUDE_CONFIG_DIR`を利用できます。Local Reader Appはそれらの値を表示または永続保存しません。
 5. 選択されたmodel、reasoning effort、inference speedを確認します。既定は**Standard**です。**Fast**はcurrent modelが対応を明示した場合だけ表示され、provider usageの消費率が高くなる場合があります。別modelを選ぶと、未対応の組を持ち越さず、そのmodelが宣言したeffortとspeedのdefaultへ結合します。catalogの明示default modelを使うのはprior selectionが存在しない場合だけです。Local Reader Appは固定model fallbackを持たず、catalogまたはCLIの変更後にprior modelが消えた場合も黙って別候補へ置き換えません。
-6. **CLI Readiness**が成功したことを確認し、AI Chatで依頼を送ります。同じfresh catalog内で有効な別model、reasoning effort、speedへ変更してもreadinessは維持し、serverは実行直前にselection全体をcurrent catalogへ再照合します。Current repo、CLI identity、認証、catalog、setup generationが変わるとreadinessは失効します。これらの実行境界が変化した場合、またはleaseが期限切れになった場合だけ、**Check readiness**または**Check again**を使います。
+6. **CLI Readiness**が成功したことを確認し、AI Chatで依頼を送ります。同じfresh catalog内で有効な別model、reasoning effort、speedへ変更してもreadinessは維持し、serverは実行直前にselection全体をcurrent catalogへ再照合します。Current repoを切り替えてもbrowser上のreadiness表示とselectionは維持しますが、server readiness attestationを別repositoryへ流用しません。次の送信時に対象repositoryの有効なattestationを再利用するか、server側の確認を自動実行します。CLI identity、認証、catalog、setup generationが変わった場合は引き続きfail closedにし、**Check readiness**または**Check again**が必要になる場合があります。
 
 setup確認と準備確認はrepository fileを編集しません。**Authentication and model**はCodex App ServerまたはClaude Agent SDKのaccount/catalog metadataを使い、このcardの確認ではchat model requestを送りません。Codexの**CLI Readiness**はmodel requestを送らず、installed CLI、persistent sign-in、選択済みcatalog pair、flag、Current repoの書込権限、project MCP isolationを確認します。Claude Codeの**CLI Readiness**は、期限切れまたは拒否されたcredentialをreadyと誤表示しないため、追加でtoolを渡さないmodel promptを1回送ります。Local Reader AppはCLI自身が管理する認証flowを開始できますが、CLIのinstall、model download、app内terminalの提供、認証後credentialの保存は行いません。
 
@@ -532,8 +533,9 @@ AI へ送る情報には、主要項目12件、規則項目2件、合計64 KiB�
 
 ### 会話の操作
 
-- AI Chat専用headerの**New chat**を選び、使用中のAI Entryとreadinessを保ったまま、transcript、下書き、再試行状態、添付file、1回限りのcontextを消去する。
-- repositoryを切り替えても、使用中のAI Entry、transcript、下書きを保持する。CLI readinessは直ちに失効し、新しく選んだCurrent repoでreadinessが成功するまでcomposerを利用できない。
+- AI Chat専用headerの**New chat**を選び、使用中のAI Entry、readiness表示、ほかのrepositoryの会話を保ったまま、現在のrepositoryのtranscript、下書き、再試行状態、添付file、1回限りのcontextだけを消去する。
+- repositoryを切り替えても、使用中のAI Entryとreadiness表示を保持する。repositoryごとに独立したtranscriptと下書きを持ち、元のrepositoryへ戻るとその会話を復元する。
+- 同じbrowser tabでreloadすると、active CLI Entry、検証済みselection、readiness表示、完了済みまたは中断済みのrepository別会話、下書きを復元する。upload済み添付fileと実行中requestのhandleは復元しない。
 - 選択したCLI runが完了すると、応答を会話へ追加する。
 - 利用者または AI のメッセージをコピーする。
 - 実行中の送信をキャンセルする。
@@ -545,14 +547,14 @@ AI へ送る情報には、主要項目12件、規則項目2件、合計64 KiB�
 - AI へ送る要求全体は約140 KiBが上限です。そのため、大きめのテキストファイルを複数添付すると拒否される場合があります。その場合は、数またはサイズを減らしてください。
 - 使用中のCodex CLIまたはClaude Code CLIが提示するmodel、model別reasoning effort、Standardまたは対応済みFast inference speedを選ぶ。selection全体はcomposer付近にも表示し、CLIのrequest単位引数またはapp-owned session settingsとして送る。
 
-同じrepositoryで同時に実行できるAI処理は1件、server全体では最大4件です。CLI readiness leaseは、選択したrepository/revision、Entry、CLI version、catalog revision、server所有のsetup generation、検査済みexecution descriptorに紐付きます。model、effort、speedはlease keyに含めません。同じcatalog generation内で有効な組へ切り替える場合はreadinessを維持し、serverがlease再利用前と実行直前にrequested selectionを再検証します。catalog refresh、authentication変更、update遷移、provider invalidationのたびにgenerationが進み、同じcatalog revisionとselectionが再登場しても新しいreadiness結果が必要です。repository切替でもleaseは失効します。古いsetup responseは新しいterminal stateを上書きできず、setup identityの変更を検知した実行中browser requestもcancelします。leaseの期限切れ後は、送信時に同じ項目を再確認してから続行します。更新に失敗した場合やselectionが古い場合はCLI runの前に停止します。page reloadはmemory上の会話とCLI selectionを消去します。server restartは古いbrowser sessionを無効にしますが、開いたままのpageを単独では消去しません。新serverが表示したURLをreloadまたは開き直すと新しいsessionを作り、その際に会話も消去します。
+同じrepositoryで同時に実行できるAI処理は1件、server全体では最大4件です。CLI readiness leaseは、選択したrepository/revision、Entry、CLI version、catalog revision、server所有のsetup generation、検査済みexecution descriptorに紐付きます。model、effort、speedはlease keyに含めません。同じcatalog generation内で有効な組へ切り替える場合はreadinessを維持し、serverがlease再利用前と実行直前にrequested selectionを再検証します。catalog refresh、authentication変更、update遷移、provider invalidationのたびにgenerationが進み、同じcatalog revisionとselectionが再登場しても新しいreadiness結果が必要です。repositoryを切り替えてもleaseを流用しません。対象repositoryの有効なleaseを再利用するか、送信時に対象固有の確認を自動実行してからCLIを開始します。古いsetup responseは新しいterminal stateを上書きできず、setup identityの変更を検知した実行中browser requestもcancelします。更新に失敗した場合やselectionが古い場合はCLI runの前に停止します。同じtabのreloadで復元するのは上限付きのbrowser表示stateと会話stateだけであり、保存したselectionをlive setup/catalogへ再結合します。credential、execution descriptor、実行中operation、server leaseは復元しません。server restartは古いbrowser sessionと全leaseを無効にします。新serverが表示した正確なURLをreloadまたは開き直して新しいsessionを取得します。同じtabの会話stateは残る場合がありますが、次の送信は新serverの検証に成功する必要があります。
 
 AI ChatにはAI Entryが返した利用者向けの自然言語応答だけを表示します。Local Reader Appのbest-effort change auditとwarningは、会話へ追記せずrepository refreshとretry制御に使う内部run metadataとして保持します。実行に失敗した場合もraw CLI outputではなく、短い説明と次のactionを表示します。AIは助言を行うだけであり、人間が応答、repository、実際のworking-tree diffを確認して残す内容を判断します。
 
 ## 安全性とプライバシー
 
 - Local Reader Appの`HOST`に指定できるのは、`127.0.0.1`、`localhost`、`::1`の3値だけです。`0.0.0.0`、そのほかのloopback address、network interfaceは拒否します。
-- server起動ごとに新しいserver-side session tokenを作ります。そのserverが表示した正確なURLを開くかreloadして、新しいbrowser sessionを受け取ります。古いtabのAPI callは、server restart後にreloadするまで失敗します。設定保存などのwrite操作には、正確なlocal originとrequest形式も必要です。
+- server起動ごとに新しいserver-side session tokenを作ります。そのserverが表示した正確なURLを開くかreloadして、新しいbrowser sessionを受け取ります。古いtabのAPI callは、server restart後にreloadするまで失敗します。このtokenをtab単位のAI workspace stateへserializeしません。設定保存などのwrite操作には、正確なlocal originとrequest形式も必要です。
 - 要求するパスは登録したルート内に留まる必要があります。絶対パスの入力、`..` による上位移動、除外パスを拒否します。ファイル本文の読み取りと HTTP Delivery では、パス途中のシンボリックリンクもすべて拒否します。ツリー表示では、ルート外へ解決されるリンクを拒否します。
 - `.git` はファイル閲覧から常に除外します。Git コマンドはローカルの状態と差分情報だけに使い、Local Reader App は Git のリモートリポジトリへ接続しません。
 - Rendered Markdownとsandboxed HTMLは、明示的に参照されたHTTPS画像hostへ接続する場合があります。そのほかのremote subresourceはContent Security Policyで制限され、HTML scriptは無効ですが、network requestを一切許容できない場合は、信頼できない文書を別のplain-text editorで確認してから開いてください。
@@ -690,7 +692,7 @@ Git がインストール済みか、登録フォルダが Git の作業ツリ�
 - Claude Codeでは、古いまたは拒否された`ANTHROPIC_API_KEY`がpersistent sign-inより優先される場合がある。その変数を削除または更新し、必要なら`claude auth login`を完了してから、修正したterminalでLocal Reader Appを起動する。
 - catalogが変わった場合は、有効なmodel/effort/speedの組を選び直す。Local Reader Appは古いselectionを別modelへ意図的に置換しない。
 - 選択中のCurrent repoが存在し、利用者accountで書き込み可能か確認する。
-- repository、CLI identity、認証、catalogを変更した後は、**Check readiness**をもう一度選ぶ。同じfresh catalog内のmodel/effort/speed変更では再確認は不要です。AI APIとLocal AIは、このbuildではdisabledな**Coming soon**項目のままです。
+- repository切替では、手動の再activationやreadiness checkは不要です。次の送信時に選択repositoryを検証し、そのrepository固有のserver attestationだけを作成または再利用します。CLI identity、認証、catalog、setup generationの変更後にUIが求めた場合は、**Check readiness**をもう一度選びます。同じfresh catalog内のmodel/effort/speed変更では再確認は不要です。AI APIとLocal AIは、このbuildではdisabledな**Coming soon**項目のままです。
 
 ### CLIが停止したことをLocal Reader Appで確認できない
 
@@ -699,7 +701,7 @@ CLI process treeがまだ実行中の可能性があるため、serverはそのC
 1. CLI processと、そのCLIが起動したchild processを閉じる。
 2. Current repoを確認し、途中まで行われた変更をどう扱うか判断する。
 3. `Control+C`または`Ctrl+C`でLocal Reader App serverを停止し、もう一度`pnpm start`を実行する。
-4. 新serverが表示した正確なURLをreloadまたは開き直し、readinessを再実行してからretryする。reloadするとmemory上の会話は消去される。
+4. 新serverが表示した正確なURLをreloadまたは開き直し、復元したselectionを新serverで検証するか、求められた場合はreadinessを再実行してからretryする。同じtabのreloadでは上限付きの会話と下書きを保持しますが、古いserver leaseや実行中runは復元しません。
 
 ### 音声入力が利用できない
 

@@ -525,7 +525,10 @@ export function invalidateAIReadiness(settings: AISettingsState): AISettingsStat
   };
 }
 
-export function invalidateCliReadinessForRepositoryChange(settings: AISettingsState): AISettingsState {
+export function invalidateCliReadinessForRepositoryChange(
+  settings: AISettingsState,
+  readinessMessage = "The Current repo changed. Run readiness again before sending.",
+): AISettingsState {
   return {
     ...settings,
     entries: {
@@ -535,14 +538,14 @@ export function invalidateCliReadinessForRepositoryChange(settings: AISettingsSt
         readOnlyWrapperState: "unknown",
         executionMode: "unknown",
         lastCheckedAt: "",
-        readinessMessage: "The Current repo changed. Run readiness again before sending.",
+        readinessMessage,
       } as CliAIEntrySettings,
       claudeCli: {
         ...settings.entries.claudeCli,
         readOnlyWrapperState: "unknown",
         executionMode: "unknown",
         lastCheckedAt: "",
-        readinessMessage: "The Current repo changed. Run readiness again before sending.",
+        readinessMessage,
       } as CliAIEntrySettings,
     },
     statuses: { ...settings.statuses, codexCli: null, claudeCli: null },

@@ -30,7 +30,8 @@ import {
 } from "lucide-react";
 import { fetchAICliSetups, fetchFile, fetchHttpDeliveryStatus, fetchRepos, fetchTree, imageFileUrl, openRepository, pdfFileUrl, startHttpDelivery, stopHttpDelivery } from "./api";
 import type { AIChatContextChip, AIChatSessionState, AIEntryKind, DiffStatus, FileResponse, HttpDeliveryItemStatus, HttpDeliveryStatus, RepoListItem, RepoSyncStatus, TreeNode, TreeSnapshot } from "./types";
-import { activeAIChatTarget, activeAIModelBehavior, applyCliSetupSnapshot, defaultAISettings, defaultBasicSettings, invalidateCliReadinessForRepositoryChange, isCliEntryKind, loadBasicSettings, normalizeReaderFontScale, persistBasicSettings, updateAIEntryStatus, type AISettingsState, type BasicSettings, type ReaderFontScale } from "./settingsState";
+import { activeAIChatTarget, activeAIModelBehavior, applyCliSetupSnapshot, defaultBasicSettings, invalidateCliReadinessForRepositoryChange, isCliEntryKind, loadBasicSettings, normalizeReaderFontScale, persistBasicSettings, updateAIEntryStatus, type AISettingsState, type BasicSettings, type ReaderFontScale } from "./settingsState";
+import { createAISettingsFromWorkspaceSession, createAIWorkspaceSessionState, createDefaultAIChatSession, loadAIWorkspaceSession, persistAIWorkspaceSession, restoreAIWorkspaceCliState } from "./appSessionState";
 import { injectMarkdownCodeToolbarButtons, installCodeBlockRule } from "../shared/markdownCodeBlocks";
 import { installTableScrollRule } from "../shared/markdownTableScroll";
 import { installTaskListRule } from "../shared/markdownTaskLists";
@@ -88,45 +89,44 @@ const RIGHT_PANEL_TABS = [
   { mode: "memo", label: "Memo" },
   { mode: "aiChat", label: "AI Chat" },
 ] as const satisfies ReadonlyArray<{ mode: RightPanelMode; label: string }>;
-const defaultAIChatSession: AIChatSessionState = {
-  messages: [],
-  draft: "",
-  pending: false,
-  error: "",
-  requestKey: "",
-  refreshingRepository: false,
-  repositoryRefreshError: "",
-  suppressRequestRetry: false,
-  lastRequest: "",
-  attachments: [],
-  contextChips: [],
-  dismissedRulePathKeys: [],
-};
-
+const defaultAIChatSession = createDefaultAIChatSession();
 const memoMarkdown = new MarkdownIt({ html: false, linkify: true });
 installTableScrollRule(memoMarkdown);
 installCodeBlockRule(memoMarkdown);
 installTaskListRule(memoMarkdown);
 
+function retainRegisteredAIChatSessions(
+  sessions: Record<string, AIChatSessionState>,
+  repositories: RepoListItem[],
+): Record<string, AIChatSessionState> {
+  const registeredRepoIds = new Set(repositories.map((repository) => repository.id));
+  const retained = Object.entries(sessions).filter(([repoId]) => registeredRepoIds.has(repoId));
+  return retained.length === Object.keys(sessions).length ? sessions : Object.fromEntries(retained);
+}
+
 const LazyAIChatPanel = lazy(() => import("./AIChatPanel").then((module) => ({ default: module.AIChatPanel })));
 const LazySettingsView = lazy(() => import("./SettingsView").then((module) => ({ default: module.SettingsView })));
 
 export function App() {
+  const persistedAIWorkspaceLoad = useMemo(() => loadAIWorkspaceSession(), []);
+  const persistedAIWorkspace = persistedAIWorkspaceLoad.state;
   const [appView, setAppView] = useState<AppView>("viewer");
   const [settingsCategory, setSettingsCategory] = useState<SettingsCategory>("basic");
   const [basicSettings, setBasicSettings] = useState<BasicSettings>(defaultBasicSettings);
   const [basicSaveError, setBasicSaveError] = useState("");
-  const [aiSettings, setAISettings] = useState<AISettingsState>(defaultAISettings);
+  const [aiWorkspaceWriteError, setAIWorkspaceWriteError] = useState("");
+  const aiWorkspaceWriteErrorRef = useRef("");
+  const [aiSettings, setAISettings] = useState<AISettingsState>(() => createAISettingsFromWorkspaceSession(persistedAIWorkspace));
   const [repos, setRepos] = useState<RepoListItem[]>([]);
-  const [activeRepoId, setActiveRepoId] = useState("");
+  const [activeRepoId, setActiveRepoId] = useState(persistedAIWorkspace.activeRepoId);
   const [treeCache, setTreeCache] = useState<TreeCache>({});
   const [repoSyncByRepo, setRepoSyncByRepo] = useState<Record<string, RepoSyncViewStatus>>({});
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set([""]));
   const [tabsByRepo, setTabsByRepo] = useState<TabsByRepo>({});
   const [activeTabByRepo, setActiveTabByRepo] = useState<ActiveTabByRepo>({});
   const [rightPanelMode, setRightPanelMode] = useState<RightPanelMode>("outline");
-  const [aiChatSession, setAIChatSession] = useState<AIChatSessionState>(defaultAIChatSession);
   const [aiChatSessionKey, setAIChatSessionKey] = useState(0);
+  const [aiChatSessionsByRepo, setAIChatSessionsByRepo] = useState<Record<string, AIChatSessionState>>(persistedAIWorkspace.aiChatSessionsByRepo);
   const [memoText, setMemoText] = useState("");
   const [memoMode, setMemoMode] = useState<MemoMode>("raw");
   const [loading, setLoading] = useState(true);
@@ -141,6 +141,7 @@ export function App() {
   const [httpDeliveryPopoverOpen, setHttpDeliveryPopoverOpen] = useState(false);
   const [repositoryReloadingRepoId, setRepositoryReloadingRepoId] = useState("");
   const [treeScrollTop, setTreeScrollTop] = useState(0);
+  const aiWorkspacePersistenceError = persistedAIWorkspaceLoad.error || aiWorkspaceWriteError;
   const [treeHorizontalScrollLeft, setTreeHorizontalScrollLeft] = useState(0);
   const handleAIReadinessFailure = useCallback((entry: AIEntryKind, message: string) => {
     setAISettings((current) => updateAIEntryStatus(current, entry, {
@@ -162,9 +163,9 @@ export function App() {
   const repoReloadTokenRef = useRef(0);
   const activeRepoIdRef = useRef("");
   const activeRepoRevisionRef = useRef("");
-  const cliReadinessRepoIdentityRef = useRef("");
   const reposRef = useRef<RepoListItem[]>([]);
   const tabsByRepoRef = useRef<TabsByRepo>({});
+  const initialCliSessionRestorePendingRef = useRef(true);
   tabsByRepoRef.current = tabsByRepo;
 
   useEffect(() => {
@@ -178,13 +179,17 @@ export function App() {
     void fetchAICliSetups()
       .then(({ setups }) => {
         if (canceled) return;
-        setAISettings((current) => applyCliSetupSnapshot(applyCliSetupSnapshot(current, setups.codexCli), setups.claudeCli));
+        const shouldRestorePersistedCliState = initialCliSessionRestorePendingRef.current;
+        initialCliSessionRestorePendingRef.current = false;
+        setAISettings((current) => shouldRestorePersistedCliState
+          ? restoreAIWorkspaceCliState(current, persistedAIWorkspace, setups)
+          : applyCliSetupSnapshot(applyCliSetupSnapshot(current, setups.codexCli), setups.claudeCli));
       })
       .catch(() => undefined);
     return () => {
       canceled = true;
     };
-  }, []);
+  }, [persistedAIWorkspace]);
 
   useEffect(() => {
     if (!isCliEntryKind(aiSettings.activeEntry)) return undefined;
@@ -196,7 +201,11 @@ export function App() {
       void fetchAICliSetups()
         .then(({ setups }) => {
           if (canceled) return;
-          setAISettings((current) => applyCliSetupSnapshot(applyCliSetupSnapshot(current, setups.codexCli), setups.claudeCli));
+          const shouldRestorePersistedCliState = initialCliSessionRestorePendingRef.current;
+          initialCliSessionRestorePendingRef.current = false;
+          setAISettings((current) => shouldRestorePersistedCliState
+            ? restoreAIWorkspaceCliState(current, persistedAIWorkspace, setups)
+            : applyCliSetupSnapshot(applyCliSetupSnapshot(current, setups.codexCli), setups.claudeCli));
         })
         .catch(() => undefined)
         .finally(() => { inFlight = false; });
@@ -207,7 +216,7 @@ export function App() {
       canceled = true;
       window.clearInterval(interval);
     };
-  }, [aiSettings.activeEntry]);
+  }, [aiSettings.activeEntry, persistedAIWorkspace]);
 
   useEffect(() => {
     activeRepoIdRef.current = activeRepoId;
@@ -216,13 +225,39 @@ export function App() {
   }, [activeRepoId, repos]);
 
   useEffect(() => {
-    const revision = repos.find((repo) => repo.id === activeRepoId)?.revision || "";
-    const identity = activeRepoId && revision ? `${activeRepoId}\u0000${revision}` : "";
-    const previousIdentity = cliReadinessRepoIdentityRef.current;
-    cliReadinessRepoIdentityRef.current = identity;
-    if (!previousIdentity || previousIdentity === identity) return;
-    setAISettings((current) => invalidateCliReadinessForRepositoryChange(current));
-  }, [activeRepoId, repos]);
+    if (!activeRepoId) return;
+    setAIChatSessionsByRepo((current) => (
+      current[activeRepoId]
+        ? current
+        : { ...current, [activeRepoId]: createDefaultAIChatSession() }
+    ));
+  }, [activeRepoId]);
+
+  const aiWorkspaceSessionState = useMemo(
+    () => createAIWorkspaceSessionState(activeRepoId, aiSettings, aiChatSessionsByRepo),
+    [
+      activeRepoId,
+      aiChatSessionsByRepo,
+      aiSettings.activeEntry,
+      aiSettings.entries.codexCli,
+      aiSettings.entries.claudeCli,
+      aiSettings.statuses.codexCli,
+      aiSettings.statuses.claudeCli,
+      aiSettings.lastCheckedAtByEntry.codexCli,
+      aiSettings.lastCheckedAtByEntry.claudeCli,
+      aiSettings.modelBehaviorByEntry.codexCli,
+      aiSettings.modelBehaviorByEntry.claudeCli,
+      aiSettings.cliModelSelectionByEntry.codexCli,
+      aiSettings.cliModelSelectionByEntry.claudeCli,
+    ],
+  );
+
+  useEffect(() => {
+    const persistenceError = persistAIWorkspaceSession(aiWorkspaceSessionState);
+    if (persistenceError === aiWorkspaceWriteErrorRef.current) return;
+    aiWorkspaceWriteErrorRef.current = persistenceError;
+    setAIWorkspaceWriteError(persistenceError);
+  }, [aiWorkspaceSessionState]);
 
   const activeRepo = useMemo(() => repos.find((repo) => repo.id === activeRepoId) || null, [activeRepoId, repos]);
   const activeRepoSyncStatus = activeRepoId ? repoSyncByRepo[activeRepoId] || null : null;
@@ -254,6 +289,7 @@ export function App() {
   const readerTypographyStyle = useMemo(() => buildReaderTypographyStyle(basicSettings.readerFontScale), [basicSettings.readerFontScale]);
   const aiModelBehavior = useMemo(() => activeAIModelBehavior(aiSettings), [aiSettings]);
   const aiPathSendReady = Boolean(activeAIChatTarget(aiSettings));
+  const aiChatSession = activeRepoId ? aiChatSessionsByRepo[activeRepoId] || defaultAIChatSession : defaultAIChatSession;
 
   const updateBasicSettings = useCallback((settings: BasicSettings) => {
     setBasicSettings(settings);
@@ -261,13 +297,21 @@ export function App() {
   }, []);
 
   const updateAIChatSession = useCallback((updater: (session: AIChatSessionState) => AIChatSessionState) => {
-    setAIChatSession((current) => updater(current));
-  }, []);
+    if (!activeRepoId) return;
+    setAIChatSessionsByRepo((current) => ({
+      ...current,
+      [activeRepoId]: updater(current[activeRepoId] || createDefaultAIChatSession()),
+    }));
+  }, [activeRepoId]);
 
   const resetAIChatSession = useCallback(() => {
-    setAIChatSession(defaultAIChatSession);
+    if (!activeRepoId) return;
+    setAIChatSessionsByRepo((current) => ({
+      ...current,
+      [activeRepoId]: createDefaultAIChatSession(),
+    }));
     setAIChatSessionKey((current) => current + 1);
-  }, []);
+  }, [activeRepoId]);
 
   const updateAISettingsFromSettings = useCallback((settings: AISettingsState) => {
     setAISettings(settings);
@@ -509,6 +553,7 @@ export function App() {
     const nextRepos = await fetchRepos();
     reposRef.current = nextRepos;
     setRepos(nextRepos);
+    setAIChatSessionsByRepo((current) => retainRegisteredAIChatSessions(current, nextRepos));
     const nextActiveRepo = nextRepos.find((repo) => repo.id === activeRepoId) || null;
     const stillActive = Boolean(nextActiveRepo);
     if (previousActiveRepo && nextActiveRepo && previousActiveRepo.revision !== nextActiveRepo.revision) {
@@ -531,6 +576,8 @@ export function App() {
       activeRepoIdRef.current = "";
       activeRepoRevisionRef.current = "";
       setActiveRepoId("");
+      setAIChatSessionsByRepo({});
+      setAISettings((current) => invalidateCliReadinessForRepositoryChange(current, "No Current repo is selected. Add a repository and run readiness before sending."));
       setTreeCache({});
       setExpanded(new Set([""]));
       setRepositoryReloadingRepoId("");
@@ -549,8 +596,24 @@ export function App() {
         if (cancelled) return;
         reposRef.current = nextRepos;
         setRepos(nextRepos);
-        const firstRepo = nextRepos[0];
-        if (firstRepo) await selectRepo(firstRepo);
+        setAIChatSessionsByRepo((current) => retainRegisteredAIChatSessions(current, nextRepos));
+        if (!nextRepos.length) {
+          repoLoadTokenRef.current += 1;
+          repoReloadTokenRef.current += 1;
+          activeRepoIdRef.current = "";
+          activeRepoRevisionRef.current = "";
+          setActiveRepoId("");
+          setAISettings((current) => invalidateCliReadinessForRepositoryChange(current, "No Current repo is selected. Add a repository and run readiness before sending."));
+          setAIChatSessionsByRepo({});
+          setTreeCache({});
+          setExpanded(new Set([""]));
+          setRepositoryReloadingRepoId("");
+          setError("");
+          setTabNotice("");
+          return;
+        }
+        const preferredRepo = nextRepos.find((repo) => repo.id === persistedAIWorkspace.activeRepoId) || nextRepos[0];
+        if (preferredRepo) await selectRepo(preferredRepo);
       } catch (nextError) {
         if (!cancelled) setError(nextError instanceof Error ? nextError.message : String(nextError));
       } finally {
@@ -828,7 +891,7 @@ export function App() {
       source: "tree-menu",
       removable: true,
     };
-    setAIChatSession((current) => ({
+    updateAIChatSession((current) => ({
       ...current,
       contextChips: [
         ...(current.contextChips || []).filter((item) => !(item.repoId === chip.repoId && item.role === chip.role && item.path === chip.path)),
@@ -856,6 +919,7 @@ export function App() {
           activeRepoRevision={activeRepo?.revision || ""}
           initialCategory={settingsCategory}
           basicSaveError={basicSaveError}
+          aiWorkspacePersistenceError={aiWorkspacePersistenceError}
           onBack={() => setAppView("viewer")}
           onBasicSettingsChange={updateBasicSettings}
           onAISettingsChange={updateAISettingsFromSettings}
@@ -1852,7 +1916,7 @@ function RightPanel({ mode, onModeChange, file, outline, onHeadingSelect, memoTe
         >
           <Suspense fallback={<p className="state-text">Loading AI Chat...</p>}>
             <LazyAIChatPanel
-              key={aiChatSessionKey}
+              key={`${activeRepoId}:${aiChatSessionKey}`}
               aiSettings={aiSettings}
               session={aiChatSession}
               onSessionChange={onAIChatSessionChange}

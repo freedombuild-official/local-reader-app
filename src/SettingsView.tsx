@@ -72,6 +72,7 @@ type SettingsViewProps = {
   activeRepoRevision: string;
   initialCategory?: SettingsCategory;
   basicSaveError: string;
+  aiWorkspacePersistenceError?: string;
   onBack: () => void;
   onBasicSettingsChange: (settings: BasicSettings) => void;
   onAISettingsChange: (settings: AISettingsState) => void;
@@ -93,6 +94,7 @@ export function SettingsView({
   activeRepoRevision,
   initialCategory = "basic",
   basicSaveError,
+  aiWorkspacePersistenceError = "",
   onBack,
   onBasicSettingsChange,
   onAISettingsChange,
@@ -165,18 +167,24 @@ export function SettingsView({
   const normalizedAISettings = normalizeAISettingsState(aiSettings);
   const aiDirty = !sameJSON(aiDraft, normalizedAISettings);
   const repoDirty = repoState ? !sameJSON(repoDraft, repoState.entries) : false;
+  const cliTabSessionActive = isCliEntryKind(aiDraft.activeEntry);
+  const cliTabSessionPersistenceWarning = Boolean(cliTabSessionActive && aiWorkspacePersistenceError);
   const globalStatus =
     category === "basic"
       ? basicSaveError ? "Save failed" : "Saved in this browser"
       : category === "repositories"
         ? saveStateLabel(repoSaveState)
-        : "Browser run state";
+        : cliTabSessionPersistenceWarning ? "In-memory only" : cliTabSessionActive ? "This tab session" : "This browser run";
   const globalMessage =
     category === "basic"
       ? basicSaveError || "Saved in this browser."
       : category === "repositories"
         ? repoMessage || "Repository config loaded."
-        : aiDirty ? "AI settings changed in this browser run." : "AI settings are stored in this browser run only.";
+        : cliTabSessionPersistenceWarning
+          ? "Tab session storage is unavailable or was reset. Current AI Chat state remains in memory, but reloading may clear it."
+          : cliTabSessionActive
+          ? "CLI selection, AI Chat conversations, and readiness stay in this tab across normal reloads. CLI credentials and server readiness attestations are not stored in browser storage."
+          : aiDirty ? "AI settings changed in this browser run." : "AI settings are stored only for this browser run.";
 
   async function validateDraft() {
     setRepoSaveState("pending");

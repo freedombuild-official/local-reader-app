@@ -4,6 +4,7 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import axe from "axe-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App, buildSandboxedHtmlSrcDoc } from "../src/App";
+import { AI_WORKSPACE_SESSION_STORAGE_KEY } from "../src/appSessionState";
 import type { AICliEntryKind, AICliSetupSnapshot } from "../src/types";
 
 const fetchMock = vi.fn<typeof fetch>();
@@ -88,8 +89,28 @@ function installLocalStorageMock(): void {
   });
 }
 
+function installSessionStorageMock(): void {
+  const store = new Map<string, string>();
+  Object.defineProperty(window, "sessionStorage", {
+    configurable: true,
+    value: {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => {
+        store.set(key, value);
+      },
+      removeItem: (key: string) => {
+        store.delete(key);
+      },
+      clear: () => {
+        store.clear();
+      },
+    } satisfies Pick<Storage, "getItem" | "setItem" | "removeItem" | "clear">,
+  });
+}
+
 beforeEach(() => {
   installLocalStorageMock();
+  installSessionStorageMock();
   httpDeliverySessions = [];
   openedHttpDeliveryTabs = [];
   cliSetups = createCliSetupCollection();
@@ -463,6 +484,7 @@ describe("App", () => {
     expect(cssRule(".yaml-preview")).toContain("overflow: auto;");
     expect(cssRule(".readiness-details")).toContain("border-top: 1px solid #e0e7ea;");
     expect(cssRule(".entry-card")).toContain("align-content: start;");
+    expect(cssRule(".cli-model-grid .settings-field")).toContain("align-content: start;");
     expect(cssRule(".endpoint-settings-panel")).toContain("grid-column: 1 / -1;");
     expect(cssRule(".settings-details")).toContain("border: 1px solid #d8e1e4;");
   });
@@ -1284,7 +1306,7 @@ describe("App", () => {
     expect(screen.queryByRole("button", { name: "Send AI Chat message" })).toBeNull();
   });
 
-  it("keeps four AI Entries, retains CLI chat across repositories, and resets only from New Chat", async () => {
+  it("keeps four AI Entries, retains CLI chat per repository, and resets only the current repository from New Chat", async () => {
     render(<App />);
     expect(await screen.findByRole("heading", { name: "Hello" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "New chat" })).toBeNull();
@@ -1329,20 +1351,27 @@ describe("App", () => {
     const readinessCallsBeforeSwitch = fetchCallsTo("/api/ai/entry-readiness").length;
     fireEvent.change(screen.getByLabelText("Repository"), { target: { value: "alt" } });
     expect(await screen.findByRole("heading", { name: "Alt" })).toBeTruthy();
-    expect(screen.getByText("codexCli says the active file says hello.")).toBeTruthy();
-    expect(screen.getByText("AI Entry is not ready.")).toBeTruthy();
-    expect(screen.queryByLabelText("AI Chat message")).toBeNull();
+    expect(screen.queryByText("codexCli says the active file says hello.")).toBeNull();
+    expect(screen.queryByText("AI Entry is not ready.")).toBeNull();
+    expect(screen.getByRole("button", { name: "Send AI Chat message" })).toBeTruthy();
+    expect(screen.getByLabelText("AI Chat transcript").textContent || "").not.toContain("What does this file say?");
+    expect((screen.getByLabelText("AI Chat message") as HTMLTextAreaElement).value).toBe("");
     expect(fetchCallsTo("/api/ai/entry-readiness")).toHaveLength(readinessCallsBeforeSwitch);
+    fireEvent.change(screen.getByLabelText("AI Chat message"), { target: { value: "Tell me about the alternate repository." } });
+    fireEvent.click(screen.getByRole("button", { name: "Send AI Chat message" }));
+    expect(await screen.findByText("codexCli says the active file says hello.")).toBeTruthy();
+    expect(screen.getByLabelText("AI Chat transcript").textContent).toContain("Tell me about the alternate repository.");
+    expect(screen.getByLabelText("AI Chat transcript").textContent || "").not.toContain("What does this file say?");
+    fireEvent.change(screen.getByLabelText("AI Chat message"), { target: { value: "alt repo draft" } });
 
     fireEvent.change(screen.getByLabelText("Repository"), { target: { value: "docs" } });
     expect(await screen.findByRole("heading", { name: "Hello" })).toBeTruthy();
-    expect(screen.getByText("AI Entry is not ready.")).toBeTruthy();
-    fireEvent.click(openSettingsButton());
-    fireEvent.click(await screen.findByRole("tab", { name: "AI Chat" }));
-    await activateReadyCliEntry();
-    fireEvent.click(screen.getByRole("button", { name: "Back to viewer" }));
-    fireEvent.click(await screen.findByRole("tab", { name: "AI Chat" }));
+    expect(screen.queryByText("AI Entry is not ready.")).toBeNull();
+    expect(screen.getByText("codexCli says the active file says hello.")).toBeTruthy();
+    expect(screen.getByLabelText("AI Chat transcript").textContent).toContain("What does this file say?");
+    expect(screen.getByLabelText("AI Chat transcript").textContent).not.toContain("Tell me about the alternate repository.");
     expect((screen.getByLabelText("AI Chat message") as HTMLTextAreaElement).value).toBe("repo switch draft");
+    expect(screen.getByRole("button", { name: "Send AI Chat message" })).toBeTruthy();
     fireEvent.contextMenu(await screen.findByRole("button", { name: "guide.md" }), { clientX: 120, clientY: 120 });
     fireEvent.click(screen.getByRole("menuitem", { name: "Send a path to AI Chat" }));
     const fileInput = document.querySelector(".ai-chat-composer input[type='file']") as HTMLInputElement;
@@ -1359,10 +1388,86 @@ describe("App", () => {
     expect(screen.queryByRole("button", { name: "Retry AI Chat request" })).toBeNull();
     expect(screen.getByLabelText("AI Chat message")).toBeTruthy();
 
+    fireEvent.change(screen.getByLabelText("Repository"), { target: { value: "alt" } });
+    expect(await screen.findByRole("heading", { name: "Alt" })).toBeTruthy();
+    expect(screen.getByLabelText("AI Chat transcript").textContent).toContain("Tell me about the alternate repository.");
+    expect((screen.getByLabelText("AI Chat message") as HTMLTextAreaElement).value).toBe("alt repo draft");
+
     fireEvent.click(screen.getByRole("tab", { name: "Outline" }));
     expect(screen.queryByRole("button", { name: "New chat" })).toBeNull();
     fireEvent.click(screen.getByRole("tab", { name: "Memo" }));
     expect(screen.queryByRole("button", { name: "New chat" })).toBeNull();
+  });
+
+  it("restores CLI readiness, model selection, conversation, and draft after a same-tab reload", async () => {
+    const firstPage = render(<App />);
+    expect(await screen.findByRole("heading", { name: "Hello" })).toBeTruthy();
+    fireEvent.click(openSettingsButton());
+    fireEvent.click(await screen.findByRole("tab", { name: "AI Chat" }));
+    await activateReadyCliEntry();
+    fireEvent.click(screen.getByRole("button", { name: "Back to viewer" }));
+    fireEvent.click(await screen.findByRole("tab", { name: "AI Chat" }));
+    fireEvent.change(screen.getByLabelText("AI Chat message"), { target: { value: "Keep this through a reload." } });
+    fireEvent.click(screen.getByRole("button", { name: "Send AI Chat message" }));
+    expect(await screen.findByText("codexCli says the active file says hello.")).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("AI Chat message"), { target: { value: "reload draft" } });
+
+    await waitFor(() => {
+      const stored = window.sessionStorage.getItem(AI_WORKSPACE_SESSION_STORAGE_KEY) || "";
+      expect(stored).toContain("Keep this through a reload.");
+      expect(stored).toContain("reload draft");
+    });
+    const readinessCallsBeforeReload = fetchCallsTo("/api/ai/entry-readiness").length;
+
+    firstPage.unmount();
+    render(<App />);
+    expect(await screen.findByRole("heading", { name: "Hello" })).toBeTruthy();
+    fireEvent.click(await screen.findByRole("tab", { name: "AI Chat" }));
+    expect(await screen.findByText("codexCli says the active file says hello.")).toBeTruthy();
+    expect(screen.getByLabelText("AI Chat transcript").textContent).toContain("Keep this through a reload.");
+    expect((screen.getByLabelText("AI Chat message") as HTMLTextAreaElement).value).toBe("reload draft");
+    expect(screen.queryByText("AI Entry is not ready.")).toBeNull();
+    expect(fetchCallsTo("/api/ai/entry-readiness")).toHaveLength(readinessCallsBeforeReload);
+
+    fireEvent.click(openSettingsButton());
+    fireEvent.click(await screen.findByRole("tab", { name: "AI Chat" }));
+    const setup = await screen.findByLabelText(["Co", "dex CLI authentication and model settings"].join(""));
+    expect(within(setup).getByText("Signed in.")).toBeTruthy();
+    expect((within(setup).getByLabelText(["Co", "dex CLI model"].join("")) as HTMLSelectElement).value).toBe("gpt-5.5-codex");
+    const readiness = screen.getByLabelText(["Co", "dex CLI readiness"].join(""));
+    expect(within(readiness).getAllByText("Success").length).toBeGreaterThan(0);
+  });
+
+  it("warns when tab session storage fails while keeping the current page usable", async () => {
+    const sessionStore = new Map<string, string>();
+    let failSessionWrites = true;
+    Object.defineProperty(window, "sessionStorage", {
+      configurable: true,
+      value: {
+        getItem: (key: string) => sessionStore.get(key) ?? null,
+        setItem: (key: string, value: string) => {
+          if (failSessionWrites) throw new DOMException("quota denied", "QuotaExceededError");
+          sessionStore.set(key, value);
+        },
+        removeItem: (key: string) => sessionStore.delete(key),
+        clear: () => sessionStore.clear(),
+      } satisfies Pick<Storage, "getItem" | "setItem" | "removeItem" | "clear">,
+    });
+
+    render(<App />);
+    expect(await screen.findByRole("heading", { name: "Hello" })).toBeTruthy();
+    fireEvent.click(openSettingsButton());
+    fireEvent.click(await screen.findByRole("tab", { name: "AI Chat" }));
+    await activateReadyCliEntry();
+
+    expect(await screen.findByText("In-memory only")).toBeTruthy();
+    expect(screen.getByText("Tab session storage is unavailable or was reset. Current AI Chat state remains in memory, but reloading may clear it.")).toBeTruthy();
+
+    failSessionWrites = false;
+    const setup = await screen.findByLabelText(["Co", "dex CLI authentication and model settings"].join(""));
+    fireEvent.change(within(setup).getByLabelText(["Co", "dex CLI inference speed"].join("")), { target: { value: "fast" } });
+    expect(await screen.findByText("This tab session")).toBeTruthy();
+    expect(screen.queryByText("In-memory only")).toBeNull();
   });
 
   it("sends an explicit tree path to AI Chat without auto-including the active file", async () => {
@@ -1536,12 +1641,7 @@ describe("App", () => {
     });
     expect(await screen.findByText("AI-refreshed guide content.")).toBeTruthy();
     expect(parseJsonBody(fetchCallsTo("/api/repo-open").at(-1)?.[1]?.body)).toMatchObject({ repoId: "docs", expectedRevision: refreshedRevision });
-    expect(screen.getByText("AI Entry is not ready.")).toBeTruthy();
-    fireEvent.click(openSettingsButton());
-    fireEvent.click(await screen.findByRole("tab", { name: "AI Chat" }));
-    await activateReadyCliEntry();
-    fireEvent.click(screen.getByRole("button", { name: "Back to viewer" }));
-    fireEvent.click(await screen.findByRole("tab", { name: "AI Chat" }));
+    expect(screen.queryByText("AI Entry is not ready.")).toBeNull();
     expect((screen.getByLabelText("AI Chat message") as HTMLTextAreaElement).disabled).toBe(false);
 
     fireEvent.contextMenu(await screen.findByRole("button", { name: "docs" }), { clientX: 120, clientY: 120 });
