@@ -2,6 +2,8 @@ import type {
   AIChatExecutionTarget,
   AIConnectionStatus,
   AICliEntryKind,
+  AICliModelSelection,
+  AICliSetupSnapshot,
   AIEntryKind,
   AIEntrySettings,
   AIIntelligenceLevel,
@@ -27,6 +29,8 @@ export type AISettingsState = {
   statuses: Record<AIEntryKind, AIConnectionStatus | null>;
   lastCheckedAtByEntry: Record<AIEntryKind, string>;
   modelBehaviorByEntry: Record<AIEntryKind, AIModelBehavior>;
+  cliSetupByEntry: Record<AICliEntryKind, AICliSetupSnapshot | null>;
+  cliModelSelectionByEntry: Record<AICliEntryKind, AICliModelSelection | null>;
 };
 
 export type AIModelBehaviorCapability =
@@ -100,6 +104,14 @@ export const defaultAISettings: AISettingsState = {
     codexCli: { kind: "intelligence", level: "medium" },
     claudeCli: { kind: "none" },
   },
+  cliSetupByEntry: {
+    codexCli: null,
+    claudeCli: null,
+  },
+  cliModelSelectionByEntry: {
+    codexCli: null,
+    claudeCli: null,
+  },
 };
 
 export function loadBasicSettings(): { settings: BasicSettings; error: string } {
@@ -144,13 +156,162 @@ export function activeAIProvider(settings: AISettingsState): AIProviderSettings 
   return isProviderSettings(entry) ? entry : null;
 }
 
-export function activeAIChatTarget(settings: AISettingsState): AIChatExecutionTarget | null {
+export function activeAIChatTarget(settings: AISettingsState): AIChatExecutionTarget | null | undefined {
   const entry = activeAIEntry(settings);
   if (!entry) return null;
   const status = effectiveAIStatus(settings, entry.entry);
-  if (status.state !== "ready" || !aiReady(entry)) return null;
+  if (status.state !== "ready" || !aiReady(entry)) return isCliSettings(entry) ? undefined : null;
   if (isProviderSettings(entry)) return entry.entry === "localAi" ? { kind: "codexBackedLocal", provider: entry, status } : { kind: "codexBackedProvider", provider: entry, status };
-  return entry.entry === "claudeCli" ? { kind: "claudeCli", entry: "claudeCli", status } : { kind: "codexCli", entry: "codexCli", status };
+  const selection = validCliModelSelection(settings, entry.entry);
+  if (!selection) return undefined;
+  return entry.entry === "claudeCli"
+    ? { kind: "claudeCli", entry: "claudeCli", selection, status }
+    : { kind: "codexCli", entry: "codexCli", selection, status };
+}
+
+export function selectAIEntry(settings: AISettingsState, entry: AIEntryKind | null): AISettingsState {
+  const previous = normalizeOptionalAIEntryKind(settings.activeEntry);
+  const nextEntry = normalizeOptionalAIEntryKind(entry);
+  const next = { ...settings, activeEntry: nextEntry };
+  if (previous !== nextEntry && isCliEntryKind(nextEntry)) {
+    return invalidateCliEntryReadiness(next, nextEntry);
+  }
+  return next;
+}
+
+export function applyCliSetupSnapshot(settings: AISettingsState, snapshot: AICliSetupSnapshot): AISettingsState {
+  const entry = snapshot.entry;
+  const previous = settings.cliSetupByEntry[entry];
+  if (shouldIgnoreCliSetupSnapshot(previous, snapshot)) return settings;
+  const previousRevision = previous?.catalog?.revision || "";
+  const nextRevision = snapshot.catalog?.revision || "";
+  const catalogChanged = previousRevision !== nextRevision;
+  const setupGenerationChanged = Boolean(previous) && previous?.setupGeneration !== snapshot.setupGeneration;
+  const catalogReady = snapshot.phase === "ready" && snapshot.catalog?.entry === entry && Boolean(nextRevision);
+  const currentSelection = settings.cliModelSelectionByEntry[entry];
+  const selectionRemainsValid = !setupGenerationChanged && catalogReady && validateCliModelSelection(snapshot, currentSelection);
+  const shouldInvalidate = setupGenerationChanged || catalogChanged || !catalogReady || !selectionRemainsValid;
+  const next: AISettingsState = {
+    ...settings,
+    cliSetupByEntry: {
+      ...settings.cliSetupByEntry,
+      [entry]: snapshot,
+    },
+    cliModelSelectionByEntry: {
+      ...settings.cliModelSelectionByEntry,
+      [entry]: selectionRemainsValid ? currentSelection : null,
+    },
+  };
+  return shouldInvalidate ? invalidateCliEntryReadiness(next, entry) : next;
+}
+
+export function applyCliSetupSnapshotAndBindSelection(
+  settings: AISettingsState,
+  snapshot: AICliSetupSnapshot,
+  preferredSelection: AICliModelSelection | null = settings.cliModelSelectionByEntry[snapshot.entry],
+): AISettingsState {
+  const entry = snapshot.entry;
+  const previousSelection = preferredSelection;
+  const applied = applyCliSetupSnapshot(settings, snapshot);
+  if (applied === settings) return settings;
+
+  const acceptedSnapshot = applied.cliSetupByEntry[entry];
+  const catalog = acceptedSnapshot?.phase === "ready"
+    && acceptedSnapshot.catalog?.entry === entry
+    && acceptedSnapshot.catalog.revision
+    ? acceptedSnapshot.catalog
+    : undefined;
+  if (!catalog || !acceptedSnapshot) return applied;
+
+  const model = previousSelection
+    ? catalog.models.find((candidate) => candidate.id === previousSelection.model)
+    : catalog.models.find((candidate) => candidate.isDefault);
+  const effortId = previousSelection?.effort || model?.defaultEffort;
+  const effort = model?.efforts.find((candidate) => candidate.id === effortId);
+  if (!model || !effort) return applied;
+
+  return {
+    ...applied,
+    cliModelSelectionByEntry: {
+      ...applied.cliModelSelectionByEntry,
+      [entry]: {
+        model: model.id,
+        effort: effort.id,
+        catalogRevision: catalog.revision,
+        setupGeneration: acceptedSnapshot.setupGeneration,
+      },
+    },
+  };
+}
+
+export function selectCliModel(settings: AISettingsState, entry: AICliEntryKind, modelId: string): AISettingsState {
+  const snapshot = settings.cliSetupByEntry[entry];
+  const catalog = snapshot?.phase === "ready" && snapshot.catalog?.entry === entry ? snapshot.catalog : undefined;
+  const model = catalog?.models.find((candidate) => candidate.id === modelId);
+  const defaultEffort = model?.efforts.find((effort) => effort.id === model.defaultEffort)
+    || model?.efforts.find((effort) => effort.isDefault)
+    || model?.efforts[0];
+  const selection = snapshot && model && defaultEffort && catalog
+    ? { model: model.id, effort: defaultEffort.id, catalogRevision: catalog.revision, setupGeneration: snapshot.setupGeneration }
+    : null;
+  return invalidateCliEntryReadiness({
+    ...settings,
+    cliModelSelectionByEntry: {
+      ...settings.cliModelSelectionByEntry,
+      [entry]: selection,
+    },
+  }, entry);
+}
+
+function shouldIgnoreCliSetupSnapshot(
+  previous: AICliSetupSnapshot | null | undefined,
+  next: AICliSetupSnapshot,
+): boolean {
+  if (!previous) return false;
+  if (next.setupGeneration < previous.setupGeneration) return true;
+  if (next.setupGeneration > previous.setupGeneration) return false;
+  const transitionalPhases = new Set<AICliSetupSnapshot["phase"]>(["inspecting", "authenticating", "loadingCatalog"]);
+  const previousIsTransitional = transitionalPhases.has(previous.phase) || previous.update.state === "running";
+  const nextIsTransitional = transitionalPhases.has(next.phase) || next.update.state === "running";
+  return !previousIsTransitional && nextIsTransitional;
+}
+
+export function selectCliEffort(settings: AISettingsState, entry: AICliEntryKind, effortId: string): AISettingsState {
+  const snapshot = settings.cliSetupByEntry[entry];
+  const current = settings.cliModelSelectionByEntry[entry];
+  const model = snapshot?.phase === "ready" && snapshot.catalog?.entry === entry
+    ? snapshot.catalog.models.find((candidate) => candidate.id === current?.model)
+    : undefined;
+  const effort = model?.efforts.find((candidate) => candidate.id === effortId);
+  const selection = current && effort && snapshot?.catalog
+    ? { model: current.model, effort: effort.id, catalogRevision: snapshot.catalog.revision, setupGeneration: snapshot.setupGeneration }
+    : null;
+  return invalidateCliEntryReadiness({
+    ...settings,
+    cliModelSelectionByEntry: {
+      ...settings.cliModelSelectionByEntry,
+      [entry]: selection,
+    },
+  }, entry);
+}
+
+export function validateCliModelSelection(
+  snapshot: AICliSetupSnapshot | null | undefined,
+  selection: AICliModelSelection | null | undefined,
+): selection is AICliModelSelection {
+  if (!snapshot || snapshot.phase !== "ready" || !snapshot.catalog || !selection) return false;
+  if (
+    snapshot.catalog.entry !== snapshot.entry
+    || selection.catalogRevision !== snapshot.catalog.revision
+    || selection.setupGeneration !== snapshot.setupGeneration
+  ) return false;
+  const model = snapshot.catalog.models.find((candidate) => candidate.id === selection.model);
+  return Boolean(model?.efforts.some((effort) => effort.id === selection.effort));
+}
+
+export function validCliModelSelection(settings: AISettingsState, entry: AICliEntryKind): AICliModelSelection | null {
+  const selection = settings.cliModelSelectionByEntry[entry];
+  return validateCliModelSelection(settings.cliSetupByEntry[entry], selection) ? selection : null;
 }
 
 export function activeAIRuleFileName(settings: AISettingsState): "AGENTS.md" | "CLAUDE.md" | null {
@@ -280,7 +441,7 @@ export function effectiveAIStatus(settings: AISettingsState, entry: AIEntryKind)
 
 export function updateAIEntry(settings: AISettingsState, entry: AIEntryKind, update: Partial<AIEntrySettings>): AISettingsState {
   const normalized = normalizeAIEntryKind(entry);
-  return {
+  const next: AISettingsState = {
     ...settings,
     entries: {
       ...settings.entries,
@@ -294,6 +455,12 @@ export function updateAIEntry(settings: AISettingsState, entry: AIEntryKind, upd
       ...settings.lastCheckedAtByEntry,
       [normalized]: "",
     },
+  };
+  if (!isCliEntryKind(normalized)) return next;
+  return {
+    ...next,
+    cliSetupByEntry: { ...next.cliSetupByEntry, [normalized]: null },
+    cliModelSelectionByEntry: { ...next.cliModelSelectionByEntry, [normalized]: null },
   };
 }
 
@@ -326,6 +493,49 @@ export function invalidateAIReadiness(settings: AISettingsState): AISettingsStat
     },
     statuses: { aiApi: null, localAi: null, codexCli: null, claudeCli: null },
     lastCheckedAtByEntry: { aiApi: "", localAi: "", codexCli: "", claudeCli: "" },
+    cliModelSelectionByEntry: { codexCli: null, claudeCli: null },
+  };
+}
+
+export function invalidateCliReadinessForRepositoryChange(settings: AISettingsState): AISettingsState {
+  return {
+    ...settings,
+    entries: {
+      ...settings.entries,
+      codexCli: {
+        ...settings.entries.codexCli,
+        readOnlyWrapperState: "unknown",
+        executionMode: "unknown",
+        lastCheckedAt: "",
+        readinessMessage: "The Current repo changed. Run readiness again before sending.",
+      } as CliAIEntrySettings,
+      claudeCli: {
+        ...settings.entries.claudeCli,
+        readOnlyWrapperState: "unknown",
+        executionMode: "unknown",
+        lastCheckedAt: "",
+        readinessMessage: "The Current repo changed. Run readiness again before sending.",
+      } as CliAIEntrySettings,
+    },
+    statuses: { ...settings.statuses, codexCli: null, claudeCli: null },
+    lastCheckedAtByEntry: { ...settings.lastCheckedAtByEntry, codexCli: "", claudeCli: "" },
+  };
+}
+
+function invalidateCliEntryReadiness(settings: AISettingsState, entry: AICliEntryKind): AISettingsState {
+  return {
+    ...settings,
+    entries: {
+      ...settings.entries,
+      [entry]: {
+        ...settings.entries[entry],
+        readOnlyWrapperState: "unknown",
+        executionMode: "unknown",
+        lastCheckedAt: "",
+      } as CliAIEntrySettings,
+    },
+    statuses: { ...settings.statuses, [entry]: null },
+    lastCheckedAtByEntry: { ...settings.lastCheckedAtByEntry, [entry]: "" },
   };
 }
 
@@ -363,13 +573,19 @@ export function normalizeAISettingsState(value: AISettingsState): AISettingsStat
   const statuses = value.statuses as Partial<Record<AIEntryKind, AIConnectionStatus | null>>;
   const checkedAtByEntry = value.lastCheckedAtByEntry as Partial<Record<AIEntryKind, string>>;
   const modelBehaviorByEntry = (value.modelBehaviorByEntry || {}) as Partial<Record<AIEntryKind, AIModelBehavior>>;
+  const cliSetupByEntry = (value.cliSetupByEntry || {}) as Partial<Record<AICliEntryKind, AICliSetupSnapshot | null>>;
+  const cliModelSelectionByEntry = (value.cliModelSelectionByEntry || {}) as Partial<Record<AICliEntryKind, AICliModelSelection | null>>;
   const nextEntries = {
     aiApi: normalizeProviderSettings("aiApi", entries.aiApi),
     localAi: normalizeProviderSettings("localAi", entries.localAi),
     codexCli: normalizeCliSettings("codexCli", entries.codexCli),
     claudeCli: normalizeCliSettings("claudeCli", entries.claudeCli),
   };
-  return {
+  const normalizedSetupByEntry: Record<AICliEntryKind, AICliSetupSnapshot | null> = {
+    codexCli: normalizeCliSetupSnapshot("codexCli", cliSetupByEntry.codexCli),
+    claudeCli: normalizeCliSetupSnapshot("claudeCli", cliSetupByEntry.claudeCli),
+  };
+  const next: AISettingsState = {
     activeEntry,
     entries: nextEntries,
     statuses: {
@@ -390,7 +606,24 @@ export function normalizeAISettingsState(value: AISettingsState): AISettingsStat
       codexCli: normalizeAIModelBehavior(modelBehaviorByEntry.codexCli, modelBehaviorCapabilityForEntry(nextEntries.codexCli)),
       claudeCli: normalizeAIModelBehavior(modelBehaviorByEntry.claudeCli, modelBehaviorCapabilityForEntry(nextEntries.claudeCli)),
     },
+    cliSetupByEntry: normalizedSetupByEntry,
+    cliModelSelectionByEntry: {
+      codexCli: null,
+      claudeCli: null,
+    },
   };
+  for (const entry of ["codexCli", "claudeCli"] as const) {
+    const selection = cliModelSelectionByEntry[entry];
+    if (validateCliModelSelection(normalizedSetupByEntry[entry], selection)) {
+      next.cliModelSelectionByEntry[entry] = selection;
+    }
+  }
+  return next;
+}
+
+function normalizeCliSetupSnapshot(entry: AICliEntryKind, snapshot: AICliSetupSnapshot | null | undefined): AICliSetupSnapshot | null {
+  if (!snapshot || snapshot.entry !== entry) return null;
+  return snapshot;
 }
 
 export function normalizeReaderFontScale(value: unknown): ReaderFontScale {

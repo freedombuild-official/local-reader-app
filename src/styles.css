@@ -1983,6 +1983,45 @@ main:is(.app-shell, .settings-shell) {
   display: grid;
   gap: 10px;
 }
+.cli-model-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+.cli-auth-model-panel .settings-field small {
+  color: #61717a;
+  font-size: 12px;
+  line-height: 1.4;
+}
+.cli-auth-challenge {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid #bfd6dc;
+  border-radius: 7px;
+  background: #eef7f8;
+  padding: 10px;
+}
+.cli-auth-challenge > div {
+  display: grid;
+  gap: 3px;
+}
+.cli-auth-challenge span {
+  color: #61717a;
+  font-size: 12px;
+  font-weight: 800;
+}
+.cli-auth-challenge strong {
+  font: 800 16px/1.3 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  letter-spacing: 0.08em;
+}
+.cli-auth-challenge a {
+  color: #0f5d68;
+  font-size: 13px;
+  font-weight: 800;
+}
 .visually-hidden {
   position: absolute;
   width: 1px;
@@ -2170,6 +2209,23 @@ main:is(.app-shell, .settings-shell) {
   resize: vertical;
   min-height: 114px;
 }
+.ai-chat-model-selection {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  color: #61717a;
+  font-size: 11px;
+  font-weight: 800;
+}
+.ai-chat-model-selection span {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  border: 1px solid #d8e1e4;
+  border-radius: 999px;
+  background: #ffffff;
+  padding: 3px 8px;
+}
 .ai-chat-action-rail {
   grid-column: 2;
   display: grid;
@@ -2268,6 +2324,9 @@ main:is(.app-shell, .settings-shell) {
   .policy-grid,
   .repo-form-grid,
   .provider-form-grid {
+    grid-template-columns: 1fr;
+  }
+  .cli-model-grid {
     grid-template-columns: 1fr;
   }
   .repo-list-main {
@@ -2423,11 +2482,13 @@ main:is(.app-shell, .settings-shell) {
 .settings-shell[data-color-mode="dark"] .repo-access-row,
 .settings-shell[data-color-mode="dark"] .readiness-row,
 .settings-shell[data-color-mode="dark"] .model-behavior-panel .setting-row.inline-row,
+.settings-shell[data-color-mode="dark"] .cli-auth-challenge,
 .app-shell[data-color-mode="dark"] .ai-chat-empty,
 .app-shell[data-color-mode="dark"] .ai-chat-error,
 .app-shell[data-color-mode="dark"] .ai-context-chip,
 .app-shell[data-color-mode="dark"] .ai-rule-chip-list .ai-context-chip,
 .app-shell[data-color-mode="dark"] .ai-attachment-chip,
+.app-shell[data-color-mode="dark"] .ai-chat-model-selection span,
 .app-shell[data-color-mode="dark"] .ai-message {
   border-color: var(--rw-dark-border);
   background: var(--rw-dark-panel);

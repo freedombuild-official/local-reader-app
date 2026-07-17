@@ -3,20 +3,29 @@ import {
   activeAIChatTarget,
   activeAIModelBehavior,
   activeAIProvider,
+  applyCliSetupSnapshot,
+  applyCliSetupSnapshotAndBindSelection,
   aiModelBehaviorCapability,
   aiReady,
   defaultAISettings,
   effectiveAIStatus,
+  invalidateAIReadiness,
+  invalidateCliReadinessForRepositoryChange,
   loadBasicSettings,
   normalizeAISettingsState,
   persistBasicSettings,
   providerExecutionMode,
+  selectAIEntry,
+  selectCliEffort,
+  selectCliModel,
   updateAIEntry,
   updateCliEntryReadiness,
   updateAIModelBehavior,
+  validCliModelSelection,
+  validateCliModelSelection,
   type AISettingsState,
 } from "../src/settingsState";
-import type { AIEntryReadiness, AIProviderSettings, CliAIEntrySettings } from "../src/types";
+import type { AICliEntryKind, AICliSetupSnapshot, AIEntryReadiness, AIProviderSettings, CliAIEntrySettings } from "../src/types";
 
 describe("settings state", () => {
   afterEach(() => {
@@ -101,6 +110,8 @@ describe("settings state", () => {
     expect(defaultAISettings.activeEntry).toBeNull();
     expect(activeAIProvider(defaultAISettings)).toBeNull();
     expect(Object.keys(defaultAISettings.entries)).toEqual(["aiApi", "localAi", "codexCli", "claudeCli"]);
+    expect(defaultAISettings.cliSetupByEntry).toEqual({ codexCli: null, claudeCli: null });
+    expect(defaultAISettings.cliModelSelectionByEntry).toEqual({ codexCli: null, claudeCli: null });
     expect(effectiveAIStatus(defaultAISettings, "aiApi")).toMatchObject({ state: "notConfigured", code: "not_configured", message: "Connection settings are incomplete." });
   });
 
@@ -136,7 +147,9 @@ describe("settings state", () => {
     expect(migrated.activeEntry).toBe("codexCli");
     expect(Object.keys(migrated.entries)).toEqual(["aiApi", "localAi", "codexCli", "claudeCli"]);
     expect(JSON.stringify(migrated)).not.toContain(legacyBridgeKey);
-    expect(activeAIChatTarget(migrated)).toBeNull();
+    expect(migrated.cliSetupByEntry).toEqual({ codexCli: null, claudeCli: null });
+    expect(migrated.cliModelSelectionByEntry).toEqual({ codexCli: null, claudeCli: null });
+    expect(activeAIChatTarget(migrated)).toBeUndefined();
     expect(effectiveAIStatus(migrated, "codexCli")).toMatchObject({ state: "ready", message: "old status" });
   });
 
@@ -212,7 +225,7 @@ describe("settings state", () => {
     };
 
     expect(activeAIChatTarget({ ...defaultAISettings, activeEntry: "aiApi" })).toBeNull();
-    expect(activeAIChatTarget({ ...defaultAISettings, activeEntry: "codexCli" })).toBeNull();
+    expect(activeAIChatTarget({ ...defaultAISettings, activeEntry: "codexCli" })).toBeUndefined();
     expect(aiReady(localAiReady)).toBe(true);
     expect(activeAIChatTarget({ ...defaultAISettings, activeEntry: "localAi", entries: { ...defaultAISettings.entries, localAi: localAiReady } })).toBeNull();
     expect(activeAIChatTarget({ ...defaultAISettings, activeEntry: "aiApi", entries: { ...defaultAISettings.entries, aiApi: aiApiReady } })).toBeNull();
@@ -236,8 +249,393 @@ describe("settings state", () => {
       provider: aiApiReady,
       status: { state: "ready", code: "success" },
     });
-    expect(activeAIChatTarget({ ...defaultAISettings, activeEntry: "codexCli", entries: { ...defaultAISettings.entries, codexCli: codexReady } })).toMatchObject({ kind: "codexCli", entry: "codexCli" });
-    expect(activeAIChatTarget({ ...defaultAISettings, activeEntry: "codexCli", entries: { ...defaultAISettings.entries, codexCli: codexReadOnly } })).toBeNull();
+    expect(activeAIChatTarget({ ...defaultAISettings, activeEntry: "codexCli", entries: { ...defaultAISettings.entries, codexCli: codexReady } })).toBeUndefined();
+    const codexSetup = cliSetupSnapshot("codexCli", "catalog-r1");
+    const codexSelection = { model: "codex-current", effort: "Max", catalogRevision: "catalog-r1", setupGeneration: 1 };
+    expect(activeAIChatTarget({
+      ...defaultAISettings,
+      activeEntry: "codexCli",
+      entries: { ...defaultAISettings.entries, codexCli: codexReady },
+      cliSetupByEntry: { ...defaultAISettings.cliSetupByEntry, codexCli: codexSetup },
+      cliModelSelectionByEntry: { ...defaultAISettings.cliModelSelectionByEntry, codexCli: codexSelection },
+    })).toMatchObject({ kind: "codexCli", entry: "codexCli", selection: codexSelection });
+    expect(activeAIChatTarget({
+      ...defaultAISettings,
+      activeEntry: "codexCli",
+      entries: { ...defaultAISettings.entries, codexCli: codexReadOnly },
+      cliSetupByEntry: { ...defaultAISettings.cliSetupByEntry, codexCli: codexSetup },
+      cliModelSelectionByEntry: { ...defaultAISettings.cliModelSelectionByEntry, codexCli: codexSelection },
+    })).toBeUndefined();
+  });
+
+  it("keeps arbitrary catalog effort identifiers and requires a current model selection", () => {
+    const snapshot = cliSetupSnapshot("codexCli", "catalog-r1");
+    let settings = applyCliSetupSnapshot(defaultAISettings, snapshot);
+    expect(settings.cliSetupByEntry.codexCli).toBe(snapshot);
+    expect(settings.cliModelSelectionByEntry.codexCli).toBeNull();
+
+    settings = selectCliModel(settings, "codexCli", "codex-current");
+    expect(settings.cliModelSelectionByEntry.codexCli).toEqual({
+      model: "codex-current",
+      effort: "Max",
+      catalogRevision: "catalog-r1",
+      setupGeneration: 1,
+    });
+    expect(validCliModelSelection(settings, "codexCli")).toEqual(settings.cliModelSelectionByEntry.codexCli);
+
+    settings = selectCliEffort(settings, "codexCli", "Ultra");
+    expect(settings.cliModelSelectionByEntry.codexCli?.effort).toBe("Ultra");
+    expect(validateCliModelSelection(snapshot, settings.cliModelSelectionByEntry.codexCli)).toBe(true);
+
+    settings = selectCliEffort(settings, "codexCli", "adaptive-super");
+    expect(settings.cliModelSelectionByEntry.codexCli?.effort).toBe("adaptive-super");
+    expect(validCliModelSelection(settings, "codexCli")?.effort).toBe("adaptive-super");
+  });
+
+  it("binds only the explicit default model and its declared default effort for an initial activation", () => {
+    const snapshot = cliSetupSnapshot("codexCli", "catalog-r1");
+    snapshot.catalog!.models = [
+      {
+        id: "first-model",
+        label: "First model",
+        description: null,
+        isDefault: false,
+        defaultEffort: "first-default",
+        efforts: [{ id: "first-default", label: "First default", description: null, isDefault: true }],
+      },
+      {
+        id: "explicit-default",
+        label: "Explicit default",
+        description: null,
+        isDefault: true,
+        defaultEffort: "declared-effort",
+        efforts: [
+          { id: "flagged-effort", label: "Flagged effort", description: null, isDefault: true },
+          { id: "declared-effort", label: "Declared effort", description: null, isDefault: false },
+        ],
+      },
+    ];
+
+    const applied = applyCliSetupSnapshotAndBindSelection(defaultAISettings, snapshot);
+
+    expect(applied.cliSetupByEntry.codexCli).toBe(snapshot);
+    expect(applied.cliModelSelectionByEntry.codexCli).toEqual({
+      model: "explicit-default",
+      effort: "declared-effort",
+      catalogRevision: "catalog-r1",
+      setupGeneration: 1,
+    });
+    expect(validCliModelSelection(applied, "codexCli")).toEqual(applied.cliModelSelectionByEntry.codexCli);
+  });
+
+  it("leaves an initial activation unselected without a usable explicit catalog default", () => {
+    const withoutDefault = cliSetupSnapshot("codexCli", "catalog-without-default");
+    withoutDefault.catalog!.models[0].isDefault = false;
+
+    const missingDeclaredEffort = cliSetupSnapshot("codexCli", "catalog-missing-effort");
+    missingDeclaredEffort.catalog!.models[0].defaultEffort = "missing-effort";
+
+    expect(applyCliSetupSnapshotAndBindSelection(defaultAISettings, withoutDefault).cliModelSelectionByEntry.codexCli).toBeNull();
+    expect(applyCliSetupSnapshotAndBindSelection(defaultAISettings, missingDeclaredEffort).cliModelSelectionByEntry.codexCli).toBeNull();
+  });
+
+  it("rebinds an existing model and effort to a fresh catalog revision and setup generation", () => {
+    const first = cliSetupSnapshot("codexCli", "catalog-r1");
+    const selected = selectCliEffort(
+      selectCliModel(applyCliSetupSnapshot(defaultAISettings, first), "codexCli", "codex-current"),
+      "codexCli",
+      "Ultra",
+    );
+    const refreshed = { ...cliSetupSnapshot("codexCli", "catalog-r2"), setupGeneration: 2 };
+    refreshed.catalog!.models[0].isDefault = false;
+    refreshed.catalog!.models.unshift({
+      id: "new-default",
+      label: "New default",
+      description: null,
+      isDefault: true,
+      defaultEffort: "medium",
+      efforts: [{ id: "medium", label: "Medium", description: null, isDefault: true }],
+    });
+
+    const applied = applyCliSetupSnapshotAndBindSelection(selected, refreshed);
+
+    expect(applied.cliSetupByEntry.codexCli).toBe(refreshed);
+    expect(applied.cliModelSelectionByEntry.codexCli).toEqual({
+      model: "codex-current",
+      effort: "Ultra",
+      catalogRevision: "catalog-r2",
+      setupGeneration: 2,
+    });
+    expect(validCliModelSelection(applied, "codexCli")).toEqual(applied.cliModelSelectionByEntry.codexCli);
+  });
+
+  it("can rebind the selection captured before an overlapping refresh cleared browser state", () => {
+    const first = cliSetupSnapshot("codexCli", "catalog-r1");
+    const selected = selectCliEffort(
+      selectCliModel(applyCliSetupSnapshot(defaultAISettings, first), "codexCli", "codex-current"),
+      "codexCli",
+      "Ultra",
+    );
+    const preferred = selected.cliModelSelectionByEntry.codexCli;
+    const cleared = {
+      ...selected,
+      cliModelSelectionByEntry: { ...selected.cliModelSelectionByEntry, codexCli: null },
+    };
+    const refreshed = { ...cliSetupSnapshot("codexCli", "catalog-r2"), setupGeneration: 2 };
+
+    const applied = applyCliSetupSnapshotAndBindSelection(cleared, refreshed, preferred);
+
+    expect(applied.cliModelSelectionByEntry.codexCli).toEqual({
+      model: "codex-current",
+      effort: "Ultra",
+      catalogRevision: "catalog-r2",
+      setupGeneration: 2,
+    });
+  });
+
+  it("does not fall back to a default when an existing model or effort disappears", () => {
+    const first = cliSetupSnapshot("codexCli", "catalog-r1");
+    const selected = selectCliEffort(
+      selectCliModel(applyCliSetupSnapshot(defaultAISettings, first), "codexCli", "codex-current"),
+      "codexCli",
+      "Ultra",
+    );
+    const missingModel = { ...cliSetupSnapshot("codexCli", "catalog-r2"), setupGeneration: 2 };
+    missingModel.catalog!.models = [{
+      id: "new-default",
+      label: "New default",
+      description: null,
+      isDefault: true,
+      defaultEffort: "medium",
+      efforts: [{ id: "medium", label: "Medium", description: null, isDefault: true }],
+    }];
+    const missingEffort = { ...cliSetupSnapshot("codexCli", "catalog-r3"), setupGeneration: 2 };
+    missingEffort.catalog!.models[0].efforts = missingEffort.catalog!.models[0].efforts.filter((effort) => effort.id !== "Ultra");
+
+    expect(applyCliSetupSnapshotAndBindSelection(selected, missingModel).cliModelSelectionByEntry.codexCli).toBeNull();
+    expect(applyCliSetupSnapshotAndBindSelection(selected, missingEffort).cliModelSelectionByEntry.codexCli).toBeNull();
+  });
+
+  it("keeps non-ready snapshots unselected even when a prior selection exists", () => {
+    const first = cliSetupSnapshot("codexCli", "catalog-r1");
+    const selected = selectCliModel(applyCliSetupSnapshot(defaultAISettings, first), "codexCli", "codex-current");
+    const loginRequired: AICliSetupSnapshot = {
+      ...first,
+      setupGeneration: 2,
+      phase: "loginRequired",
+      catalog: undefined,
+      authentication: { state: "idle" },
+    };
+
+    const applied = applyCliSetupSnapshotAndBindSelection(selected, loginRequired);
+
+    expect(applied.cliSetupByEntry.codexCli).toBe(loginRequired);
+    expect(applied.cliModelSelectionByEntry.codexCli).toBeNull();
+  });
+
+  it("does not rebind from lower-generation or delayed transitional snapshots", () => {
+    const currentSnapshot = { ...cliSetupSnapshot("codexCli", "catalog-r3"), setupGeneration: 3 };
+    const current = selectCliModel(
+      applyCliSetupSnapshot(defaultAISettings, currentSnapshot),
+      "codexCli",
+      "codex-current",
+    );
+    const lowerGeneration = { ...cliSetupSnapshot("codexCli", "catalog-r2"), setupGeneration: 2 };
+    const delayedInspecting: AICliSetupSnapshot = {
+      ...currentSnapshot,
+      phase: "inspecting",
+      catalog: undefined,
+    };
+
+    const lowerResult = applyCliSetupSnapshotAndBindSelection(current, lowerGeneration);
+    const delayedResult = applyCliSetupSnapshotAndBindSelection(current, delayedInspecting);
+
+    expect(lowerResult).toBe(current);
+    expect(delayedResult).toBe(current);
+    expect(current.cliModelSelectionByEntry.codexCli).toEqual({
+      model: "codex-current",
+      effort: "Max",
+      catalogRevision: "catalog-r3",
+      setupGeneration: 3,
+    });
+  });
+
+  it("invalidates stale catalog selections and repo readiness fail closed", () => {
+    const readyCli: CliAIEntrySettings = {
+      ...(defaultAISettings.entries.codexCli as CliAIEntrySettings),
+      authState: "configured",
+      readOnlyWrapperState: "ready",
+      executionMode: "repoWrite",
+      lastCheckedAt: "2026-07-16T00:00:00.000Z",
+    };
+    let settings: AISettingsState = {
+      ...defaultAISettings,
+      activeEntry: "codexCli",
+      entries: { ...defaultAISettings.entries, codexCli: readyCli },
+      statuses: {
+        ...defaultAISettings.statuses,
+        codexCli: { state: "ready", code: "success", message: "Ready.", checkedAt: "2026-07-16T00:00:00.000Z" },
+      },
+      lastCheckedAtByEntry: { ...defaultAISettings.lastCheckedAtByEntry, codexCli: "2026-07-16T00:00:00.000Z" },
+      cliSetupByEntry: { ...defaultAISettings.cliSetupByEntry, codexCli: cliSetupSnapshot("codexCli", "catalog-r1") },
+      cliModelSelectionByEntry: {
+        ...defaultAISettings.cliModelSelectionByEntry,
+        codexCli: { model: "codex-current", effort: "Max", catalogRevision: "catalog-r1", setupGeneration: 1 },
+      },
+    };
+    expect(activeAIChatTarget(settings)).toMatchObject({ kind: "codexCli" });
+
+    settings = applyCliSetupSnapshot(settings, cliSetupSnapshot("codexCli", "catalog-r2"));
+    expect(settings.cliModelSelectionByEntry.codexCli).toBeNull();
+    expect(settings.statuses.codexCli).toBeNull();
+    expect((settings.entries.codexCli as CliAIEntrySettings).executionMode).toBe("unknown");
+    expect(activeAIChatTarget(settings)).toBeUndefined();
+
+    settings = selectCliModel(settings, "codexCli", "codex-current");
+    expect(settings.cliModelSelectionByEntry.codexCli?.catalogRevision).toBe("catalog-r2");
+    settings = invalidateAIReadiness(settings);
+    expect(settings.cliModelSelectionByEntry).toEqual({ codexCli: null, claudeCli: null });
+  });
+
+  it("invalidates readiness and selection when setup generation changes with the same catalog revision", () => {
+    const readyCli: CliAIEntrySettings = {
+      ...(defaultAISettings.entries.codexCli as CliAIEntrySettings),
+      authState: "configured",
+      readOnlyWrapperState: "ready",
+      executionMode: "repoWrite",
+      lastCheckedAt: "2026-07-16T00:00:00.000Z",
+    };
+    const first = cliSetupSnapshot("codexCli", "catalog-r1");
+    const settings: AISettingsState = {
+      ...defaultAISettings,
+      activeEntry: "codexCli",
+      entries: { ...defaultAISettings.entries, codexCli: readyCli },
+      statuses: { ...defaultAISettings.statuses, codexCli: { state: "ready", code: "success", message: "Ready.", checkedAt: "2026-07-16T00:00:00.000Z" } },
+      cliSetupByEntry: { ...defaultAISettings.cliSetupByEntry, codexCli: first },
+      cliModelSelectionByEntry: {
+        ...defaultAISettings.cliModelSelectionByEntry,
+        codexCli: { model: "codex-current", effort: "Max", catalogRevision: "catalog-r1", setupGeneration: 1 },
+      },
+    };
+
+    const refreshed = applyCliSetupSnapshot(settings, { ...first, setupGeneration: 2 });
+
+    expect(refreshed.statuses.codexCli).toBeNull();
+    expect(refreshed.cliModelSelectionByEntry.codexCli).toBeNull();
+    expect((refreshed.entries.codexCli as CliAIEntrySettings).executionMode).toBe("unknown");
+    expect(activeAIChatTarget(refreshed)).toBeUndefined();
+  });
+
+  it("ignores lower-generation and same-generation transitional setup snapshots", () => {
+    const ready = { ...cliSetupSnapshot("codexCli", "catalog-r1"), setupGeneration: 3 };
+    const settings = applyCliSetupSnapshot(defaultAISettings, ready);
+
+    const lowerGeneration = applyCliSetupSnapshot(settings, {
+      ...ready,
+      setupGeneration: 2,
+      phase: "failed",
+      catalog: undefined,
+      failureReason: "stale-response",
+    });
+    const delayedInspecting = applyCliSetupSnapshot(settings, {
+      ...ready,
+      phase: "inspecting",
+      catalog: undefined,
+    });
+    const delayedUpdate = applyCliSetupSnapshot(settings, {
+      ...ready,
+      phase: "updateRequired",
+      catalog: undefined,
+      update: { state: "running", startedAt: "2026-07-16T00:00:00.000Z" },
+    });
+
+    expect(lowerGeneration).toBe(settings);
+    expect(delayedInspecting).toBe(settings);
+    expect(delayedUpdate).toBe(settings);
+    expect(settings.cliSetupByEntry.codexCli).toMatchObject({ phase: "ready", setupGeneration: 3 });
+  });
+
+  it("requires a new readiness check when switching back to a CLI entry", () => {
+    const readyCli: CliAIEntrySettings = {
+      ...(defaultAISettings.entries.codexCli as CliAIEntrySettings),
+      authState: "configured",
+      readOnlyWrapperState: "ready",
+      executionMode: "repoWrite",
+      lastCheckedAt: "2026-07-16T00:00:00.000Z",
+    };
+    const settings: AISettingsState = {
+      ...defaultAISettings,
+      activeEntry: "claudeCli",
+      entries: { ...defaultAISettings.entries, codexCli: readyCli },
+      statuses: { ...defaultAISettings.statuses, codexCli: { state: "ready", code: "success", message: "Ready.", checkedAt: "2026-07-16T00:00:00.000Z" } },
+      cliSetupByEntry: { ...defaultAISettings.cliSetupByEntry, codexCli: cliSetupSnapshot("codexCli", "catalog-r1") },
+      cliModelSelectionByEntry: {
+        ...defaultAISettings.cliModelSelectionByEntry,
+        codexCli: { model: "codex-current", effort: "Max", catalogRevision: "catalog-r1", setupGeneration: 1 },
+      },
+    };
+
+    const switched = selectAIEntry(settings, "codexCli");
+
+    expect(switched.activeEntry).toBe("codexCli");
+    expect(switched.statuses.codexCli).toBeNull();
+    expect((switched.entries.codexCli as CliAIEntrySettings).executionMode).toBe("unknown");
+    expect(switched.cliModelSelectionByEntry.codexCli).toEqual(settings.cliModelSelectionByEntry.codexCli);
+    expect(activeAIChatTarget(switched)).toBeUndefined();
+  });
+
+  it("invalidates only CLI repo readiness while preserving setup, selections, and provider state", () => {
+    const readyCli = {
+      ...(defaultAISettings.entries.codexCli as CliAIEntrySettings),
+      authState: "configured" as const,
+      readOnlyWrapperState: "ready" as const,
+      executionMode: "repoWrite" as const,
+      lastCheckedAt: "2026-07-16T00:00:00.000Z",
+    };
+    const providerStatus = { state: "ready", code: "success", message: "Ready.", checkedAt: "2026-07-16T00:00:00.000Z" } as const;
+    const settings: AISettingsState = {
+      ...defaultAISettings,
+      activeEntry: "codexCli",
+      entries: { ...defaultAISettings.entries, codexCli: readyCli },
+      statuses: { ...defaultAISettings.statuses, aiApi: providerStatus, codexCli: providerStatus },
+      lastCheckedAtByEntry: {
+        ...defaultAISettings.lastCheckedAtByEntry,
+        aiApi: providerStatus.checkedAt,
+        codexCli: providerStatus.checkedAt,
+      },
+      cliSetupByEntry: { ...defaultAISettings.cliSetupByEntry, codexCli: cliSetupSnapshot("codexCli", "catalog-r1") },
+      cliModelSelectionByEntry: {
+        ...defaultAISettings.cliModelSelectionByEntry,
+        codexCli: { model: "codex-current", effort: "Max", catalogRevision: "catalog-r1", setupGeneration: 1 },
+      },
+    };
+
+    const invalidated = invalidateCliReadinessForRepositoryChange(settings);
+    expect(invalidated.cliSetupByEntry).toEqual(settings.cliSetupByEntry);
+    expect(invalidated.cliModelSelectionByEntry).toEqual(settings.cliModelSelectionByEntry);
+    expect(invalidated.statuses.aiApi).toBe(providerStatus);
+    expect(invalidated.statuses.codexCli).toBeNull();
+    expect((invalidated.entries.codexCli as CliAIEntrySettings)).toMatchObject({
+      readOnlyWrapperState: "unknown",
+      executionMode: "unknown",
+      lastCheckedAt: "",
+      readinessMessage: "The Current repo changed. Run readiness again before sending.",
+    });
+    expect(activeAIChatTarget(invalidated)).toBeUndefined();
+  });
+
+  it("clears CLI setup state when the CLI entry changes but leaves provider model behavior unchanged", () => {
+    const configured = selectCliModel(
+      applyCliSetupSnapshot(defaultAISettings, cliSetupSnapshot("claudeCli", "claude-r1")),
+      "claudeCli",
+      "codex-current",
+    );
+    const providerBehavior = configured.modelBehaviorByEntry.aiApi;
+    const updated = updateAIEntry(configured, "claudeCli", { binaryName: "claude" });
+    expect(updated.cliSetupByEntry.claudeCli).toBeNull();
+    expect(updated.cliModelSelectionByEntry.claudeCli).toBeNull();
+    expect(updated.modelBehaviorByEntry.aiApi).toEqual(providerBehavior);
+    expect(updated.modelBehaviorByEntry.localAi).toEqual(configured.modelBehaviorByEntry.localAi);
   });
 
   it("normalizes AI model behavior by active entry and model capability", () => {
@@ -294,4 +692,38 @@ function installLocalStorageMock(): void {
       },
     } satisfies Pick<Storage, "getItem" | "setItem" | "removeItem" | "clear">,
   });
+}
+
+function cliSetupSnapshot(entry: AICliEntryKind, revision: string): AICliSetupSnapshot {
+  return {
+    entry,
+    setupGeneration: 1,
+    phase: "ready",
+    message: "Authentication and model catalog are ready.",
+    cliVersion: "1.0.0",
+    checkedAt: "2026-07-16T00:00:00.000Z",
+    compatibility: "compatible",
+    authentication: { state: "succeeded" },
+    update: { state: "idle" },
+    catalog: {
+      entry,
+      cliVersion: "1.0.0",
+      revision,
+      fetchedAt: "2026-07-16T00:00:00.000Z",
+      models: [
+        {
+          id: "codex-current",
+          label: "Current model",
+          description: null,
+          isDefault: true,
+          defaultEffort: "Max",
+          efforts: [
+            { id: "Max", label: "Max", description: null, isDefault: true },
+            { id: "Ultra", label: "Ultra", description: null, isDefault: false },
+            { id: "adaptive-super", label: "Adaptive super", description: null, isDefault: false },
+          ],
+        },
+      ],
+    },
+  };
 }

@@ -28,9 +28,9 @@ import {
   Trash2,
   type LucideIcon,
 } from "lucide-react";
-import { fetchFile, fetchHttpDeliveryStatus, fetchRepos, fetchTree, imageFileUrl, openRepository, pdfFileUrl, startHttpDelivery, stopHttpDelivery } from "./api";
+import { fetchAICliSetups, fetchFile, fetchHttpDeliveryStatus, fetchRepos, fetchTree, imageFileUrl, openRepository, pdfFileUrl, startHttpDelivery, stopHttpDelivery } from "./api";
 import type { AIChatContextChip, AIChatSessionState, AIEntryKind, DiffStatus, FileResponse, HttpDeliveryItemStatus, HttpDeliveryStatus, RepoListItem, RepoSyncStatus, TreeNode, TreeSnapshot } from "./types";
-import { activeAIChatTarget, activeAIModelBehavior, defaultAISettings, defaultBasicSettings, loadBasicSettings, normalizeReaderFontScale, persistBasicSettings, updateAIEntryStatus, type AISettingsState, type BasicSettings, type ReaderFontScale } from "./settingsState";
+import { activeAIChatTarget, activeAIModelBehavior, applyCliSetupSnapshot, defaultAISettings, defaultBasicSettings, invalidateCliReadinessForRepositoryChange, isCliEntryKind, loadBasicSettings, normalizeReaderFontScale, persistBasicSettings, updateAIEntryStatus, type AISettingsState, type BasicSettings, type ReaderFontScale } from "./settingsState";
 import { injectMarkdownCodeToolbarButtons, installCodeBlockRule } from "../shared/markdownCodeBlocks";
 import { installTableScrollRule } from "../shared/markdownTableScroll";
 import { installTaskListRule } from "../shared/markdownTaskLists";
@@ -162,6 +162,7 @@ export function App() {
   const repoReloadTokenRef = useRef(0);
   const activeRepoIdRef = useRef("");
   const activeRepoRevisionRef = useRef("");
+  const cliReadinessRepoIdentityRef = useRef("");
   const reposRef = useRef<RepoListItem[]>([]);
   const tabsByRepoRef = useRef<TabsByRepo>({});
   tabsByRepoRef.current = tabsByRepo;
@@ -173,9 +174,54 @@ export function App() {
   }, []);
 
   useEffect(() => {
+    let canceled = false;
+    void fetchAICliSetups()
+      .then(({ setups }) => {
+        if (canceled) return;
+        setAISettings((current) => applyCliSetupSnapshot(applyCliSetupSnapshot(current, setups.codexCli), setups.claudeCli));
+      })
+      .catch(() => undefined);
+    return () => {
+      canceled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isCliEntryKind(aiSettings.activeEntry)) return undefined;
+    let canceled = false;
+    let inFlight = false;
+    const syncCliSetups = () => {
+      if (inFlight) return;
+      inFlight = true;
+      void fetchAICliSetups()
+        .then(({ setups }) => {
+          if (canceled) return;
+          setAISettings((current) => applyCliSetupSnapshot(applyCliSetupSnapshot(current, setups.codexCli), setups.claudeCli));
+        })
+        .catch(() => undefined)
+        .finally(() => { inFlight = false; });
+    };
+    syncCliSetups();
+    const interval = window.setInterval(syncCliSetups, 1_000);
+    return () => {
+      canceled = true;
+      window.clearInterval(interval);
+    };
+  }, [aiSettings.activeEntry]);
+
+  useEffect(() => {
     activeRepoIdRef.current = activeRepoId;
     activeRepoRevisionRef.current = repos.find((repo) => repo.id === activeRepoId)?.revision || "";
     reposRef.current = repos;
+  }, [activeRepoId, repos]);
+
+  useEffect(() => {
+    const revision = repos.find((repo) => repo.id === activeRepoId)?.revision || "";
+    const identity = activeRepoId && revision ? `${activeRepoId}\u0000${revision}` : "";
+    const previousIdentity = cliReadinessRepoIdentityRef.current;
+    cliReadinessRepoIdentityRef.current = identity;
+    if (!previousIdentity || previousIdentity === identity) return;
+    setAISettings((current) => invalidateCliReadinessForRepositoryChange(current));
   }, [activeRepoId, repos]);
 
   const activeRepo = useMemo(() => repos.find((repo) => repo.id === activeRepoId) || null, [activeRepoId, repos]);
@@ -477,6 +523,19 @@ export function App() {
     }
     if (!stillActive && nextRepos[0]) {
       await selectRepo(nextRepos[0]);
+      return;
+    }
+    if (!stillActive) {
+      repoLoadTokenRef.current += 1;
+      repoReloadTokenRef.current += 1;
+      activeRepoIdRef.current = "";
+      activeRepoRevisionRef.current = "";
+      setActiveRepoId("");
+      setTreeCache({});
+      setExpanded(new Set([""]));
+      setRepositoryReloadingRepoId("");
+      setError("");
+      setTabNotice("");
     }
   }, [activeRepoId, repos, selectRepo]);
 

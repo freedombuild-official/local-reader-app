@@ -71,9 +71,10 @@ export function AIChatPanel({ aiSettings, session, onSessionChange, modelBehavio
   const targetIdentity = target
     ? "provider" in target
       ? [target.kind, target.provider.entry, target.provider.executionMode || "readOnly", target.provider.provider || "", target.provider.runtime || "", target.provider.model, target.provider.baseUrl, target.provider.apiFormat].join(":")
-      : `${target.kind}:${target.entry}`
+      : [target.kind, target.entry, target.selection.model, target.selection.effort, target.selection.catalogRevision, target.selection.setupGeneration].join(":")
     : "none";
   const targetIdentityRef = useRef(targetIdentity);
+  const effectTargetIdentityRef = useRef(targetIdentity);
   targetIdentityRef.current = targetIdentity;
   const ready = Boolean(target && activeEntry && aiVerifiedReady(aiSettings, activeEntry.entry));
   const defaultRuleChip = useMemo(() => buildDefaultRuleChip(aiSettings, activeRepoId, rootTreeNodes, session.dismissedRulePathKeys || []), [aiSettings, activeRepoId, rootTreeNodes, session.dismissedRulePathKeys]);
@@ -117,6 +118,38 @@ export function AIChatPanel({ aiSettings, session, onSessionChange, modelBehavio
       };
     });
   }, [activeRepoIdentity]);
+
+  useEffect(() => {
+    if (effectTargetIdentityRef.current === targetIdentity) return;
+    effectTargetIdentityRef.current = targetIdentity;
+    const controller = abortRef.current;
+    if (!controller) return;
+    const runId = activeRunIdRef.current;
+    const requestKey = activeRequestKeyRef.current;
+    const repoWrite = activeRepoWriteRequestRef.current;
+    abortRef.current = null;
+    activeRunIdRef.current = "";
+    activeRequestKeyRef.current = "";
+    activeRepoWriteRequestRef.current = false;
+    cancelRequestedRef.current = false;
+    controller.abort();
+    if (runId) void cancelAIChatRun(runId).catch(() => undefined);
+    setCanceling(false);
+    onSessionChangeRef.current((current) => {
+      if (!requestKey || current.requestKey !== requestKey) return current;
+      const lastMessage = current.messages[current.messages.length - 1];
+      const message = "AI Chat request canceled because the AI Entry setup changed.";
+      const next = lastMessage?.role === "assistant"
+        ? replaceLastAssistant(current, [lastMessage.content, message].filter(Boolean).join("\n\n"))
+        : current;
+      return {
+        ...next,
+        pending: repoWrite,
+        error: message,
+        suppressRequestRetry: repoWrite,
+      };
+    });
+  }, [targetIdentity]);
 
   useEffect(() => {
     return () => {
@@ -225,7 +258,7 @@ export function AIChatPanel({ aiSettings, session, onSessionChange, modelBehavio
             rulePaths: requestContextChips.filter((chip) => chip.role === "rule").map(chipToContextPathRequest),
           },
           attachments: requestAttachments,
-          modelBehavior,
+          ...(target.kind === "codexBackedProvider" || target.kind === "codexBackedLocal" ? { modelBehavior } : {}),
         },
         (event) => {
           if (abortRef.current !== controller || activeRepoIdentityRef.current !== requestRepoIdentity || targetIdentityRef.current !== requestTargetIdentity) return;
@@ -247,6 +280,13 @@ export function AIChatPanel({ aiSettings, session, onSessionChange, modelBehavio
           if (event.type === "error") {
             repositoryMayHaveChanged = repositoryMayHaveChanged || repoWriteRequest || Boolean(event.details?.run && (event.details.run.changedPaths.length > 0 || event.details.run.auditState === "unverified"));
             const message = describeAIChatFailure(event.error, event.details);
+            if (
+              target
+              && !("provider" in target)
+              && (event.details?.code === "readiness_renewal_failed" || event.details?.code === "invalidSelection" || event.details?.code === "authenticationInvalidated" || event.details?.processTreeUnverified)
+            ) {
+              onReadinessFailure(target.entry, message);
+            }
             updateSessionAndFollow((current) => current.requestKey === requestKey
               ? {
                   ...replaceLastAssistant(current, message),
@@ -260,9 +300,22 @@ export function AIChatPanel({ aiSettings, session, onSessionChange, modelBehavio
       );
     } catch (nextError) {
       if (activeRepoIdentityRef.current === requestRepoIdentity && targetIdentityRef.current === requestTargetIdentity) {
-        const message = controller.signal.aborted ? "The AI Chat request was canceled." : describeAIChatFailure(nextError);
-        if (nextError instanceof AIChatRequestError && nextError.code === "readiness_renewal_failed" && nextError.entry) {
-          onReadinessFailure(nextError.entry, message);
+        const requestDetails = nextError instanceof AIChatRequestError ? nextError.details : undefined;
+        repositoryMayHaveChanged = repositoryMayHaveChanged
+          || Boolean(requestDetails?.run && (requestDetails.run.changedPaths.length > 0 || requestDetails.run.auditState === "unverified"));
+        const message = controller.signal.aborted ? "The AI Chat request was canceled." : describeAIChatFailure(nextError, requestDetails);
+        if (
+          nextError instanceof AIChatRequestError
+          && target
+          && !("provider" in target)
+          && (
+            nextError.code === "readiness_renewal_failed"
+            || nextError.code === "invalidSelection"
+            || nextError.code === "authenticationInvalidated"
+            || requestDetails?.processTreeUnverified
+          )
+        ) {
+          onReadinessFailure(target.entry, message);
         }
         updateCurrentRequest((current) => ({
           ...replaceLastAssistant(current, message),
@@ -271,7 +324,7 @@ export function AIChatPanel({ aiSettings, session, onSessionChange, modelBehavio
         }));
       }
     } finally {
-      if (activeRepoIdentityRef.current === requestRepoIdentity && targetIdentityRef.current === requestTargetIdentity) {
+      if (activeRepoIdentityRef.current === requestRepoIdentity) {
         requestSettledForCurrentTarget = true;
         if (!repositoryMayHaveChanged) updateCurrentRequest((current) => ({ ...current, pending: false }));
       }
@@ -544,6 +597,12 @@ export function AIChatPanel({ aiSettings, session, onSessionChange, modelBehavio
                   </button>
                 </span>
               ))}
+            </div>
+          ) : null}
+          {target && !("provider" in target) ? (
+            <div className="ai-chat-model-selection" aria-label="AI Chat model selection">
+              <span>{target.selection.model}</span>
+              <span>{target.selection.effort}</span>
             </div>
           ) : null}
           <textarea

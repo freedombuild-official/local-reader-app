@@ -12,10 +12,13 @@ import { promisify } from "node:util";
 import { describe, expect, it, vi } from "vitest";
 import { createApiRouter } from "../server/api.js";
 import { safeCliEnv, type AICommandRunner } from "../server/aiCliAdapters.js";
+import { AiCliSetupService, type AiCliSetupProvider } from "../server/aiCliSetup.js";
+import { HttpError } from "../server/errors.js";
 import type { GuardedProviderRequester } from "../server/guardedRepoEdits.js";
 import { testAIConnection } from "../server/aiProviders.js";
 import { createHttpDeliveryService } from "../server/httpDelivery.js";
 import { createRepositoryRegistry } from "../server/repositoryRegistry.js";
+import type { AICliEntryKind, AICliModelSelection, RepositoryConfigState } from "../server/types.js";
 
 const execFileAsync = promisify(execFile);
 async function listen(app: express.Express): Promise<{ url: string; close: () => Promise<void> }> {
@@ -27,6 +30,59 @@ async function listen(app: express.Express): Promise<{ url: string; close: () =>
   const address = server.address();
   const port = typeof address === "object" && address ? address.port : 0;
   return { url: `http://127.0.0.1:${port}`, close: () => new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve()))) };
+}
+
+function cliSelection(entry: AICliEntryKind): AICliModelSelection {
+  return {
+    model: entry === "codexCli" ? "gpt-test" : "claude-test",
+    effort: entry === "codexCli" ? "ultra" : "max",
+    catalogRevision: `${entry}-catalog-r1`,
+    setupGeneration: 1,
+  };
+}
+
+async function createReadyAiCliSetupService(
+  versions: Partial<Record<AICliEntryKind, string>> = {},
+  executions: Partial<Record<AICliEntryKind, { binary: string; argvPrefix: string[]; identityPath: string }>> = {},
+): Promise<AiCliSetupService> {
+  const provider = (entry: AICliEntryKind): AiCliSetupProvider => ({
+    entry,
+    currentVersion: async () => versions[entry] || (entry === "codexCli" ? "codex-cli 0.144.1" : "2.1.199 (Claude Code)"),
+    currentExecution: async () => ({
+      version: versions[entry] || (entry === "codexCli" ? "codex-cli 0.144.1" : "2.1.199 (Claude Code)"),
+      executable: executions[entry] || { binary: entry === "codexCli" ? "codex" : "claude", argvPrefix: [], identityPath: `/mock/bin/${entry === "codexCli" ? "codex" : "claude"}` },
+    }),
+    inspect: async () => ({
+      installed: true,
+      cliVersion: versions[entry] || (entry === "codexCli" ? "codex-cli 0.144.1" : "2.1.199 (Claude Code)"),
+      managed: true,
+      compatibility: "compatible",
+      authenticated: true,
+      message: `${entry} setup ready`,
+      catalog: {
+        entry,
+        cliVersion: versions[entry] || (entry === "codexCli" ? "codex-cli 0.144.1" : "2.1.199 (Claude Code)"),
+        revision: `${entry}-catalog-r1`,
+        fetchedAt: "2026-07-16T00:00:00.000Z",
+        models: [{
+          id: entry === "codexCli" ? "gpt-test" : "claude-test",
+          label: entry === "codexCli" ? "GPT Test" : "Claude Test",
+          description: null,
+          isDefault: true,
+          defaultEffort: entry === "codexCli" ? "ultra" : "max",
+          efforts: [{ id: entry === "codexCli" ? "ultra" : "max", label: entry === "codexCli" ? "Ultra" : "Max", description: null, isDefault: true }],
+        }],
+      },
+    }),
+    startAuthentication: async () => ({ state: "waiting", message: "mock auth" }),
+    cancelAuthentication: async () => undefined,
+    update: async () => undefined,
+    shutdown: async () => undefined,
+  });
+  const service = new AiCliSetupService({ providers: { codexCli: provider("codexCli"), claudeCli: provider("claudeCli") } });
+  await service.inspect("codexCli");
+  await service.inspect("claudeCli");
+  return service;
 }
 
 describe("api", () => {
@@ -852,12 +908,14 @@ describe("api", () => {
       }
       throw new Error("Unexpected CLI command");
     };
+    const aiCliSetupService = await createReadyAiCliSetupService();
     const app = express();
-    app.use("/api", createApiRouter(configPath, undefined, { aiCommandRunner: runner, aiCliPlatform: "linux" }));
+    app.use("/api", createApiRouter(configPath, undefined, { aiCommandRunner: runner, aiCliPlatform: "linux", aiCliSetupService }));
     const server = await listen(app);
     try {
       for (const entry of ["codexCli", "claudeCli"] as const) {
-        const readinessResponse = await postJson(`${server.url}/api/ai/entry-readiness`, { entry, repoId: "docs" });
+        const selection = cliSelection(entry);
+        const readinessResponse = await postJson(`${server.url}/api/ai/entry-readiness`, { entry, repoId: "docs", selection });
         expect(readinessResponse.status).toBe(200);
         const readiness = await readinessResponse.json() as {
           ready?: boolean;
@@ -874,7 +932,7 @@ describe("api", () => {
           expect.objectContaining({ label: "Current repo CLI execution", status: "ready" }),
         ]));
         const chatResponse = await postJson(`${server.url}/api/ai/chat`, {
-          target: { kind: entry, entry, status: readiness.status },
+          target: { kind: entry, entry, selection, status: readiness.status },
           messages: [{ role: "user", content: "Create a nested result file in the Current repo." }],
           context: { repoId: "docs", primaryPaths: entry === "codexCli" ? [{ path: "repositories.yaml", includeContent: true, source: "manual" }] : [] },
         });
@@ -894,18 +952,667 @@ describe("api", () => {
         });
         expect(chatCall?.cwd).toBe(await realpath(root));
         if (entry === "codexCli") {
-          expect(chatCall?.args).toEqual(expect.arrayContaining(["--strict-config", "--ignore-user-config", "-C", await realpath(root)]));
+          expect(chatCall?.args).toEqual(expect.arrayContaining(["--strict-config", "--ignore-user-config", "--model", "gpt-test", "model_reasoning_effort=\"ultra\"", "-C", await realpath(root)]));
           expect(chatCall?.args.some((argument) => /^default_permissions="reader_wiki_[a-f0-9]{32}"$/.test(argument))).toBe(true);
           expect(chatCall?.args).toContain('mcp_servers."project-tools"={enabled=false,command="reader-wiki-disabled-mcp",args=[]}');
           expect(chatCall?.args).not.toContain("--add-dir");
         } else {
-          expect(chatCall?.args).toEqual(expect.arrayContaining(["--setting-sources", "", "--tools", "Bash,Glob,Grep,Read,Edit,Write", "--permission-mode", "acceptEdits"]));
+          expect(chatCall?.args).toEqual(expect.arrayContaining(["--setting-sources", "", "--model", "claude-test", "--effort", "max", "--tools", "Bash,Glob,Grep,Read,Edit,Write", "--permission-mode", "acceptEdits"]));
           expect(chatCall?.args).not.toContain("--max-budget-usd");
         }
       }
       expect(calls).toHaveLength(11);
     } finally {
       await server.close();
+      await aiCliSetupService.shutdown();
+    }
+  });
+
+  it("uses the server-owned inspected executable lease for Codex readiness, MCP discovery, and the model process", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "reader-wiki-fixed-codex-"));
+    await writeFile(path.join(root, "README.md"), "# Fixed Codex\n");
+    const configPath = path.join(root, "repositories.yaml");
+    await writeFile(configPath, `repositories:\n  - id: docs\n    label: Docs\n    root: ${root}\n    defaultPath: README.md\n`);
+    const trustedBinary = "/trusted/node";
+    const trustedLauncher = "/trusted/codex.js";
+    const calls: Array<{ binary: string; args: string[]; input?: string }> = [];
+    const runner: AICommandRunner = async (binary, args, options) => {
+      calls.push({ binary, args: [...args], ...(options.input ? { input: options.input } : {}) });
+      expect(binary).toBe(trustedBinary);
+      expect(args[0]).toBe(trustedLauncher);
+      if (args.includes("--version")) return { stdout: "codex-cli 0.144.1\n", stderr: "" };
+      if (args.includes("login")) return { stdout: "Logged in using ChatGPT\n", stderr: "" };
+      if (args.includes("--help")) return { stdout: "--strict-config --disable --config --cd --ignore-user-config --skip-git-repo-check --ephemeral --json\n", stderr: "" };
+      if (args.includes("mcp")) return { stdout: "[]", stderr: "" };
+      if (options.input) return { stdout: '{"type":"item.completed","item":{"type":"agent_message","text":"Fixed executable used."}}\n', stderr: "" };
+      throw new Error("Unexpected Codex command.");
+    };
+    const aiCliSetupService = await createReadyAiCliSetupService({}, {
+      codexCli: { binary: trustedBinary, argvPrefix: [trustedLauncher], identityPath: trustedLauncher },
+    });
+    const app = express();
+    app.use("/api", createApiRouter(configPath, undefined, { aiCommandRunner: runner, aiCliSetupService }));
+    const server = await listen(app);
+    try {
+      const selection = cliSelection("codexCli");
+      const readinessResponse = await postJson(`${server.url}/api/ai/entry-readiness`, { entry: "codexCli", repoId: "docs", selection });
+      expect(readinessResponse.status).toBe(200);
+      const readiness = await readinessResponse.json() as { status: { state?: string; code?: string } };
+      const chatResponse = await postJson(`${server.url}/api/ai/chat`, {
+        target: { kind: "codexCli", entry: "codexCli", selection, status: readiness.status },
+        messages: [{ role: "user", content: "Use only the fixed executable." }],
+        context: { repoId: "docs", primaryPaths: [] },
+      });
+
+      expect(chatResponse.status).toBe(200);
+      await expect(chatResponse.json()).resolves.toMatchObject({ message: { content: "Fixed executable used." } });
+      expect(calls.some((call) => call.args.includes("mcp"))).toBe(true);
+      expect(calls.some((call) => Boolean(call.input))).toBe(true);
+      expect(calls.every((call) => call.binary === trustedBinary && call.args[0] === trustedLauncher)).toBe(true);
+      expect(calls.some((call) => call.binary === "codex")).toBe(false);
+    } finally {
+      await server.close();
+      await aiCliSetupService.shutdown();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("enforces config-save and CLI setup exclusion in both directions, including auth waiting", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "reader-wiki-config-setup-lock-"));
+    const configPath = path.join(root, "repositories.yaml");
+    await writeFile(configPath, `repositories:\n  - id: docs\n    label: Docs\n    root: ${root}\n`);
+    const provider = (entry: AICliEntryKind): AiCliSetupProvider => ({
+      entry,
+      inspect: async () => ({
+        installed: true,
+        cliVersion: "1.2.3",
+        managed: true,
+        compatibility: "compatible",
+        authenticated: false,
+        message: "login required",
+      }),
+      currentVersion: async () => "1.2.3",
+      currentExecution: async () => ({ version: "1.2.3", executable: { binary: entry === "codexCli" ? "codex" : "claude", argvPrefix: [], identityPath: `/mock/bin/${entry === "codexCli" ? "codex" : "claude"}` } }),
+      startAuthentication: async () => ({ state: "waiting", message: "waiting for browser authentication" }),
+      cancelAuthentication: async () => undefined,
+      update: async () => undefined,
+      shutdown: async () => undefined,
+    });
+    const aiCliSetupService = new AiCliSetupService({
+      providers: { codexCli: provider("codexCli"), claudeCli: provider("claudeCli") },
+    });
+    let releaseSave!: (value: RepositoryConfigState) => void;
+    let markSaveStarted!: () => void;
+    const saveStarted = new Promise<void>((resolve) => { markSaveStarted = resolve; });
+    const repositoryConfigSaver = vi.fn(() => new Promise<RepositoryConfigState>((resolve) => {
+      releaseSave = resolve;
+      markSaveStarted();
+    }));
+    const app = express();
+    app.use("/api", createApiRouter(configPath, undefined, { aiCliSetupService, repositoryConfigSaver }));
+    const server = await listen(app);
+    try {
+      const pendingSave = fetch(`${server.url}/api/repository-config/save`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ entries: [] }),
+      });
+      await saveStarted;
+      expect((await postJson(`${server.url}/api/ai/cli-setup/inspect`, { entry: "codexCli" })).status).toBe(409);
+      releaseSave({
+        configPath,
+        sourceMode: "default",
+        exists: true,
+        readable: true,
+        writable: true,
+        entries: [],
+        configRevision: "saved-r1",
+      });
+      expect((await pendingSave).status).toBe(200);
+
+      expect((await postJson(`${server.url}/api/ai/cli-setup/inspect`, { entry: "codexCli" })).status).toBe(200);
+      expect((await postJson(`${server.url}/api/ai/cli-setup/auth/start`, { entry: "codexCli" })).status).toBe(200);
+      expect(aiCliSetupService.isBusy()).toBe(true);
+      const blockedSave = await fetch(`${server.url}/api/repository-config/save`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ entries: [] }),
+      });
+      expect(blockedSave.status).toBe(409);
+      expect(repositoryConfigSaver).toHaveBeenCalledOnce();
+    } finally {
+      await server.close();
+      await aiCliSetupService.shutdown();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects readiness when the observed CLI version differs from the selected setup catalog", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "reader-wiki-cli-version-mismatch-"));
+    await writeFile(path.join(root, "README.md"), "# CLI version mismatch\n");
+    const configPath = path.join(root, "repositories.yaml");
+    await writeFile(configPath, `repositories:\n  - id: docs\n    label: Docs\n    root: ${root}\n    defaultPath: README.md\n`);
+    const runner: AICommandRunner = async (_binary, args) => {
+      if (args.includes("--version")) return { stdout: "codex-cli 0.145.0\n", stderr: "" };
+      if (args.includes("login")) return { stdout: "Logged in using ChatGPT\n", stderr: "" };
+      if (args.includes("--help")) return { stdout: "--strict-config --disable --config --cd --ignore-user-config --skip-git-repo-check --ephemeral --json\n", stderr: "" };
+      if (args.includes("mcp")) return { stdout: "[]", stderr: "" };
+      throw new Error("Unexpected CLI command");
+    };
+    const aiCliSetupService = await createReadyAiCliSetupService({ codexCli: "codex-cli 0.144.1" });
+    const app = express();
+    app.use("/api", createApiRouter(configPath, undefined, { aiCommandRunner: runner, aiCliSetupService }));
+    const server = await listen(app);
+    try {
+      const response = await postJson(`${server.url}/api/ai/entry-readiness`, {
+        entry: "codexCli",
+        repoId: "docs",
+        selection: cliSelection("codexCli"),
+      });
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toMatchObject({
+        error: expect.stringMatching(/CLI version or model catalog changed/u),
+        details: { code: "invalidSelection" },
+      });
+    } finally {
+      await server.close();
+      await aiCliSetupService.shutdown();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects CLI readiness without a catalog model selection before starting any CLI probe", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "reader-wiki-cli-readiness-selection-"));
+    await writeFile(path.join(root, "README.md"), "# CLI selection required\n");
+    const configPath = path.join(root, "repositories.yaml");
+    await writeFile(configPath, `repositories:\n  - id: docs\n    label: Docs\n    root: ${root}\n    defaultPath: README.md\n`);
+    const runner = vi.fn<AICommandRunner>();
+    const aiCliSetupService = await createReadyAiCliSetupService();
+    const app = express();
+    app.use("/api", createApiRouter(configPath, undefined, { aiCommandRunner: runner, aiCliSetupService }));
+    const server = await listen(app);
+    try {
+      const response = await postJson(`${server.url}/api/ai/entry-readiness`, {
+        entry: "codexCli",
+        repoId: "docs",
+      });
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toMatchObject({ error: expect.stringMatching(/Select a CLI model/u) });
+      expect(runner).not.toHaveBeenCalled();
+    } finally {
+      await server.close();
+      await aiCliSetupService.shutdown();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a cached readiness send when the CLI version changes before execution", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "reader-wiki-cached-cli-version-"));
+    await writeFile(path.join(root, "README.md"), "# Cached CLI version\n");
+    const configPath = path.join(root, "repositories.yaml");
+    await writeFile(configPath, `repositories:\n  - id: docs\n    label: Docs\n    root: ${root}\n    defaultPath: README.md\n`);
+    const calls: Array<{ args: string[]; input: string }> = [];
+    const runner: AICommandRunner = async (_binary, args, options) => {
+      calls.push({ args, input: options.input || "" });
+      if (args.includes("--version")) return { stdout: "codex-cli 0.144.1\n", stderr: "" };
+      if (args.includes("login")) return { stdout: "Logged in using ChatGPT\n", stderr: "" };
+      if (args.includes("--help")) return { stdout: "--strict-config --disable --config --cd --ignore-user-config --skip-git-repo-check --ephemeral --json\n", stderr: "" };
+      if (args.includes("mcp")) return { stdout: "[]", stderr: "" };
+      throw new Error("CLI execution must not start after the version changes");
+    };
+    const versions: Partial<Record<AICliEntryKind, string>> = { codexCli: "codex-cli 0.144.1" };
+    const aiCliSetupService = await createReadyAiCliSetupService(versions);
+    const selection = cliSelection("codexCli");
+    const app = express();
+    app.use("/api", createApiRouter(configPath, undefined, { aiCommandRunner: runner, aiCliSetupService }));
+    const server = await listen(app);
+    try {
+      const readinessResponse = await postJson(`${server.url}/api/ai/entry-readiness`, { entry: "codexCli", repoId: "docs", selection });
+      expect(readinessResponse.status).toBe(200);
+      const readiness = await readinessResponse.json() as { status: { state?: string; code?: string } };
+      versions.codexCli = "codex-cli 0.145.0";
+
+      const response = await postJson(`${server.url}/api/ai/chat`, {
+        target: { kind: "codexCli", entry: "codexCli", selection, status: readiness.status },
+        messages: [{ role: "user", content: "Do not run this stale selection." }],
+        context: { repoId: "docs", primaryPaths: [] },
+      });
+
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toMatchObject({ details: { code: "invalidSelection" } });
+      expect(calls.some((call) => call.input.length > 0)).toBe(false);
+      expect(aiCliSetupService.getSnapshots().codexCli).toMatchObject({ phase: "failed", failureReason: "cliVersionChanged" });
+    } finally {
+      await server.close();
+      await aiCliSetupService.shutdown();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not reuse a readiness lease after setup refresh returns the same catalog revision", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "reader-wiki-setup-generation-"));
+    await writeFile(path.join(root, "README.md"), "# Setup generation\n");
+    const configPath = path.join(root, "repositories.yaml");
+    await writeFile(configPath, `repositories:\n  - id: docs\n    label: Docs\n    root: ${root}\n    defaultPath: README.md\n`);
+    let versionProbes = 0;
+    const runner: AICommandRunner = async (_binary, args, options) => {
+      if (args.includes("--version")) {
+        versionProbes += 1;
+        return { stdout: "codex-cli 0.144.1\n", stderr: "" };
+      }
+      if (args.includes("login")) return { stdout: "Logged in using ChatGPT\n", stderr: "" };
+      if (args.includes("--help")) return { stdout: "--strict-config --disable --config --cd --ignore-user-config --skip-git-repo-check --ephemeral --json\n", stderr: "" };
+      if (args.includes("mcp")) return { stdout: "[]", stderr: "" };
+      if (options.input) throw new Error("The stale selection must be rejected before the model process starts.");
+      throw new Error("Unexpected CLI command");
+    };
+    const aiCliSetupService = await createReadyAiCliSetupService();
+    const selection = cliSelection("codexCli");
+    const app = express();
+    app.use("/api", createApiRouter(configPath, undefined, { aiCommandRunner: runner, aiCliSetupService }));
+    const server = await listen(app);
+    try {
+      const readinessResponse = await postJson(`${server.url}/api/ai/entry-readiness`, { entry: "codexCli", repoId: "docs", selection });
+      expect(readinessResponse.status).toBe(200);
+      const readiness = await readinessResponse.json() as { status: { state?: string; code?: string } };
+      expect(versionProbes).toBe(1);
+      const beforeGeneration = aiCliSetupService.getSetupGeneration("codexCli");
+
+      const refreshed = await aiCliSetupService.inspect("codexCli");
+      expect(refreshed.catalog?.revision).toBe(selection.catalogRevision);
+      expect(aiCliSetupService.getSetupGeneration("codexCli")).toBeGreaterThan(beforeGeneration);
+      const response = await postJson(`${server.url}/api/ai/chat`, {
+        target: { kind: "codexCli", entry: "codexCli", selection, status: readiness.status },
+        messages: [{ role: "user", content: "Reject the stale setup generation." }],
+        context: { repoId: "docs", primaryPaths: [] },
+      });
+
+      expect(response.status).toBe(400);
+      expect(versionProbes).toBe(1);
+      await expect(response.json()).resolves.toMatchObject({ details: { code: "invalidSelection" } });
+    } finally {
+      await server.close();
+      await aiCliSetupService.shutdown();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("invalidates setup generation and readiness when CLI authentication expires during a chat", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "reader-wiki-auth-expired-"));
+    await writeFile(path.join(root, "README.md"), "# Expired auth\n");
+    const configPath = path.join(root, "repositories.yaml");
+    await writeFile(configPath, `repositories:\n  - id: docs\n    label: Docs\n    root: ${root}\n    defaultPath: README.md\n`);
+    let modelRuns = 0;
+    const runner: AICommandRunner = async (_binary, args, options) => {
+      if (args.includes("--version")) return { stdout: "codex-cli 0.144.1\n", stderr: "" };
+      if (args.includes("login")) return { stdout: "Logged in using ChatGPT\n", stderr: "" };
+      if (args.includes("--help")) return { stdout: "--strict-config --disable --config --cd --ignore-user-config --skip-git-repo-check --ephemeral --json\n", stderr: "" };
+      if (args.includes("mcp")) return { stdout: "[]", stderr: "" };
+      if (options.input) {
+        modelRuns += 1;
+        throw new HttpError(502, "Not logged in. Sign in again.");
+      }
+      throw new Error("Unexpected CLI command.");
+    };
+    const aiCliSetupService = await createReadyAiCliSetupService();
+    const selection = cliSelection("codexCli");
+    const app = express();
+    app.use("/api", createApiRouter(configPath, undefined, { aiCommandRunner: runner, aiCliSetupService }));
+    const server = await listen(app);
+    try {
+      const readinessResponse = await postJson(`${server.url}/api/ai/entry-readiness`, { entry: "codexCli", repoId: "docs", selection });
+      const readiness = await readinessResponse.json() as { status: { state?: string; code?: string } };
+      const response = await postJson(`${server.url}/api/ai/chat`, {
+        target: { kind: "codexCli", entry: "codexCli", selection, status: readiness.status },
+        messages: [{ role: "user", content: "Observe the expired authentication." }],
+        context: { repoId: "docs", primaryPaths: [] },
+      });
+
+      expect(response.status).toBe(502);
+      await expect(response.json()).resolves.toMatchObject({ details: { code: "authenticationInvalidated" } });
+      expect(modelRuns).toBe(1);
+      expect(aiCliSetupService.getSnapshots().codexCli).toMatchObject({
+        phase: "loginRequired",
+        failureReason: "authenticationChanged",
+        catalog: undefined,
+      });
+      expect(aiCliSetupService.getSetupGeneration("codexCli")).toBeGreaterThan(selection.setupGeneration);
+
+      const retry = await postJson(`${server.url}/api/ai/chat`, {
+        target: { kind: "codexCli", entry: "codexCli", selection, status: readiness.status },
+        messages: [{ role: "user", content: "Do not retry with the stale selection." }],
+        context: { repoId: "docs", primaryPaths: [] },
+      });
+      expect(retry.status).toBe(400);
+      await expect(retry.json()).resolves.toMatchObject({ details: { code: "invalidSelection" } });
+      expect(modelRuns).toBe(1);
+    } finally {
+      await server.close();
+      await aiCliSetupService.shutdown();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("revalidates the CLI version after Codex MCP discovery and before the model process", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "reader-wiki-post-mcp-version-"));
+    await writeFile(path.join(root, "README.md"), "# Post MCP version\n");
+    const configPath = path.join(root, "repositories.yaml");
+    await writeFile(configPath, `repositories:\n  - id: docs\n    label: Docs\n    root: ${root}\n    defaultPath: README.md\n`);
+    const versions: Partial<Record<AICliEntryKind, string>> = { codexCli: "codex-cli 0.144.1" };
+    let changeVersionOnMcp = false;
+    let modelRuns = 0;
+    const runner: AICommandRunner = async (_binary, args, options) => {
+      if (args.includes("--version")) return { stdout: "codex-cli 0.144.1\n", stderr: "" };
+      if (args.includes("login")) return { stdout: "Logged in using ChatGPT\n", stderr: "" };
+      if (args.includes("--help")) return { stdout: "--strict-config --disable --config --cd --ignore-user-config --skip-git-repo-check --ephemeral --json\n", stderr: "" };
+      if (args.includes("mcp")) {
+        if (changeVersionOnMcp) versions.codexCli = "codex-cli 0.145.0";
+        return { stdout: "[]", stderr: "" };
+      }
+      if (options.input) modelRuns += 1;
+      return { stdout: "must not run", stderr: "" };
+    };
+    const aiCliSetupService = await createReadyAiCliSetupService(versions);
+    const selection = cliSelection("codexCli");
+    const app = express();
+    app.use("/api", createApiRouter(configPath, undefined, { aiCommandRunner: runner, aiCliSetupService }));
+    const server = await listen(app);
+    try {
+      const readinessResponse = await postJson(`${server.url}/api/ai/entry-readiness`, { entry: "codexCli", repoId: "docs", selection });
+      expect(readinessResponse.status).toBe(200);
+      const readiness = await readinessResponse.json() as { status: { state?: string; code?: string } };
+      changeVersionOnMcp = true;
+
+      const response = await postJson(`${server.url}/api/ai/chat/stream`, {
+        target: { kind: "codexCli", entry: "codexCli", selection, status: readiness.status },
+        messages: [{ role: "user", content: "Do not start after MCP discovery changes the CLI." }],
+        context: { repoId: "docs", primaryPaths: [] },
+      });
+
+      expect(response.status).toBe(200);
+      const events = await readJsonLines(response) as Array<{ type?: string; details?: { code?: string } }>;
+      expect(events.map((event) => event.type)).toEqual(["meta", "error"]);
+      expect(events[1]).toMatchObject({ type: "error", details: { code: "invalidSelection" } });
+      expect(modelRuns).toBe(0);
+      expect(aiCliSetupService.getSnapshots().codexCli).toMatchObject({ phase: "failed", failureReason: "cliVersionChanged" });
+    } finally {
+      await server.close();
+      await aiCliSetupService.shutdown();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("latches an unverified process tree reported by CLI readiness", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "reader-wiki-fatal-readiness-"));
+    await writeFile(path.join(root, "README.md"), "# Fatal readiness\n");
+    const configPath = path.join(root, "repositories.yaml");
+    await writeFile(configPath, `repositories:\n  - id: docs\n    label: Docs\n    root: ${root}\n    defaultPath: README.md\n`);
+    const failure = new HttpError(502, "CLI process cleanup is unverified.", { processTreeUnverified: true });
+    const runner: AICommandRunner = async () => { throw failure; };
+    const aiCliSetupService = await createReadyAiCliSetupService();
+    const app = express();
+    app.use("/api", createApiRouter(configPath, undefined, { aiCommandRunner: runner, aiCliSetupService }));
+    const server = await listen(app);
+    try {
+      const response = await postJson(`${server.url}/api/ai/entry-readiness`, {
+        entry: "codexCli",
+        repoId: "docs",
+        selection: cliSelection("codexCli"),
+      });
+
+      expect(response.status).toBe(502);
+      await expect(response.json()).resolves.toMatchObject({ details: { processTreeUnverified: true } });
+      expect(aiCliSetupService.getSnapshots().codexCli).toMatchObject({ phase: "unavailable", failureReason: "processTreeUnverified" });
+      expect(aiCliSetupService.isBusy()).toBe(true);
+      await expect(aiCliSetupService.inspect("claudeCli")).rejects.toBe(failure);
+    } finally {
+      await server.close();
+      await aiCliSetupService.shutdown().catch(() => undefined);
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("aborts another standalone CLI readiness request when process ownership becomes unverified", async () => {
+    const firstRoot = await mkdtemp(path.join(tmpdir(), "reader-wiki-readiness-fatal-first-"));
+    const secondRoot = await mkdtemp(path.join(tmpdir(), "reader-wiki-readiness-fatal-second-"));
+    await writeFile(path.join(firstRoot, "README.md"), "# First readiness\n");
+    await writeFile(path.join(secondRoot, "README.md"), "# Second readiness\n");
+    const configPath = path.join(firstRoot, "repositories.yaml");
+    await writeFile(configPath, [
+      "repositories:",
+      "  - id: first",
+      "    label: First",
+      `    root: ${firstRoot}`,
+      "    defaultPath: README.md",
+      "  - id: second",
+      "    label: Second",
+      `    root: ${secondRoot}`,
+      "    defaultPath: README.md",
+      "",
+    ].join("\n"));
+    const failure = new HttpError(502, "CLI process cleanup is unverified.", { processTreeUnverified: true });
+    let mode: "blocking" | "fatal" = "blocking";
+    let markBlockingStarted!: () => void;
+    const blockingStarted = new Promise<void>((resolve) => { markBlockingStarted = resolve; });
+    let blockedRequestAborted = false;
+    let runnerCalls = 0;
+    const runner: AICommandRunner = async (_binary, _args, options) => {
+      runnerCalls += 1;
+      if (mode === "fatal") throw failure;
+      markBlockingStarted();
+      return new Promise((_resolve, reject) => {
+        const abort = () => {
+          blockedRequestAborted = true;
+          reject(new HttpError(499, "CLI readiness request was canceled."));
+        };
+        if (options.signal?.aborted) abort();
+        else options.signal?.addEventListener("abort", abort, { once: true });
+      });
+    };
+    const aiCliSetupService = await createReadyAiCliSetupService();
+    const selection = cliSelection("codexCli");
+    const app = express();
+    app.use("/api", createApiRouter(configPath, undefined, { aiCommandRunner: runner, aiCliSetupService }));
+    const server = await listen(app);
+    try {
+      const blockedReadiness = postJson(`${server.url}/api/ai/entry-readiness`, { entry: "codexCli", repoId: "second", selection });
+      await blockingStarted;
+      mode = "fatal";
+      const fatalReadiness = await postJson(`${server.url}/api/ai/entry-readiness`, { entry: "codexCli", repoId: "first", selection });
+
+      expect(fatalReadiness.status).toBe(502);
+      await expect(fatalReadiness.json()).resolves.toMatchObject({ details: { processTreeUnverified: true } });
+      const abortedReadiness = await blockedReadiness;
+      expect(abortedReadiness.status).toBe(499);
+      expect(blockedRequestAborted).toBe(true);
+      expect(runnerCalls).toBe(2);
+      expect(aiCliSetupService.getSnapshots()).toMatchObject({
+        codexCli: { phase: "unavailable", failureReason: "processTreeUnverified" },
+        claudeCli: { phase: "unavailable", failureReason: "processTreeUnverified" },
+      });
+    } finally {
+      await server.close();
+      await aiCliSetupService.shutdown().catch(() => undefined);
+      await Promise.all([
+        rm(firstRoot, { recursive: true, force: true }),
+        rm(secondRoot, { recursive: true, force: true }),
+      ]);
+    }
+  });
+
+  it("latches an unverified CLI chat process tree across repositories and shutdown", async () => {
+    const firstRoot = await mkdtemp(path.join(tmpdir(), "reader-wiki-fatal-cli-first-"));
+    const secondRoot = await mkdtemp(path.join(tmpdir(), "reader-wiki-fatal-cli-second-"));
+    await writeFile(path.join(firstRoot, "README.md"), "# First\n");
+    await writeFile(path.join(secondRoot, "README.md"), "# Second\n");
+    await initGitRepo(firstRoot);
+    await initGitRepo(secondRoot);
+    const configPath = path.join(firstRoot, "repositories.yaml");
+    await writeFile(configPath, [
+      "repositories:",
+      "  - id: first",
+      "    label: First",
+      `    root: ${firstRoot}`,
+      "    defaultPath: README.md",
+      "  - id: second",
+      "    label: Second",
+      `    root: ${secondRoot}`,
+      "    defaultPath: README.md",
+      "",
+    ].join("\n"));
+    const cliRuns: string[] = [];
+    const failure = new HttpError(502, "CLI process cleanup is unverified.", { processTreeUnverified: true });
+    const runner: AICommandRunner = async (_binary, args, options) => {
+      if (args.includes("--version")) return { stdout: "codex-cli 0.144.1\n", stderr: "" };
+      if (args.includes("login")) return { stdout: "Logged in using ChatGPT\n", stderr: "" };
+      if (args.includes("--help")) return { stdout: "--strict-config --disable --config --cd --ignore-user-config --skip-git-repo-check --ephemeral --json\n", stderr: "" };
+      if (args.includes("mcp")) return { stdout: "[]", stderr: "" };
+      if (options.input) {
+        cliRuns.push(options.cwd);
+        throw failure;
+      }
+      throw new Error("Unexpected CLI command");
+    };
+    const aiCliSetupService = await createReadyAiCliSetupService();
+    const selection = cliSelection("codexCli");
+    const app = express();
+    app.use("/api", createApiRouter(configPath, undefined, { aiCommandRunner: runner, aiCliSetupService }));
+    const server = await listen(app);
+    try {
+      const statuses: Record<string, unknown> = {};
+      for (const repoId of ["first", "second"]) {
+        const readinessResponse = await postJson(`${server.url}/api/ai/entry-readiness`, { entry: "codexCli", repoId, selection });
+        expect(readinessResponse.status).toBe(200);
+        statuses[repoId] = (await readinessResponse.json() as { status: unknown }).status;
+      }
+
+      const firstChat = await postJson(`${server.url}/api/ai/chat`, {
+        target: { kind: "codexCli", entry: "codexCli", selection, status: statuses.first },
+        messages: [{ role: "user", content: "Trigger the mocked cleanup failure." }],
+        context: { repoId: "first", primaryPaths: [] },
+      });
+      expect(firstChat.status).toBe(502);
+      await expect(firstChat.json()).resolves.toMatchObject({ details: { processTreeUnverified: true } });
+      expect(aiCliSetupService.getSnapshots().codexCli).toMatchObject({ phase: "unavailable", failureReason: "processTreeUnverified" });
+      expect(aiCliSetupService.isBusy()).toBe(true);
+
+      const secondChat = await postJson(`${server.url}/api/ai/chat`, {
+        target: { kind: "codexCli", entry: "codexCli", selection, status: statuses.second },
+        messages: [{ role: "user", content: "This must not start another CLI." }],
+        context: { repoId: "second", primaryPaths: [] },
+      });
+      expect(secondChat.status).toBe(502);
+      await expect(secondChat.json()).resolves.toMatchObject({ details: { processTreeUnverified: true } });
+      expect(cliRuns).toEqual([await realpath(firstRoot)]);
+      await expect(aiCliSetupService.shutdown()).rejects.toMatchObject({ details: { processTreeUnverified: true } });
+    } finally {
+      await server.close();
+      await aiCliSetupService.shutdown().catch(() => undefined);
+      await Promise.all([
+        rm(firstRoot, { recursive: true, force: true }),
+        rm(secondRoot, { recursive: true, force: true }),
+      ]);
+    }
+  });
+
+  it("aborts another admitted CLI chat across repositories when process ownership becomes unverified", async () => {
+    const firstRoot = await mkdtemp(path.join(tmpdir(), "reader-wiki-fatal-cli-race-first-"));
+    const secondRoot = await mkdtemp(path.join(tmpdir(), "reader-wiki-fatal-cli-race-second-"));
+    await writeFile(path.join(firstRoot, "README.md"), "# First race\n");
+    await writeFile(path.join(secondRoot, "README.md"), "# Second race\n");
+    await initGitRepo(firstRoot);
+    await initGitRepo(secondRoot);
+    const configPath = path.join(firstRoot, "repositories.yaml");
+    await writeFile(configPath, [
+      "repositories:",
+      "  - id: first",
+      "    label: First",
+      `    root: ${firstRoot}`,
+      "    defaultPath: README.md",
+      "  - id: second",
+      "    label: Second",
+      `    root: ${secondRoot}`,
+      "    defaultPath: README.md",
+      "",
+    ].join("\n"));
+    const firstRealRoot = await realpath(firstRoot);
+    const secondRealRoot = await realpath(secondRoot);
+    const failure = new HttpError(502, "CLI process cleanup is unverified.", { processTreeUnverified: true });
+    const cliRuns: string[] = [];
+    let markSecondStarted: (() => void) | undefined;
+    const secondStarted = new Promise<void>((resolve) => { markSecondStarted = resolve; });
+    let secondWasAborted = false;
+    const runner: AICommandRunner = async (_binary, args, options) => {
+      if (args.includes("--version")) return { stdout: "codex-cli 0.144.1\n", stderr: "" };
+      if (args.includes("login")) return { stdout: "Logged in using ChatGPT\n", stderr: "" };
+      if (args.includes("--help")) return { stdout: "--strict-config --disable --config --cd --ignore-user-config --skip-git-repo-check --ephemeral --json\n", stderr: "" };
+      if (args.includes("mcp")) return { stdout: "[]", stderr: "" };
+      if (options.input) {
+        cliRuns.push(options.cwd);
+        if (options.cwd === firstRealRoot) throw failure;
+        if (options.cwd === secondRealRoot) {
+          markSecondStarted?.();
+          return new Promise((_resolve, reject) => {
+            const abort = () => {
+              secondWasAborted = true;
+              reject(new HttpError(499, "CLI request was canceled."));
+            };
+            if (options.signal?.aborted) abort();
+            else options.signal?.addEventListener("abort", abort, { once: true });
+          });
+        }
+      }
+      throw new Error("Unexpected CLI command");
+    };
+    const aiCliSetupService = await createReadyAiCliSetupService();
+    const selection = cliSelection("codexCli");
+    const app = express();
+    app.use("/api", createApiRouter(configPath, undefined, { aiCommandRunner: runner, aiCliSetupService }));
+    const server = await listen(app);
+    try {
+      const statuses: Record<string, unknown> = {};
+      for (const repoId of ["first", "second"]) {
+        const readinessResponse = await postJson(`${server.url}/api/ai/entry-readiness`, { entry: "codexCli", repoId, selection });
+        expect(readinessResponse.status).toBe(200);
+        statuses[repoId] = (await readinessResponse.json() as { status: unknown }).status;
+      }
+
+      const secondChatPromise = postJson(`${server.url}/api/ai/chat`, {
+        target: { kind: "codexCli", entry: "codexCli", selection, status: statuses.second },
+        messages: [{ role: "user", content: "Wait until another repo loses process ownership." }],
+        context: { repoId: "second", primaryPaths: [] },
+      });
+      await secondStarted;
+
+      const firstChat = await postJson(`${server.url}/api/ai/chat`, {
+        target: { kind: "codexCli", entry: "codexCli", selection, status: statuses.first },
+        messages: [{ role: "user", content: "Trigger the mocked cleanup failure." }],
+        context: { repoId: "first", primaryPaths: [] },
+      });
+      expect(firstChat.status).toBe(502);
+      await expect(firstChat.json()).resolves.toMatchObject({ details: { processTreeUnverified: true } });
+
+      const secondChat = await secondChatPromise;
+      expect(secondChat.status).toBe(499);
+      expect(secondWasAborted).toBe(true);
+      expect(cliRuns).toEqual([secondRealRoot, firstRealRoot]);
+
+      const blockedChat = await postJson(`${server.url}/api/ai/chat`, {
+        target: { kind: "codexCli", entry: "codexCli", selection, status: statuses.second },
+        messages: [{ role: "user", content: "This must not start a new CLI process." }],
+        context: { repoId: "second", primaryPaths: [] },
+      });
+      expect(blockedChat.status).toBe(502);
+      await expect(blockedChat.json()).resolves.toMatchObject({ details: { processTreeUnverified: true } });
+      expect(cliRuns).toEqual([secondRealRoot, firstRealRoot]);
+      expect(aiCliSetupService.getSnapshots().codexCli).toMatchObject({ phase: "unavailable", failureReason: "processTreeUnverified" });
+    } finally {
+      await server.close();
+      await aiCliSetupService.shutdown().catch(() => undefined);
+      await Promise.all([
+        rm(firstRoot, { recursive: true, force: true }),
+        rm(secondRoot, { recursive: true, force: true }),
+      ]);
     }
   });
 
@@ -922,15 +1629,17 @@ describe("api", () => {
       if (options.input) throw new Error("RAW_STDOUT_SENTINEL RAW_STDERR_SENTINEL CLI exited with code 17");
       throw new Error("Unexpected CLI command");
     };
+    const aiCliSetupService = await createReadyAiCliSetupService();
+    const selection = cliSelection("codexCli");
     const app = express();
-    app.use("/api", createApiRouter(configPath, undefined, { aiCommandRunner: runner }));
+    app.use("/api", createApiRouter(configPath, undefined, { aiCommandRunner: runner, aiCliSetupService }));
     const server = await listen(app);
     try {
-      const readinessResponse = await postJson(`${server.url}/api/ai/entry-readiness`, { entry: "codexCli", repoId: "docs" });
+      const readinessResponse = await postJson(`${server.url}/api/ai/entry-readiness`, { entry: "codexCli", repoId: "docs", selection });
       const readiness = await readinessResponse.json() as { status: { state?: string; code?: string } };
       expect(readiness).toMatchObject({ status: { state: "ready", code: "success" } });
       const streamResponse = await postJson(`${server.url}/api/ai/chat/stream`, {
-        target: { kind: "codexCli", entry: "codexCli", status: readiness.status },
+        target: { kind: "codexCli", entry: "codexCli", selection, status: readiness.status },
         messages: [{ role: "user", content: "Complete the request." }],
         context: { repoId: "docs", primaryPaths: [] },
       });
@@ -946,11 +1655,12 @@ describe("api", () => {
       expect(JSON.stringify(events)).not.toContain("code 17");
     } finally {
       await server.close();
+      await aiCliSetupService.shutdown();
       await rm(root, { recursive: true, force: true });
     }
   });
 
-  it("reuses Claude authentication readiness across repo switches and follow-up edits", async () => {
+  it("renews Claude readiness for a new repository and reuses it only for same-repo follow-up edits", async () => {
     const firstRoot = await mkdtemp(path.join(tmpdir(), "reader-wiki-claude-lease-first-"));
     const secondRoot = await mkdtemp(path.join(tmpdir(), "reader-wiki-claude-lease-second-"));
     await writeFile(path.join(firstRoot, "README.md"), "# First repo\n");
@@ -984,30 +1694,33 @@ describe("api", () => {
       await writeFile(path.join(options.cwd, "claude", "result.md"), `# Run ${chatRuns}\n`);
       return { stdout: JSON.stringify({ is_error: false, result: `Claude completed run ${chatRuns}.` }), stderr: "" };
     };
+    const aiCliSetupService = await createReadyAiCliSetupService({ claudeCli: "2.1.206 (Claude Code)" });
+    const selection = cliSelection("claudeCli");
     const app = express();
-    app.use("/api", createApiRouter(configPath, undefined, { aiCommandRunner: runner, aiCliPlatform: "linux" }));
+    app.use("/api", createApiRouter(configPath, undefined, { aiCommandRunner: runner, aiCliPlatform: "linux", aiCliSetupService }));
     const server = await listen(app);
     try {
-      const readinessResponse = await postJson(`${server.url}/api/ai/entry-readiness`, { entry: "claudeCli", repoId: "first" });
+      const readinessResponse = await postJson(`${server.url}/api/ai/entry-readiness`, { entry: "claudeCli", repoId: "first", selection });
       expect(readinessResponse.status).toBe(200);
       const readiness = await readinessResponse.json() as { ready?: boolean; status: { state?: string; code?: string } };
       expect(readiness).toMatchObject({ ready: true, status: { state: "ready", code: "success" } });
       const request = {
-        target: { kind: "claudeCli", entry: "claudeCli", status: readiness.status },
+        target: { kind: "claudeCli", entry: "claudeCli", selection, status: readiness.status },
         messages: [{ role: "user", content: "Update the result in the newly selected Current repo." }],
         context: { repoId: "second", primaryPaths: [] },
       };
       expect((await postJson(`${server.url}/api/ai/chat`, request)).status).toBe(200);
       expect((await postJson(`${server.url}/api/ai/chat`, request)).status).toBe(200);
       expect(chatRuns).toBe(2);
-      expect(calls.filter((call) => call.args.includes("auth"))).toHaveLength(1);
-      expect(calls.filter((call) => call.args[call.args.indexOf("--tools") + 1] === "")).toHaveLength(1);
+      expect(calls.filter((call) => call.args.includes("auth"))).toHaveLength(2);
+      expect(calls.filter((call) => call.args[call.args.indexOf("--tools") + 1] === "")).toHaveLength(2);
       const editingCalls = calls.filter((call) => call.args.includes("Bash,Glob,Grep,Read,Edit,Write"));
       expect(editingCalls).toHaveLength(2);
       const secondCanonicalRoot = await realpath(secondRoot);
       expect(editingCalls.every((call) => call.cwd === secondCanonicalRoot)).toBe(true);
     } finally {
       await server.close();
+      await aiCliSetupService.shutdown();
       await rm(firstRoot, { recursive: true, force: true });
       await rm(secondRoot, { recursive: true, force: true });
     }
@@ -1196,12 +1909,14 @@ describe("api", () => {
       if (args.includes("--help")) return { stdout: "codex exec help\n", stderr: "" };
       throw new Error("readiness execution failed");
     };
+    const aiCliSetupService = await createReadyAiCliSetupService({ codexCli: "codex-cli 0.142.5" });
+    const selection = cliSelection("codexCli");
     const app = express();
-    app.use("/api", createApiRouter(configPath, undefined, { aiCommandRunner: runner }));
+    app.use("/api", createApiRouter(configPath, undefined, { aiCommandRunner: runner, aiCliSetupService }));
     const server = await listen(app);
     try {
       const response = await postJson(`${server.url}/api/ai/chat`, {
-        target: { kind: "codexCli", entry: "codexCli", status: { state: "ready", code: "success", severity: "success", message: "stale ready", checkedAt: "2026-07-05T00:00:00.000Z" } },
+        target: { kind: "codexCli", entry: "codexCli", selection, status: { state: "ready", code: "success", severity: "success", message: "stale ready", checkedAt: "2026-07-05T00:00:00.000Z" } },
         messages: [{ role: "user", content: "Summarize." }],
         context: { repoId: "docs", path: "README.md", includeContent: true },
       });
@@ -1213,6 +1928,7 @@ describe("api", () => {
       expect(calls.every((call) => call.input === "")).toBe(true);
     } finally {
       await server.close();
+      await aiCliSetupService.shutdown();
     }
   });
 

@@ -6,18 +6,113 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { claudeCurrentRepoSandboxSupported, claudeCurrentRepoSettings, codexCurrentRepoArgs, requestRepoWriteAIChatCompletion, resolveAICommandLaunch, runAICommand, safeCliEnv, sanitizeCliText } from "../server/aiCliAdapters.js";
 import { probeAIEntryReadiness } from "../server/aiEntries.js";
+import { HttpError } from "../server/errors.js";
+
+const fixedCliLaunch = (entry: "codexCli" | "claudeCli") => async () => ({
+  binary: entry === "codexCli" ? "codex" : "claude",
+  args: [] as string[],
+});
 
 describe("AI CLI process boundary", () => {
+  it("does not invoke the CLI runner when the final pre-spawn gate rejects", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "reader-wiki-cli-spawn-gate-"));
+    await writeFile(path.join(root, "README.md"), "# Spawn gate\n");
+    let runnerCalls = 0;
+    try {
+      await expect(requestRepoWriteAIChatCompletion({
+        target: { kind: "codexCli", entry: "codexCli", selection: { model: "gpt-current", effort: "high", catalogRevision: "catalog-r1", setupGeneration: 1 }, status: { state: "ready", code: "success", message: "ready", checkedAt: new Date().toISOString() } },
+        messages: [{ role: "user", content: "This request must not reach the CLI." }],
+        context: { repoId: "docs", revision: "revision", primaryItems: [], ruleItems: [], systemPromptVersion: "test" },
+        repo: { id: "docs", label: "Docs", root, defaultPath: "README.md", excludes: [] },
+        beforeCliSpawn: async () => {
+          await Promise.resolve();
+          throw new HttpError(409, "CLI process ownership is unavailable.");
+        },
+        runner: async () => {
+          runnerCalls += 1;
+          return { stdout: "must not run", stderr: "" };
+        },
+      })).rejects.toMatchObject({ status: 409 });
+      expect(runnerCalls).toBe(0);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rechecks the Codex gate after MCP discovery and before the main model process", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "reader-wiki-cli-second-spawn-gate-"));
+    await writeFile(path.join(root, "README.md"), "# Second spawn gate\n");
+    let gateCalls = 0;
+    let modelRuns = 0;
+    try {
+      await expect(requestRepoWriteAIChatCompletion({
+        target: { kind: "codexCli", entry: "codexCli", selection: { model: "gpt-current", effort: "high", catalogRevision: "catalog-r1", setupGeneration: 1 }, status: { state: "ready", code: "success", message: "ready", checkedAt: new Date().toISOString() } },
+        messages: [{ role: "user", content: "This request must stop after MCP discovery." }],
+        context: { repoId: "docs", revision: "revision", primaryItems: [], ruleItems: [], systemPromptVersion: "test" },
+        repo: { id: "docs", label: "Docs", root, defaultPath: "README.md", excludes: [] },
+        beforeCliSpawn: async () => {
+          gateCalls += 1;
+          if (gateCalls === 2) throw new HttpError(400, "The selected catalog changed during MCP discovery.");
+          return { binary: "codex", args: [] };
+        },
+        runner: async (_binary, args, options) => {
+          if (args.includes("mcp")) return { stdout: "[]", stderr: "" };
+          if (options.input) modelRuns += 1;
+          return { stdout: "must not run", stderr: "" };
+        },
+      })).rejects.toMatchObject({ status: 400 });
+      expect(gateCalls).toBe(2);
+      expect(modelRuns).toBe(0);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("skips the postflight audit and reports an unverified run immediately when CLI process ownership is lost", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "reader-wiki-unverified-tree-"));
+    await writeFile(path.join(root, "README.md"), "# Unverified process tree\n");
+    try {
+      const request = requestRepoWriteAIChatCompletion({
+        target: { kind: "codexCli", entry: "codexCli", selection: { model: "gpt-current", effort: "high", catalogRevision: "catalog-r1", setupGeneration: 1 }, status: { state: "ready", code: "success", message: "ready", checkedAt: new Date().toISOString() } },
+        messages: [{ role: "user", content: "Trigger a mocked process ownership failure." }],
+        context: { repoId: "docs", revision: "revision", primaryItems: [], ruleItems: [], systemPromptVersion: "test" },
+        repo: { id: "docs", label: "Docs", root, defaultPath: "README.md", excludes: [] },
+        beforeCliSpawn: fixedCliLaunch("codexCli"),
+        runner: async (_binary, args, options) => {
+          if (args.includes("mcp")) return { stdout: "[]", stderr: "" };
+          await writeFile(path.join(options.cwd, "possibly-changed.md"), "# Review me\n");
+          throw new HttpError(502, "process tree remained alive", { processTreeUnverified: true });
+        },
+      });
+
+      const error = await request.then(
+        () => { throw new Error("Expected the mocked process-tree failure."); },
+        (reason: unknown) => reason as HttpError,
+      );
+      expect(error).toMatchObject({
+        status: 502,
+        details: {
+          processTreeUnverified: true,
+          run: { auditState: "unverified", changedPaths: [] },
+        },
+      });
+      expect(JSON.stringify(error.details)).toContain("audit was skipped");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("runs Codex native tools in the Current repo without Local Reader App edit-count limits", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "reader-wiki-codex-direct-"));
     await writeFile(path.join(root, "README.md"), "# Direct Codex\n");
     const calls: Array<{ args: string[]; cwd: string; input: string }> = [];
     try {
       const result = await requestRepoWriteAIChatCompletion({
-        target: { kind: "codexCli", entry: "codexCli", status: { state: "ready", code: "success", message: "ready", checkedAt: new Date().toISOString() } },
+        target: { kind: "codexCli", entry: "codexCli", selection: { model: "gpt-current", effort: "ultra", catalogRevision: "catalog-r1", setupGeneration: 1 }, status: { state: "ready", code: "success", message: "ready", checkedAt: new Date().toISOString() } },
         messages: [{ role: "user", content: "Create the requested directory tree and files." }],
         context: { repoId: "docs", revision: "revision", primaryItems: [], ruleItems: [], systemPromptVersion: "test" },
         repo: { id: "docs", label: "Docs", root, defaultPath: "README.md", excludes: [] },
+        beforeCliSpawn: fixedCliLaunch("codexCli"),
         runner: async (binary, args, options) => {
           expect(binary).toBe("codex");
           calls.push({ args, cwd: options.cwd, input: options.input || "" });
@@ -46,6 +141,9 @@ describe("AI CLI process boundary", () => {
         "--strict-config",
         "--ignore-user-config",
         "approval_policy=\"never\"",
+        "--model",
+        "gpt-current",
+        "model_reasoning_effort=\"ultra\"",
         "--ephemeral",
         "--skip-git-repo-check",
         "--json",
@@ -77,10 +175,11 @@ describe("AI CLI process boundary", () => {
     const calls: Array<{ args: string[]; cwd: string; env: NodeJS.ProcessEnv }> = [];
     try {
       const result = await requestRepoWriteAIChatCompletion({
-        target: { kind: "claudeCli", entry: "claudeCli", status: { state: "ready", code: "success", message: "ready", checkedAt: new Date().toISOString() } },
+        target: { kind: "claudeCli", entry: "claudeCli", selection: { model: "claude-current", effort: "max", catalogRevision: "catalog-r1", setupGeneration: 1 }, status: { state: "ready", code: "success", message: "ready", checkedAt: new Date().toISOString() } },
         messages: [{ role: "user", content: "Create a nested file." }],
         context: { repoId: "docs", revision: "revision", primaryItems: [], ruleItems: [], systemPromptVersion: "test" },
         repo: { id: "docs", label: "Docs", root, defaultPath: "README.md", excludes: [] },
+        beforeCliSpawn: fixedCliLaunch("claudeCli"),
         runner: async (binary, args, options) => {
           expect(binary).toBe("claude");
           calls.push({ args, cwd: options.cwd, env: options.env });
@@ -101,6 +200,10 @@ describe("AI CLI process boundary", () => {
         "",
         "--settings",
         claudeCurrentRepoSettings(),
+        "--model",
+        "claude-current",
+        "--effort",
+        "max",
         "--tools",
         "Bash,Glob,Grep,Read,Edit,Write",
         "--permission-mode",
@@ -121,10 +224,11 @@ describe("AI CLI process boundary", () => {
     await writeFile(path.join(root, "README.md"), "# Codex natural error\n");
     try {
       const request = requestRepoWriteAIChatCompletion({
-        target: { kind: "codexCli", entry: "codexCli", status: { state: "ready", code: "success", message: "ready", checkedAt: new Date().toISOString() } },
+        target: { kind: "codexCli", entry: "codexCli", selection: { model: "gpt-current", effort: "high", catalogRevision: "catalog-r1", setupGeneration: 1 }, status: { state: "ready", code: "success", message: "ready", checkedAt: new Date().toISOString() } },
         messages: [{ role: "user", content: "Complete the request." }],
         context: { repoId: "docs", revision: "revision", primaryItems: [], ruleItems: [], systemPromptVersion: "test" },
         repo: { id: "docs", label: "Docs", root, defaultPath: "README.md", excludes: [] },
+        beforeCliSpawn: fixedCliLaunch("codexCli"),
         runner: async (_binary, args) => args.includes("mcp")
           ? { stdout: "[]", stderr: "" }
           : { stdout: "RAW_STDOUT_SENTINEL\n{\"type\":\"thread.completed\"}\n", stderr: "RAW_STDERR_SENTINEL" },
@@ -143,10 +247,11 @@ describe("AI CLI process boundary", () => {
     await writeFile(path.join(root, "README.md"), "# Claude natural error\n");
     try {
       const request = requestRepoWriteAIChatCompletion({
-        target: { kind: "claudeCli", entry: "claudeCli", status: { state: "ready", code: "success", message: "ready", checkedAt: new Date().toISOString() } },
+        target: { kind: "claudeCli", entry: "claudeCli", selection: { model: "claude-current", effort: "default", catalogRevision: "catalog-r1", setupGeneration: 1 }, status: { state: "ready", code: "success", message: "ready", checkedAt: new Date().toISOString() } },
         messages: [{ role: "user", content: "Complete the request." }],
         context: { repoId: "docs", revision: "revision", primaryItems: [], ruleItems: [], systemPromptVersion: "test" },
         repo: { id: "docs", label: "Docs", root, defaultPath: "README.md", excludes: [] },
+        beforeCliSpawn: fixedCliLaunch("claudeCli"),
         runner: async () => ({ stdout: JSON.stringify({ is_error: true, result: "RAW_PROVIDER_SENTINEL Invalid API key" }), stderr: "RAW_STDERR_SENTINEL" }),
       });
       const error = await request.then(() => null, (reason: unknown) => reason as Error);
@@ -189,26 +294,42 @@ describe("AI CLI process boundary", () => {
         repo: { id: "docs", label: "Docs", root, defaultPath: "README.md", excludes: [] },
         runner: async (_binary, args) => {
           calls.push(args);
-          if (args.includes("--version")) return { stdout: "2.1.206 (Claude Code)\n", stderr: "" };
-          if (args.includes("auth")) return { stdout: '{"loggedIn":true}\n', stderr: "" };
-          if (args.includes("--help")) {
-            return { stdout: "--print --output-format --tools --permission-mode --safe-mode --no-chrome --disable-slash-commands --strict-mcp-config --mcp-config --setting-sources --settings --no-session-persistence\n", stderr: "" };
-          }
-          throw new Error("A model probe must not run on an unsupported native Windows boundary.");
+          throw new Error("No CLI probe may run on an unsupported native Windows boundary.");
         },
       });
       expect(readiness).toMatchObject({
         ready: false,
         status: { code: "wrapper_not_ready" },
-        settings: { authState: "configured", executionMode: "unknown" },
+        settings: { authState: "notConfigured", executionMode: "unknown" },
       });
       expect(readiness.checks).toEqual(expect.arrayContaining([
         expect.objectContaining({ id: "wrapper", status: "error", message: expect.stringContaining("Native Windows") }),
       ]));
-      expect(calls.some((args) => args.includes("--tools"))).toBe(false);
+      expect(calls).toEqual([]);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
+  });
+
+  it("does not start a Codex readiness probe on native Windows", async () => {
+    let runnerCalls = 0;
+    const readiness = await probeAIEntryReadiness("codexCli", {
+      platform: "win32",
+      runner: async () => {
+        runnerCalls += 1;
+        throw new Error("No Codex process may start on native Windows.");
+      },
+    });
+    expect(readiness).toMatchObject({
+      ready: false,
+      status: { code: "wrapper_not_ready" },
+      settings: { authState: "notConfigured", executionMode: "unknown" },
+    });
+    expect(readiness.checks).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "binary", status: "error", message: expect.stringContaining("Native Windows") }),
+      expect.objectContaining({ id: "execution-policy", status: "ready", message: "No CLI process was started." }),
+    ]));
+    expect(runnerCalls).toBe(0);
   });
 
   it("does not report Claude ready when a configured credential fails the no-tool model probe", async () => {
@@ -280,6 +401,36 @@ describe("AI CLI process boundary", () => {
     expect(error?.message).not.toContain("7");
   });
 
+  it("marks a missing CLI subcommand without exposing its raw output", async () => {
+    const result = runAICommand(process.execPath, [
+      "-e",
+      "process.stderr.write(\"error: unrecognized subcommand 'app-server'\\nRAW_CAPABILITY_SENTINEL\"); process.exit(2)",
+    ], {
+      cwd: process.cwd(),
+      env: process.env,
+      timeoutMs: 5_000,
+      maxBuffer: 1024,
+    });
+    const error = await result.then(() => null, (reason: unknown) => reason as HttpError);
+    expect(error).toMatchObject({ status: 502, details: { cliFailureKind: "missingCapability" } });
+    expect(error?.message).not.toContain("RAW_CAPABILITY_SENTINEL");
+  });
+
+  it("marks a missing CLI option without exposing its raw output", async () => {
+    const result = runAICommand(process.execPath, [
+      "-e",
+      "process.stderr.write(\"error: unknown option '--json'\\nRAW_OPTION_SENTINEL\"); process.exit(2)",
+    ], {
+      cwd: process.cwd(),
+      env: process.env,
+      timeoutMs: 5_000,
+      maxBuffer: 1024,
+    });
+    const error = await result.then(() => null, (reason: unknown) => reason as HttpError);
+    expect(error).toMatchObject({ status: 502, details: { cliFailureKind: "missingCapability" } });
+    expect(error?.message).not.toContain("RAW_OPTION_SENTINEL");
+  });
+
   it("does not resolve an aborted run until its descendant process is gone", { timeout: 15_000 }, async () => {
     const root = await mkdtemp(path.join(tmpdir(), "reader-wiki-process-tree-"));
     const pidFile = path.join(root, "grandchild.pid");
@@ -312,6 +463,41 @@ describe("AI CLI process boundary", () => {
     await waitFor(() => !processExists(grandchildPid));
     expect(processExists(grandchildPid)).toBe(false);
   });
+
+  it.skipIf(process.platform === "win32")(
+    "reaps a descendant left behind by a command that exits successfully",
+    { timeout: 15_000 },
+    async () => {
+      const root = await mkdtemp(path.join(tmpdir(), "reader-wiki-success-process-tree-"));
+      const pidFile = path.join(root, "descendant.pid");
+      const descendantScript = [
+        "process.on('SIGTERM', () => {});",
+        "process.stdout.write('ready');",
+        "setInterval(() => {}, 1000);",
+      ].join("\n");
+      const script = [
+        "const { spawn } = require('node:child_process');",
+        "const { writeFileSync } = require('node:fs');",
+        `const child = spawn(process.execPath, ['-e', ${JSON.stringify(descendantScript)}], { stdio: ['ignore', 'pipe', 'ignore'] });`,
+        "child.stdout.once('data', () => {",
+        `  writeFileSync(${JSON.stringify(pidFile)}, String(child.pid));`,
+        "  process.stdout.write('done');",
+        "  process.exit(0);",
+        "});",
+      ].join("\n");
+
+      const result = await runAICommand(process.execPath, ["-e", script], {
+        cwd: root,
+        env: process.env,
+        timeoutMs: 10_000,
+        maxBuffer: 1024,
+      });
+      const descendantPid = Number(await readFile(pidFile, "utf8"));
+
+      expect(result.stdout).toBe("done");
+      expect(processExists(descendantPid)).toBe(false);
+    },
+  );
 
   it("preserves the minimum Windows command environment without forwarding provider secrets", () => {
     const previous = {

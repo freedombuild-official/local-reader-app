@@ -1,10 +1,15 @@
 import type {
   AIChatRequest,
+  AIChatFailureDetails,
   AIChatResponse,
   AIChatStreamEvent,
+  AICliEntryKind,
+  AICliModelSelection,
+  AICliSetupSnapshot,
   AIConnectionStatus,
   AIEntryKind,
   AIProviderSettings,
+  AIChatRunSummary,
   CliAIEntryReadiness,
   FileResponse,
   HttpDeliveryStatus,
@@ -17,12 +22,17 @@ import type {
   TreeNode,
 } from "./types";
 
+export type AICliSetupCollection = {
+  setups: Record<AICliEntryKind, AICliSetupSnapshot>;
+};
+
 export class AIChatRequestError extends Error {
   constructor(
     message: string,
     readonly status: number,
     readonly code = "",
     readonly entry?: AIEntryKind,
+    readonly details?: AIChatFailureDetails,
   ) {
     super(message);
     this.name = "AIChatRequestError";
@@ -108,11 +118,49 @@ export async function testAIProviderConnection(provider: AIProviderSettings): Pr
   });
 }
 
-export async function fetchAIEntryReadiness(entry: AIEntryKind, provider?: AIProviderSettings, repoId = "", expectedRevision = ""): Promise<CliAIEntryReadiness> {
+export async function fetchAIEntryReadiness(
+  entry: AIEntryKind,
+  provider?: AIProviderSettings,
+  repoId = "",
+  expectedRevision = "",
+  selection?: AICliModelSelection,
+): Promise<CliAIEntryReadiness> {
   return requestJson<CliAIEntryReadiness>("/api/ai/entry-readiness", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ entry, provider, repoId, expectedRevision }),
+    body: JSON.stringify({ entry, provider, repoId, expectedRevision, selection }),
+  });
+}
+
+export async function fetchAICliSetups(): Promise<AICliSetupCollection> {
+  return requestJson<AICliSetupCollection>("/api/ai/cli-setup");
+}
+
+export async function inspectAICliSetup(entry: AICliEntryKind): Promise<AICliSetupSnapshot> {
+  return mutateAICliSetup("/api/ai/cli-setup/inspect", { entry });
+}
+
+export async function startAICliAuthentication(entry: AICliEntryKind): Promise<AICliSetupSnapshot> {
+  return mutateAICliSetup("/api/ai/cli-setup/auth/start", { entry });
+}
+
+export async function cancelAICliAuthentication(entry: AICliEntryKind): Promise<AICliSetupSnapshot> {
+  return mutateAICliSetup("/api/ai/cli-setup/auth/cancel", { entry });
+}
+
+export async function prepareAICliUpdate(entry: AICliEntryKind): Promise<AICliSetupSnapshot> {
+  return mutateAICliSetup("/api/ai/cli-setup/update/prepare", { entry });
+}
+
+export async function confirmAICliUpdate(entry: AICliEntryKind, nonce: string): Promise<AICliSetupSnapshot> {
+  return mutateAICliSetup("/api/ai/cli-setup/update/confirm", { entry, nonce });
+}
+
+async function mutateAICliSetup(url: string, body: { entry: AICliEntryKind; nonce?: string }): Promise<AICliSetupSnapshot> {
+  return requestJson<AICliSetupSnapshot>(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
   });
 }
 
@@ -142,10 +190,15 @@ export async function streamAIChatMessage(request: AIChatRequest, onEvent: (even
     cache: "no-store",
   });
   if (!response.ok) {
-    const data = (await response.json().catch(() => ({}))) as { error?: string; details?: { code?: unknown; entry?: unknown } };
-    const code = typeof data.details?.code === "string" ? data.details.code : "";
-    const entry = isAIEntryKind(data.details?.entry) ? data.details.entry : undefined;
-    throw new AIChatRequestError(data.error || `HTTP ${response.status}`, response.status, code, entry);
+    const data = (await response.json().catch(() => ({}))) as { error?: string; details?: unknown };
+    const details = readAIChatRequestErrorDetails(data.details);
+    throw new AIChatRequestError(data.error || `HTTP ${response.status}`, response.status, details.code, details.entry, {
+      ...(details.code ? { code: details.code } : {}),
+      ...(details.entry ? { entry: details.entry } : {}),
+      ...(details.rollbackState ? { rollbackState: details.rollbackState } : {}),
+      ...(details.run ? { run: details.run } : {}),
+      ...(details.processTreeUnverified ? { processTreeUnverified: true } : {}),
+    });
   }
   if (!response.body) throw new Error("AI Chat stream is not available in this browser.");
 
@@ -168,6 +221,63 @@ export async function streamAIChatMessage(request: AIChatRequest, onEvent: (even
 
 function isAIEntryKind(value: unknown): value is AIEntryKind {
   return value === "aiApi" || value === "localAi" || value === "codexCli" || value === "claudeCli";
+}
+
+function readAIChatRequestErrorDetails(value: unknown): {
+  code: string;
+  entry?: AIEntryKind;
+  rollbackState: string;
+  run?: AIChatRunSummary;
+  processTreeUnverified: boolean;
+} {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return { code: "", rollbackState: "", processTreeUnverified: false };
+  }
+  const source = value as Record<string, unknown>;
+  const run = readAIChatRunSummary(source.run);
+  return {
+    code: boundedFailureString(source.code, 128),
+    ...(isAIEntryKind(source.entry) ? { entry: source.entry } : {}),
+    rollbackState: boundedFailureString(source.rollbackState, 128),
+    ...(run ? { run } : {}),
+    processTreeUnverified: source.processTreeUnverified === true,
+  };
+}
+
+function readAIChatRunSummary(value: unknown): AIChatRunSummary | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const source = value as Partial<AIChatRunSummary>;
+  if (
+    (source.accessMode !== "readOnly" && source.accessMode !== "repoWrite")
+    || !isAIEntryKind(source.entry)
+    || !["directProvider", "serverEditProtocol", "codexCli", "claudeCli"].includes(String(source.substrate))
+    || (source.auditState !== "verified" && source.auditState !== "unverified")
+  ) return undefined;
+  const changedPaths = Array.isArray(source.changedPaths)
+    ? source.changedPaths.slice(0, 100).flatMap((item) => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) return [];
+      const candidate = item as { path?: unknown; status?: unknown };
+      const itemPath = boundedFailureString(candidate.path, 1_024);
+      if (!itemPath || !["new", "changed", "deleted"].includes(String(candidate.status))) return [];
+      return [{ path: itemPath, status: candidate.status as "new" | "changed" | "deleted" }];
+    })
+    : [];
+  const strings = (items: unknown, limit: number) => Array.isArray(items)
+    ? items.slice(0, limit).map((item) => boundedFailureString(item, 1_024)).filter(Boolean)
+    : [];
+  return {
+    accessMode: source.accessMode,
+    entry: source.entry,
+    substrate: source.substrate as AIChatRunSummary["substrate"],
+    auditState: source.auditState,
+    changedPaths,
+    repairs: strings(source.repairs, 20),
+    warnings: strings(source.warnings, 20),
+  };
+}
+
+function boundedFailureString(value: unknown, maxLength: number): string {
+  return typeof value === "string" ? value.slice(0, maxLength) : "";
 }
 
 export function imageFileUrl(repoId: string, path: string, revision: string, assetVersion = ""): string {

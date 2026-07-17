@@ -4,8 +4,9 @@ import path from "node:path";
 import { json as expressJson, type NextFunction, type Request, type Response, Router } from "express";
 import { HttpError, isHttpError } from "./errors.js";
 import { buildAIChatContextForRepository } from "./aiContext.js";
-import { requestRepoWriteAIChatCompletion, resolveAIWorkspace, type AICommandRunner } from "./aiCliAdapters.js";
+import { requestRepoWriteAIChatCompletion, resolveAIWorkspace, runAICommand, type AICommandLaunch, type AICommandRunner } from "./aiCliAdapters.js";
 import { probeAIEntryReadiness } from "./aiEntries.js";
+import { AiCliSetupError, type AiCliSetupService } from "./aiCliSetup.js";
 import { aiChatSystemPromptPath } from "./aiPromptPolicy.js";
 import { assertGuardedRepoContextPaths, buildGuardedRepoPathPolicy, requestGuardedRepoWriteAIChatCompletion, sanitizeGuardedAIChatContext, type GuardedProviderRequester } from "./guardedRepoEdits.js";
 import { providerReadiness, requestAIChatCompletion, requestAIChatCompletionStream, testAIConnection } from "./aiProviders.js";
@@ -14,7 +15,7 @@ import { createRepositoryRegistry, type RepositoryRegistry } from "./repositoryR
 import { loadRepositoryConfigState, previewRepositoryConfig, saveRepositoryConfigDraft, validateRepositoryConfigDraft } from "./repositoryConfig.js";
 import { assertRepositoryRevision, repositoryRevision } from "./repositoryRevision.js";
 import { readGitStatusEntries, readRepoFile, readTree, readTreeSnapshot, resolveRepoImage, resolveRepoPdf, syncRepository } from "./repoFiles.js";
-import type { AIChatExecutionTarget, AIChatRequest, AIChatRunSummary, AIEntryKind, AIProviderSettings, RepositoryConfig, RepositoryConfigDraft } from "./types.js";
+import type { AICliEntryKind, AICliModelSelection, AIChatExecutionTarget, AIChatRequest, AIChatRunSummary, AIEntryKind, AIProviderSettings, RepositoryConfig, RepositoryConfigDraft } from "./types.js";
 
 const READINESS_ATTESTATION_TTL_MS = 5 * 60_000;
 const READINESS_ATTESTATION_MAX_ENTRIES = 128;
@@ -29,6 +30,9 @@ type ApiRouterOptions = {
   readinessAttestationTtlMs?: number;
   readinessAttestationMaxEntries?: number;
   readinessAttestationNow?: () => number;
+  aiCliSetupService?: AiCliSetupService;
+  shutdownSignal?: AbortSignal;
+  repositoryConfigSaver?: typeof saveRepositoryConfigDraft;
 };
 
 export function createApiRouter(registryOrConfigPath: RepositoryRegistry | string, httpDelivery?: HttpDeliveryService, options: ApiRouterOptions = {}): Router {
@@ -38,16 +42,28 @@ export function createApiRouter(registryOrConfigPath: RepositoryRegistry | strin
   const readinessAttestationTtlMs = positiveInteger(options.readinessAttestationTtlMs, READINESS_ATTESTATION_TTL_MS);
   const readinessAttestationMaxEntries = positiveInteger(options.readinessAttestationMaxEntries, READINESS_ATTESTATION_MAX_ENTRIES);
   const readinessAttestationNow = options.readinessAttestationNow || Date.now;
+  const aiCliSetupService = options.aiCliSetupService;
+  const repositoryConfigSaver = options.repositoryConfigSaver ?? saveRepositoryConfigDraft;
   const readinessAttestations = new Map<string, number>();
   const activeAIRuns = new Map<string, { abort: () => void }>();
   const activeAIRepos = new Set<string>();
+  const activeCliAbortScopes = new Set<() => void>();
   let activeAIRequests = 0;
   let configSaveActive = false;
 
-  function storeReadinessAttestation(entry: AIEntryKind, repoId: string, revision: string, provider: AIProviderSettings | undefined): void {
+  function storeReadinessAttestation(
+    entry: AIEntryKind,
+    repoId: string,
+    revision: string,
+    provider: AIProviderSettings | undefined,
+    selection?: AICliModelSelection,
+  ): void {
     const now = readinessAttestationNow();
     cleanupExpiredReadinessAttestations(now);
-    const key = readinessAttestationKey(entry, repoId, revision, provider);
+    const cliSetupGeneration = selection && (entry === "codexCli" || entry === "claudeCli")
+      ? requireAiCliSetupService().getSetupGeneration(entry)
+      : undefined;
+    const key = readinessAttestationKey(entry, repoId, revision, provider, selection, cliSetupGeneration);
     readinessAttestations.delete(key);
     readinessAttestations.set(key, now + readinessAttestationTtlMs);
     while (readinessAttestations.size > readinessAttestationMaxEntries) {
@@ -61,7 +77,10 @@ export function createApiRouter(registryOrConfigPath: RepositoryRegistry | strin
     const provider = "provider" in target ? target.provider : undefined;
     const now = readinessAttestationNow();
     cleanupExpiredReadinessAttestations(now);
-    const key = readinessAttestationKey(targetEntry(target), repoId, revision, provider);
+    const cliSetupGeneration = isCliTarget(target)
+      ? requireAiCliSetupService().getSetupGeneration(target.entry)
+      : undefined;
+    const key = readinessAttestationKey(targetEntry(target), repoId, revision, provider, isCliTarget(target) ? target.selection : undefined, cliSetupGeneration);
     if (!readinessAttestations.has(key)) return false;
     readinessAttestations.delete(key);
     readinessAttestations.set(key, now + readinessAttestationTtlMs);
@@ -75,6 +94,10 @@ export function createApiRouter(registryOrConfigPath: RepositoryRegistry | strin
   }
 
   async function ensureReadinessAttestation(target: AIChatExecutionTarget, repo: RepositoryConfig, revision: string, signal: AbortSignal): Promise<void> {
+    const capturedCliCatalog = isCliTarget(target) ? captureCliCatalog(target.entry, target.selection) : undefined;
+    const cliExecution = isCliTarget(target)
+      ? await requireAiCliSetupService().assertCurrentExecution(target.entry, target.selection, signal)
+      : undefined;
     if (refreshReadinessAttestation(target, repo.id, revision)) {
       if (isCliTarget(target)) await assertCliWorkspaceWritable(repo);
       return;
@@ -85,7 +108,9 @@ export function createApiRouter(registryOrConfigPath: RepositoryRegistry | strin
       provider,
       repo,
       platform: options.aiCliPlatform,
-      runner: options.aiCommandRunner,
+      runner: cliExecution && isCliTarget(target)
+        ? bindCliExecutionRunner(target.entry, cliExecution.executable)
+        : options.aiCommandRunner,
       providerRequester: options.aiProviderRequester,
       signal,
     });
@@ -96,18 +121,21 @@ export function createApiRouter(registryOrConfigPath: RepositoryRegistry | strin
         entry,
       });
     }
+    if (capturedCliCatalog && isCliTarget(target)) {
+      assertCliCatalogMatchesReadiness(capturedCliCatalog, target.selection, readiness);
+    }
     const currentRepo = await registry.findRepository(repo.id);
     await assertRepositoryRevision(currentRepo, revision);
-    storeReadinessAttestation(entry, repo.id, revision, provider);
+    storeReadinessAttestation(entry, repo.id, revision, provider, isCliTarget(target) ? target.selection : undefined);
   }
 
-  async function withRepoAILock<T>(repoId: string, work: () => Promise<T>): Promise<T> {
+  async function withRepoAILock<T>(repoId: string, target: AIChatExecutionTarget, work: () => Promise<T>, abortCliRequest?: () => void): Promise<T> {
     if (configSaveActive) throw new HttpError(409, "Repository config is being saved. Retry after Settings finishes.");
     if (activeAIRepos.has(repoId)) throw new HttpError(409, "Another AI Chat run is still active for this repository.");
     activeAIRepos.add(repoId);
     let keepRepoLocked = false;
     try {
-      return await withAIRequestSlot(work);
+      return await withAIRequestSlot(work, isCliTarget(target) ? target.entry : undefined, abortCliRequest);
     } catch (error) {
       keepRepoLocked = hasUnverifiedProcessTree(error);
       throw error;
@@ -116,13 +144,108 @@ export function createApiRouter(registryOrConfigPath: RepositoryRegistry | strin
     }
   }
 
-  async function withAIRequestSlot<T>(work: () => Promise<T>): Promise<T> {
+  async function withAIRequestSlot<T>(work: () => Promise<T>, cliEntry?: AICliEntryKind, abortCliRequest?: () => void): Promise<T> {
+    if (configSaveActive) throw new HttpError(409, "Repository config is being saved. Retry after Settings finishes.");
+    if (cliEntry) requireAiCliSetupService().assertNoUnverifiedProcessTree();
+    if (aiCliSetupService?.isBusy()) throw new HttpError(409, "CLI authentication, inspection, catalog loading, or update is still active.");
     if (activeAIRequests >= AI_GLOBAL_CONCURRENCY_LIMIT) throw new HttpError(429, "Local Reader App AI concurrency limit is active. Try again after another request finishes.");
     activeAIRequests += 1;
+    if (cliEntry && abortCliRequest) activeCliAbortScopes.add(abortCliRequest);
+    const unsubscribeFatal = cliEntry && abortCliRequest
+      ? requireAiCliSetupService().onUnverifiedProcessTree(abortCliRequest)
+      : () => undefined;
     try {
       return await work();
+    } catch (error) {
+      if (cliEntry && errorDetailCode(error) === "authenticationInvalidated") {
+        requireAiCliSetupService().reportAuthenticationInvalidated(cliEntry, "CLI authentication expired during AI Chat. Sign in again before continuing.");
+      }
+      if (cliEntry && hasUnverifiedProcessTree(error)) {
+        requireAiCliSetupService().reportUnverifiedProcessTree(cliEntry, error);
+        for (const abort of activeCliAbortScopes) abort();
+      }
+      throw error;
     } finally {
+      unsubscribeFatal();
+      if (cliEntry && abortCliRequest) activeCliAbortScopes.delete(abortCliRequest);
       activeAIRequests -= 1;
+    }
+  }
+
+  async function assertCliSpawnAllowed(target: AIChatExecutionTarget, signal: AbortSignal): Promise<AICommandLaunch> {
+    if (!isCliTarget(target)) throw new HttpError(500, "A non-CLI target cannot receive a CLI executable lease.");
+    if ((options.aiCliPlatform ?? process.platform) === "win32") {
+      throw new HttpError(503, "Native Windows CLI execution is unavailable until Local Reader App can own and verify the complete CLI process tree.");
+    }
+    const service = requireAiCliSetupService();
+    try {
+      service.assertNoUnverifiedProcessTree();
+      if (signal.aborted) throw new HttpError(499, "AI Chat request was canceled.");
+      service.validateSelection(target.entry, target.selection);
+      const execution = await service.assertCurrentExecution(target.entry, target.selection, signal);
+      service.validateSelection(target.entry, target.selection);
+      service.assertNoUnverifiedProcessTree();
+      if (signal.aborted) throw new HttpError(499, "AI Chat request was canceled.");
+      return { binary: execution.executable.binary, args: [...execution.executable.argvPrefix] };
+    } catch (error) {
+      if (error instanceof AiCliSetupError) throw aiCliSetupHttpError(error);
+      throw error;
+    }
+  }
+
+  function requireAiCliSetupService(): AiCliSetupService {
+    if (!aiCliSetupService) throw new HttpError(503, "CLI authentication and model setup is not available in this server instance.");
+    return aiCliSetupService;
+  }
+
+  function bindCliExecutionRunner(
+    entry: AICliEntryKind,
+    executable: { binary: string; argvPrefix: string[] },
+  ): AICommandRunner {
+    const expectedBinary = entry === "codexCli" ? "codex" : "claude";
+    const runner = options.aiCommandRunner ?? runAICommand;
+    return (binary, args, commandOptions) => {
+      if (binary !== expectedBinary) {
+        throw new HttpError(500, "CLI readiness attempted to use an unexpected executable.");
+      }
+      return runner(executable.binary, [...executable.argvPrefix, ...args], commandOptions);
+    };
+  }
+
+  function captureCliCatalog(entry: "codexCli" | "claudeCli", selection: AICliModelSelection): { entry: "codexCli" | "claudeCli"; cliVersion: string; revision: string; setupGeneration: number } {
+    const service = requireAiCliSetupService();
+    service.validateSelection(entry, selection);
+    const catalog = service.getSnapshots()[entry].catalog;
+    if (!catalog || catalog.revision !== selection.catalogRevision) {
+      throw new AiCliSetupError("invalidSelection", "The selected CLI model catalog changed. Inspect and select again.");
+    }
+    return { entry, cliVersion: catalog.cliVersion, revision: catalog.revision, setupGeneration: service.getSetupGeneration(entry) };
+  }
+
+  function assertCliCatalogMatchesReadiness(
+    captured: { entry: "codexCli" | "claudeCli"; cliVersion: string; revision: string; setupGeneration: number },
+    selection: AICliModelSelection,
+    readiness: { settings?: unknown },
+  ): void {
+    const settings = readiness.settings && typeof readiness.settings === "object" ? readiness.settings as { version?: unknown } : undefined;
+    const current = requireAiCliSetupService().getSnapshots()[captured.entry].catalog;
+    if (
+      typeof settings?.version !== "string"
+      || settings.version !== captured.cliVersion
+      || !current
+      || current.cliVersion !== captured.cliVersion
+      || current.revision !== captured.revision
+      || current.revision !== selection.catalogRevision
+      || requireAiCliSetupService().getSetupGeneration(captured.entry) !== captured.setupGeneration
+    ) {
+      throw new AiCliSetupError("invalidSelection", "The CLI version or model catalog changed during readiness. Inspect the CLI and select again.");
+    }
+  }
+
+  function assertCliSetupActionAllowed(): void {
+    if (configSaveActive) throw new HttpError(409, "Repository config is being saved. Retry after Settings finishes.");
+    if (activeAIRequests > 0 || activeAIRepos.size > 0 || activeAIRuns.size > 0) {
+      throw new HttpError(409, "Finish the active AI Chat request before changing CLI authentication or installation state.");
     }
   }
 
@@ -201,14 +324,14 @@ export function createApiRouter(registryOrConfigPath: RepositoryRegistry | strin
   });
 
   router.post("/repository-config/save", async (request, response, next) => {
-    if (configSaveActive || activeAIRepos.size > 0) {
-      next(new HttpError(409, "Repository config cannot be changed while an AI Chat run is active."));
+    if (configSaveActive || activeAIRequests > 0 || activeAIRepos.size > 0 || activeAIRuns.size > 0 || aiCliSetupService?.isBusy()) {
+      next(new HttpError(409, "Repository config cannot be changed while AI or CLI setup activity is active."));
       return;
     }
     configSaveActive = true;
     try {
       setNoStore(response);
-      const state = await saveRepositoryConfigDraft(request.body as RepositoryConfigDraft, configPath);
+      const state = await repositoryConfigSaver(request.body as RepositoryConfigDraft, configPath);
       httpDelivery?.stopAll();
       response.json(state);
     } catch (error) {
@@ -234,7 +357,7 @@ export function createApiRouter(registryOrConfigPath: RepositoryRegistry | strin
   });
 
   router.post("/ai/test-connection", async (request, response, next) => {
-    const abortScope = requestAbortScope(request, response);
+    const abortScope = requestAbortScope(request, response, options.shutdownSignal);
     try {
       setNoStore(response);
       response.json(await withAIRequestSlot(() => testAIConnection(request.body as AIProviderSettings, abortScope.signal)));
@@ -245,28 +368,105 @@ export function createApiRouter(registryOrConfigPath: RepositoryRegistry | strin
     }
   });
 
+  router.get("/ai/cli-setup", (_request, response, next) => {
+    try {
+      setNoStore(response);
+      response.json({ setups: requireAiCliSetupService().getSnapshots() });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post("/ai/cli-setup/inspect", async (request, response, next) => {
+    try {
+      assertCliSetupActionAllowed();
+      setNoStore(response);
+      response.json(await requireAiCliSetupService().inspect(normalizeCliSetupEntry(request.body?.entry)));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post("/ai/cli-setup/auth/start", async (request, response, next) => {
+    try {
+      assertCliSetupActionAllowed();
+      setNoStore(response);
+      response.json(await requireAiCliSetupService().startAuthentication(normalizeCliSetupEntry(request.body?.entry)));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post("/ai/cli-setup/auth/cancel", async (request, response, next) => {
+    try {
+      assertCliSetupActionAllowed();
+      setNoStore(response);
+      response.json(await requireAiCliSetupService().cancelAuthentication(normalizeCliSetupEntry(request.body?.entry)));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post("/ai/cli-setup/update/prepare", (request, response, next) => {
+    try {
+      assertCliSetupActionAllowed();
+      setNoStore(response);
+      response.json(requireAiCliSetupService().prepareUpdate(normalizeCliSetupEntry(request.body?.entry)));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post("/ai/cli-setup/update/confirm", async (request, response, next) => {
+    try {
+      assertCliSetupActionAllowed();
+      setNoStore(response);
+      const nonce = boundedCliSelectionValue(request.body?.nonce, "update confirmation", 512);
+      response.json(await requireAiCliSetupService().confirmUpdate(normalizeCliSetupEntry(request.body?.entry), nonce));
+    } catch (error) {
+      next(error);
+    }
+  });
+
   router.post("/ai/entry-readiness", async (request, response, next) => {
-    const abortScope = requestAbortScope(request, response);
+    const abortScope = requestAbortScope(request, response, options.shutdownSignal);
     try {
       setNoStore(response);
       const entry = normalizeAIEntryKind(request.body?.entry);
       const repoId = String(request.body?.repoId || "");
       const repo = repoId ? await registry.findRepository(repoId) : undefined;
       const provider = request.body?.provider as AIProviderSettings | undefined;
+      const selection = entry === "codexCli" || entry === "claudeCli"
+        ? normalizeCliModelSelection(request.body?.selection)
+        : undefined;
       const revision = repo ? await assertRepositoryRevision(repo, request.body?.expectedRevision) : "no-repository";
-      const readiness = await withAIRequestSlot(() => probeAIEntryReadiness(entry, {
+      const readiness = await withAIRequestSlot(async () => {
+        const capturedCliCatalog = selection && (entry === "codexCli" || entry === "claudeCli")
+          ? captureCliCatalog(entry, selection)
+          : undefined;
+        const cliExecution = selection && (entry === "codexCli" || entry === "claudeCli")
+          ? await requireAiCliSetupService().assertCurrentExecution(entry, selection, abortScope.signal)
+          : undefined;
+        const result = await probeAIEntryReadiness(entry, {
           provider,
           repo,
           platform: options.aiCliPlatform,
-          runner: options.aiCommandRunner,
+          runner: cliExecution && (entry === "codexCli" || entry === "claudeCli")
+            ? bindCliExecutionRunner(entry, cliExecution.executable)
+            : options.aiCommandRunner,
           providerRequester: options.aiProviderRequester,
           signal: abortScope.signal,
-        }));
+        });
+        if (capturedCliCatalog && selection) assertCliCatalogMatchesReadiness(capturedCliCatalog, selection, result);
+        return result;
+      }, entry === "codexCli" || entry === "claudeCli" ? entry : undefined, abortScope.abort);
       if (repo) {
         const currentRepo = await registry.findRepository(repoId);
         await assertRepositoryRevision(currentRepo, revision);
       }
-      if (readiness.ready) storeReadinessAttestation(entry, repoId, revision, provider);
+      if (readiness.ready && (!(entry === "codexCli" || entry === "claudeCli") || selection)) {
+        storeReadinessAttestation(entry, repoId, revision, provider, selection);
+      }
       response.json({ ...readiness, revision });
     } catch (error) {
       next(error);
@@ -276,14 +476,14 @@ export function createApiRouter(registryOrConfigPath: RepositoryRegistry | strin
   });
 
   router.post("/ai/chat", async (request, response, next) => {
-    const abortScope = requestAbortScope(request, response);
+    const abortScope = requestAbortScope(request, response, options.shutdownSignal);
     try {
       const body = request.body as AIChatRequest;
       setNoStore(response);
       const target = resolveAIChatTarget(body);
       assertAIChatTargetReady(target);
       const repoId = String(body.context?.repoId || "");
-      const execution = await withRepoAILock(repoId, async () => {
+      const execution = await withRepoAILock(repoId, target, async () => {
         const repo = await registry.findRepository(repoId);
         const guardedPathPolicy = usesGuardedRepoContext(target)
           ? await buildGuardedRepoPathPolicy(repo, [configPath, aiChatSystemPromptPath()])
@@ -318,10 +518,20 @@ export function createApiRouter(registryOrConfigPath: RepositoryRegistry | strin
             pathPolicy: guardedPathPolicy,
           });
         }
-        return requestRepoWriteAIChatCompletion({ target, messages: body.messages, context, repo: effectiveRepo, attachments: body.attachments, modelBehavior: body.modelBehavior, runner: options.aiCommandRunner, signal: abortScope.signal });
+        return requestRepoWriteAIChatCompletion({
+          target,
+          messages: body.messages,
+          context,
+          repo: effectiveRepo,
+          attachments: body.attachments,
+          modelBehavior: body.modelBehavior,
+          runner: options.aiCommandRunner,
+          signal: abortScope.signal,
+          beforeCliSpawn: () => assertCliSpawnAllowed(target, abortScope.signal),
+        });
         })();
         return { context, result };
-      });
+      }, abortScope.abort);
       response.json({ message: { role: "assistant", content: execution.result.content }, context: execution.context, status: execution.result.status, run: execution.result.run });
     } catch (error) {
       next(error);
@@ -332,14 +542,14 @@ export function createApiRouter(registryOrConfigPath: RepositoryRegistry | strin
 
   router.post("/ai/chat/stream", async (request, response, next) => {
     const body = request.body as AIChatRequest;
-    const abortScope = requestAbortScope(request, response);
+    const abortScope = requestAbortScope(request, response, options.shutdownSignal);
     const runId = randomUUID();
     activeAIRuns.set(runId, { abort: abortScope.abort });
     try {
       const target = resolveAIChatTarget(body);
       assertAIChatTargetReady(target);
       const repoId = String(body.context?.repoId || "");
-      const execution = await withRepoAILock(repoId, async () => {
+      const execution = await withRepoAILock(repoId, target, async () => {
         const repo = await registry.findRepository(repoId);
         const guardedPathPolicy = usesGuardedRepoContext(target)
           ? await buildGuardedRepoPathPolicy(repo, [configPath, aiChatSystemPromptPath()])
@@ -383,12 +593,22 @@ export function createApiRouter(registryOrConfigPath: RepositoryRegistry | strin
           if (canWriteResponse(response)) response.write(`${JSON.stringify({ type: "delta", content: guarded.content })}\n`);
           return guarded;
         }
-        const cli = await requestRepoWriteAIChatCompletion({ target, messages: body.messages, context, repo: effectiveRepo, attachments: body.attachments, modelBehavior: body.modelBehavior, runner: options.aiCommandRunner, signal: abortScope.signal });
+        const cli = await requestRepoWriteAIChatCompletion({
+          target,
+          messages: body.messages,
+          context,
+          repo: effectiveRepo,
+          attachments: body.attachments,
+          modelBehavior: body.modelBehavior,
+          runner: options.aiCommandRunner,
+          signal: abortScope.signal,
+          beforeCliSpawn: () => assertCliSpawnAllowed(target, abortScope.signal),
+        });
         if (canWriteResponse(response)) response.write(`${JSON.stringify({ type: "delta", content: cli.content })}\n`);
         return cli;
         })();
         return { context, result };
-      });
+      }, abortScope.abort);
       if (canWriteResponse(response)) {
         response.write(`${JSON.stringify({ type: "done", message: { role: "assistant", content: execution.result.content }, context: execution.context, status: execution.result.status, run: execution.result.run })}\n`);
         response.end();
@@ -484,7 +704,11 @@ export function createApiRouter(registryOrConfigPath: RepositoryRegistry | strin
       next(error);
       return;
     }
-    const httpError = isHttpError(error) ? error : new HttpError(500, "Local Reader App API failed.");
+    const httpError = isHttpError(error)
+      ? error
+      : error instanceof AiCliSetupError
+        ? aiCliSetupHttpError(error)
+        : new HttpError(500, "Local Reader App API failed.");
     response.status(httpError.status).json({ error: httpError.message, ...(httpError.details === undefined ? {} : { details: httpError.details }) });
   });
 
@@ -492,15 +716,15 @@ export function createApiRouter(registryOrConfigPath: RepositoryRegistry | strin
 }
 
 function resolveAIChatTarget(body: AIChatRequest): AIChatExecutionTarget {
-  const rawTarget = body.target as unknown as { kind?: string; entry?: string; provider?: AIProviderSettings; status?: unknown } | undefined;
+  const rawTarget = body.target as unknown as { kind?: string; entry?: string; provider?: AIProviderSettings; selection?: unknown; status?: unknown } | undefined;
   const target = rawTarget || (body.provider ? { kind: "provider", provider: body.provider } : null);
   if (!target) throw new HttpError(400, "Select an AI Chat target.");
-  if (target.kind === "codexCli") return { kind: "codexCli", entry: "codexCli", status: target.status as AIChatExecutionTarget["status"] };
-  if (target.kind === "claudeCli") return { kind: "claudeCli", entry: "claudeCli", status: target.status as AIChatExecutionTarget["status"] };
+  if (target.kind === "codexCli") return { kind: "codexCli", entry: "codexCli", selection: normalizeCliModelSelection(target.selection), status: target.status as AIChatExecutionTarget["status"] };
+  if (target.kind === "claudeCli") return { kind: "claudeCli", entry: "claudeCli", selection: normalizeCliModelSelection(target.selection), status: target.status as AIChatExecutionTarget["status"] };
   if (target.kind === "codexBackedProvider" && target.provider) return { kind: "codexBackedProvider", provider: target.provider, status: target.status as AIChatExecutionTarget["status"] };
   if (target.kind === "codexBackedLocal" && target.provider) return { kind: "codexBackedLocal", provider: target.provider, status: target.status as AIChatExecutionTarget["status"] };
-  if (target.kind === "cli" && target.entry === "codexCli") return { kind: "codexCli", entry: "codexCli", status: target.status as AIChatExecutionTarget["status"] };
-  if (target.kind === "cli" && target.entry === "claudeCli") return { kind: "claudeCli", entry: "claudeCli", status: target.status as AIChatExecutionTarget["status"] };
+  if (target.kind === "cli" && target.entry === "codexCli") return { kind: "codexCli", entry: "codexCli", selection: normalizeCliModelSelection(target.selection), status: target.status as AIChatExecutionTarget["status"] };
+  if (target.kind === "cli" && target.entry === "claudeCli") return { kind: "claudeCli", entry: "claudeCli", selection: normalizeCliModelSelection(target.selection), status: target.status as AIChatExecutionTarget["status"] };
   if (target.kind === "provider" && target.provider?.entry === "localAi") return { kind: "codexBackedLocal", provider: target.provider, status: target.status as AIChatExecutionTarget["status"] };
   if (target.kind === "provider" && target.provider) return { kind: "codexBackedProvider", provider: target.provider, status: target.status as AIChatExecutionTarget["status"] };
   throw new HttpError(400, "Unknown AI Chat target.");
@@ -553,7 +777,7 @@ function providerExecutionMode(provider: AIProviderSettings): "readOnly" | "repo
   return provider.executionMode === "repoWrite" ? "repoWrite" : "readOnly";
 }
 
-function requestAbortScope(request: Request, response: Response): { signal: AbortSignal; abort: () => void; cleanup: () => void } {
+function requestAbortScope(request: Request, response: Response, shutdownSignal?: AbortSignal): { signal: AbortSignal; abort: () => void; cleanup: () => void } {
   const controller = new AbortController();
   const abort = () => controller.abort();
   const close = () => {
@@ -561,20 +785,82 @@ function requestAbortScope(request: Request, response: Response): { signal: Abor
   };
   request.once("aborted", abort);
   response.once("close", close);
+  shutdownSignal?.addEventListener("abort", abort, { once: true });
+  if (shutdownSignal?.aborted) abort();
   return {
     signal: controller.signal,
     abort,
     cleanup: () => {
       request.removeListener("aborted", abort);
       response.removeListener("close", close);
+      shutdownSignal?.removeEventListener("abort", abort);
     },
   };
 }
 
-function readinessAttestationKey(entry: AIEntryKind, repoId: string, revision: string, provider: AIProviderSettings | undefined): string {
-  const fingerprint = createHash("sha256").update(JSON.stringify(providerAttestationSnapshot(provider))).digest("hex");
-  const scope = entry === "codexCli" || entry === "claudeCli" ? "cli-session" : `${repoId}:${revision}`;
+function readinessAttestationKey(
+  entry: AIEntryKind,
+  repoId: string,
+  revision: string,
+  provider: AIProviderSettings | undefined,
+  selection?: AICliModelSelection,
+  cliSetupGeneration?: number,
+): string {
+  const fingerprint = createHash("sha256").update(JSON.stringify({
+    provider: providerAttestationSnapshot(provider),
+    selection: selection || null,
+    cliSetupGeneration: cliSetupGeneration ?? null,
+  })).digest("hex");
+  const scope = `${repoId}:${revision}`;
   return `${entry}:${scope}:${fingerprint}`;
+}
+
+function normalizeCliModelSelection(value: unknown): AICliModelSelection {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new HttpError(400, "Select a CLI model and reasoning effort.");
+  }
+  const source = value as Record<string, unknown>;
+  return {
+    model: boundedCliSelectionValue(source.model, "model"),
+    effort: boundedCliSelectionValue(source.effort, "reasoning effort"),
+    catalogRevision: boundedCliSelectionValue(source.catalogRevision, "catalog revision", 128),
+    setupGeneration: boundedCliSetupGeneration(source.setupGeneration),
+  };
+}
+
+function boundedCliSetupGeneration(value: unknown): number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0) {
+    throw new HttpError(400, "CLI setup generation is invalid.");
+  }
+  return value;
+}
+
+function boundedCliSelectionValue(value: unknown, label: string, maxLength = 160): string {
+  if (
+    typeof value !== "string"
+    || value.length === 0
+    || value.length > maxLength
+    || value.trim() !== value
+    || /[\u0000-\u001f\u007f]/.test(value)
+  ) {
+    throw new HttpError(400, `CLI ${label} is invalid.`);
+  }
+  return value;
+}
+
+function normalizeCliSetupEntry(value: unknown): "codexCli" | "claudeCli" {
+  if (value === "codexCli" || value === "claudeCli") return value;
+  throw new HttpError(400, "Unknown CLI setup entry.");
+}
+
+function aiCliSetupHttpError(error: AiCliSetupError): HttpError {
+  if (error.code === "invalidEntry" || error.code === "invalidSelection" || error.code === "confirmationInvalid") {
+    return new HttpError(400, error.message, { code: error.code });
+  }
+  if (error.code === "shuttingDown" || error.code === "unsupportedPlatform") {
+    return new HttpError(503, error.message, { code: error.code });
+  }
+  return new HttpError(409, error.message, { code: error.code });
 }
 
 async function assertCliWorkspaceWritable(repo: RepositoryConfig): Promise<void> {
@@ -611,6 +897,12 @@ function canWriteResponse(response: Response): boolean {
 function hasUnverifiedProcessTree(error: unknown): boolean {
   if (!isHttpError(error) || !error.details || typeof error.details !== "object") return false;
   return (error.details as { processTreeUnverified?: unknown }).processTreeUnverified === true;
+}
+
+function errorDetailCode(error: unknown): string {
+  if (!isHttpError(error) || !error.details || typeof error.details !== "object") return "";
+  const code = (error.details as { code?: unknown }).code;
+  return typeof code === "string" ? code : "";
 }
 
 function targetEntry(target: AIChatExecutionTarget): AIEntryKind {

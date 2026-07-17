@@ -1,8 +1,21 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ArrowLeft, CheckCircle2, Settings as SettingsIcon, XCircle } from "lucide-react";
-import { fetchAIEntryReadiness, fetchRepositoryConfig, previewRepositoryConfig, saveRepositoryConfig, validateRepositoryConfig } from "./api";
+import {
+  cancelAICliAuthentication,
+  confirmAICliUpdate,
+  fetchAIEntryReadiness,
+  fetchRepositoryConfig,
+  inspectAICliSetup,
+  prepareAICliUpdate,
+  previewRepositoryConfig,
+  saveRepositoryConfig,
+  startAICliAuthentication,
+  validateRepositoryConfig,
+} from "./api";
 import {
   activeAIEntry,
+  applyCliSetupSnapshot,
+  applyCliSetupSnapshotAndBindSelection,
   aiModelBehavior,
   aiModelBehaviorCapability,
   aiConfigured,
@@ -10,7 +23,6 @@ import {
   aiEntryProvider,
   aiEntrySettings,
   aiReady,
-  defaultAISettings,
   derivedAIStatus,
   effectiveAIStatus,
   formatReaderFontScaleLabel,
@@ -24,6 +36,10 @@ import {
   providerExecutionMode,
   updateAIModelBehavior,
   updateCliEntryReadiness,
+  selectCliEffort,
+  selectCliModel,
+  selectAIEntry,
+  validCliModelSelection,
   type AISettingsState,
   type AIModelBehaviorCapability,
   type BasicSettings,
@@ -31,6 +47,8 @@ import {
 import type {
   AIConnectionStatus,
   AICliEntryKind,
+  AICliModelSelection,
+  AICliSetupSnapshot,
   AIEntryKind,
   AIEntrySettings,
   AIFormat,
@@ -246,13 +264,17 @@ export function SettingsView({
     readinessGenerationRef.current = requestGeneration;
     const settingsAtStart = settingsSnapshot ? normalizeAISettingsState(settingsSnapshot) : aiDraftRef.current;
     const providerFingerprint = isProviderEntryKind(entryAtStart) ? providerSettingsFingerprint(aiEntryProvider(settingsAtStart, entryAtStart)) : "";
+    const selectionAtStart = isCliEntryKind(entryAtStart) ? validCliModelSelection(settingsAtStart, entryAtStart) : null;
+    const selectionFingerprint = cliModelSelectionFingerprint(selectionAtStart);
     setTestingEntry(entry);
     try {
       const provider = isProviderEntryKind(entryAtStart) ? aiEntryProvider(settingsAtStart, entryAtStart) : undefined;
-      const readiness = await fetchAIEntryReadiness(entryAtStart, provider, activeRepoId, activeRepoRevision);
+      const selection = selectionAtStart || undefined;
+      const readiness = await fetchAIEntryReadiness(entryAtStart, provider, activeRepoId, activeRepoRevision, selection);
       if (readinessGenerationRef.current !== requestGeneration || activeRepoIdentityRef.current !== repoIdentityAtStart) return;
       commitAISettingsUpdate((current) => {
         if (isProviderEntryKind(entryAtStart) && providerSettingsFingerprint(aiEntryProvider(current, entryAtStart)) !== providerFingerprint) return current;
+        if (isCliEntryKind(entryAtStart) && cliModelSelectionFingerprint(validCliModelSelection(current, entryAtStart)) !== selectionFingerprint) return current;
         return updateCliEntryReadiness(current, readiness);
       });
     } catch (error) {
@@ -267,6 +289,7 @@ export function SettingsView({
       };
       commitAISettingsUpdate((current) => {
         if (isProviderEntryKind(entryAtStart) && providerSettingsFingerprint(aiEntryProvider(current, entryAtStart)) !== providerFingerprint) return current;
+        if (isCliEntryKind(entryAtStart) && cliModelSelectionFingerprint(validCliModelSelection(current, entryAtStart)) !== selectionFingerprint) return current;
         return updateAIEntryStatus(current, entryAtStart, failed);
       });
     } finally {
@@ -374,7 +397,12 @@ export function SettingsView({
             testingEntry={testingEntry}
             dirty={aiDirty}
             onChange={commitAISettings}
-            onTestEntry={(entry, settingsSnapshot) => void testEntry(entry, settingsSnapshot)}
+            onApplyCliSetup={(snapshot, bindSelection = false, preferredSelection = null) => commitAISettingsUpdate((current) => {
+              if (!bindSelection) return applyCliSetupSnapshot(current, snapshot);
+              const currentSelection = validCliModelSelection(current, snapshot.entry);
+              return applyCliSetupSnapshotAndBindSelection(current, snapshot, currentSelection || preferredSelection);
+            })}
+            onTestEntry={testEntry}
           />
         ) : null}
       </section>
@@ -599,44 +627,95 @@ function AIChatSettingsPanel({
   testingEntry,
   dirty,
   onChange,
+  onApplyCliSetup,
   onTestEntry,
 }: {
   settings: AISettingsState;
   status: AIConnectionStatus;
   testingEntry: AIEntryKind | null;
   dirty: boolean;
-  onChange: (settings: AISettingsState) => void;
-  onTestEntry: (entry: AIEntryKind, settingsSnapshot?: AISettingsState) => void;
+  onChange: (settings: AISettingsState) => AISettingsState;
+  onApplyCliSetup: (
+    snapshot: AICliSetupSnapshot,
+    bindSelection?: boolean,
+    preferredSelection?: AICliModelSelection | null,
+  ) => AISettingsState;
+  onTestEntry: (entry: AIEntryKind, settingsSnapshot?: AISettingsState) => Promise<void>;
 }) {
+  const [setupAction, setSetupAction] = useState("");
+  const [setupError, setSetupError] = useState("");
+  const updatePreferredSelectionRef = useRef<Record<AICliEntryKind, AICliModelSelection | null>>({ codexCli: null, claudeCli: null });
   const activeEntrySettings = activeAIEntry(settings);
   const activeEntry = settings.activeEntry;
+  const activeCliSnapshot = isCliEntryKind(activeEntry) ? settings.cliSetupByEntry[activeEntry] : null;
   const configured = aiConfigured(activeEntrySettings);
   const entries = ["codexCli", "claudeCli", "aiApi", "localAi"] as AIEntryKind[];
   const activeSetupTitle = isCliEntryKind(activeEntry) ? "CLI Readiness" : "Connection / Credentials";
   const behavior = activeEntry ? aiModelBehavior(settings, activeEntry) : { kind: "none" } as AIModelBehavior;
   const behaviorCapability = activeEntry ? aiModelBehaviorCapability(settings, activeEntry) : null;
 
-  function setActiveEntry(entry: AIEntryKind) {
+  async function setActiveEntry(entry: AIEntryKind) {
     if (!isCliEntryKind(entry)) return;
-    const nextSettings = { ...settings, activeEntry: entry };
-    onChange(nextSettings);
-    onTestEntry(entry, nextSettings);
+    const selected = onChange(selectAIEntry(settings, entry));
+    await runSetupAction(entry, "inspect", selected.cliModelSelectionByEntry[entry]);
   }
 
   function clearActiveEntry() {
-    onChange({ ...settings, activeEntry: null });
+    onChange(selectAIEntry(settings, null));
   }
 
   function updateEntry(entry: AIEntryKind, update: Partial<AIEntrySettings>) {
     onChange(updateAIEntry(settings, entry, update));
   }
 
-  function clearEntry(entry: AIEntryKind) {
-    onChange(updateAIEntry(settings, entry, defaultAISettings.entries[entry]));
-  }
-
   function updateBehavior(entry: AIEntryKind, nextBehavior: AIModelBehavior) {
     onChange(updateAIModelBehavior(settings, entry, nextBehavior));
+  }
+
+  async function runSetupAction(
+    entry: AICliEntryKind,
+    action: "inspect" | "signIn" | "cancel" | "prepareUpdate" | "confirmUpdate",
+    preferredSelection = settings.cliModelSelectionByEntry[entry],
+  ) {
+    const actionKey = `${entry}:${action}`;
+    setSetupAction(actionKey);
+    setSetupError("");
+    try {
+      const current = settings.cliSetupByEntry[entry];
+      if (action === "prepareUpdate") {
+        updatePreferredSelectionRef.current[entry] = preferredSelection;
+      }
+      let snapshot: AICliSetupSnapshot;
+      if (action === "inspect") snapshot = await inspectAICliSetup(entry);
+      else if (action === "signIn") snapshot = await startAICliAuthentication(entry);
+      else if (action === "cancel") snapshot = await cancelAICliAuthentication(entry);
+      else if (action === "prepareUpdate") snapshot = await prepareAICliUpdate(entry);
+      else {
+        const nonce = current?.update.nonce || "";
+        const updateKind = current?.update.kind || "compatibility";
+        if (!nonce) throw new Error("The update confirmation expired. Prepare the managed CLI update again.");
+        const confirmed = window.confirm(updateKind === "latest"
+          ? `Run the managed CLI updater for ${entryLabel(entry)}? It will check for and apply a newer release if available, using only the fixed server-side update command.`
+          : `Install the compatibility update for ${entryLabel(entry)}? Local Reader App will use only its fixed server-side update command.`);
+        if (!confirmed) return;
+        snapshot = await confirmAICliUpdate(entry, nonce);
+      }
+      const shouldBindAndTest = action === "inspect" || action === "confirmUpdate";
+      const selectionToRebind = action === "confirmUpdate"
+        ? updatePreferredSelectionRef.current[entry]
+        : preferredSelection || updatePreferredSelectionRef.current[entry];
+      const applied = onApplyCliSetup(snapshot, shouldBindAndTest, selectionToRebind);
+      if (shouldBindAndTest) {
+        updatePreferredSelectionRef.current[entry] = null;
+        if (applied.activeEntry === entry && validCliModelSelection(applied, entry)) {
+          await onTestEntry(entry, applied);
+        }
+      }
+    } catch (error) {
+      setSetupError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setSetupAction("");
+    }
   }
 
   return (
@@ -657,7 +736,7 @@ function AIChatSettingsPanel({
               status={effectiveAIStatus(settings, entry)}
               active={settings.activeEntry === entry}
               available={isCliEntryKind(entry)}
-              onSetActive={() => setActiveEntry(entry)}
+              onSetActive={() => void setActiveEntry(entry)}
               onClearActive={clearActiveEntry}
             />
           ))}
@@ -669,8 +748,8 @@ function AIChatSettingsPanel({
             <AuthenticationEntryCard
               entry="codexCli"
               title={entryLabel("codexCli")}
-              subtitle="Existing CLI readiness"
-              note="Checks the installed CLI, persistent sign-in, and Current repo execution readiness. No login or browser flow is started here."
+              subtitle="Current repo execution boundary"
+              note="Verifies the selected catalog pair and Current repo-only execution boundary. Sign-in, CLI compatibility, model, and effort are managed in Authentication and model below."
               configured={configured}
               lastCheckedAt={settings.lastCheckedAtByEntry.codexCli}
               status={effectiveAIStatus(settings, "codexCli")}
@@ -683,6 +762,7 @@ function AIChatSettingsPanel({
                 entry={aiEntryCli(settings, "codexCli")}
                 status={effectiveAIStatus(settings, "codexCli")}
                 testing={testingEntry === "codexCli"}
+                selectionReady={Boolean(validCliModelSelection(settings, "codexCli"))}
                 onTest={() => onTestEntry("codexCli")}
               />
             </AuthenticationEntryCard>
@@ -691,8 +771,8 @@ function AIChatSettingsPanel({
             <AuthenticationEntryCard
               entry="claudeCli"
               title={entryLabel("claudeCli")}
-              subtitle="Existing CLI readiness"
-              note="Checks the installed CLI, persistent sign-in, and Current repo execution readiness. No login or browser flow is started here."
+              subtitle="Current repo execution boundary"
+              note="Verifies the selected catalog pair and Current repo-only execution boundary. Sign-in, CLI compatibility, model, and effort are managed in Authentication and model below."
               configured={configured}
               lastCheckedAt={settings.lastCheckedAtByEntry.claudeCli}
               status={effectiveAIStatus(settings, "claudeCli")}
@@ -705,6 +785,7 @@ function AIChatSettingsPanel({
                 entry={aiEntryCli(settings, "claudeCli")}
                 status={effectiveAIStatus(settings, "claudeCli")}
                 testing={testingEntry === "claudeCli"}
+                selectionReady={Boolean(validCliModelSelection(settings, "claudeCli"))}
                 onTest={() => onTestEntry("claudeCli")}
               />
             </AuthenticationEntryCard>
@@ -755,17 +836,211 @@ function AIChatSettingsPanel({
         </SettingsCard>
       ) : null}
       {activeEntry && behaviorCapability ? (
-        <SettingsCard title="Model behavior" eyebrow={entryLabel(activeEntry)} status={modelBehaviorStatus(behavior)}>
-          <ModelBehaviorSettings
-            entry={activeEntry}
-            entrySettings={aiEntrySettings(settings, activeEntry)}
-            capability={behaviorCapability}
-            behavior={behavior}
-            onChange={(nextBehavior) => updateBehavior(activeEntry, nextBehavior)}
-          />
+        <SettingsCard
+          title={isCliEntryKind(activeEntry) ? "Authentication and model" : "Model behavior"}
+          eyebrow={entryLabel(activeEntry)}
+          status={isCliEntryKind(activeEntry) ? cliSetupStatus(settings.cliSetupByEntry[activeEntry]) : modelBehaviorStatus(behavior)}
+        >
+          {isCliEntryKind(activeEntry) ? (
+            <CliAuthenticationAndModel
+              entry={activeEntry}
+              settings={settings}
+              pendingAction={setupAction.startsWith(`${activeEntry}:`) ? setupAction.split(":")[1] : ""}
+              actionError={setupError}
+              onInspect={() => void runSetupAction(activeEntry, "inspect")}
+              onSignIn={() => void runSetupAction(activeEntry, "signIn")}
+              onCancelSignIn={() => void runSetupAction(activeEntry, "cancel")}
+              onPrepareUpdate={() => void runSetupAction(activeEntry, "prepareUpdate")}
+              onConfirmUpdate={() => void runSetupAction(activeEntry, "confirmUpdate")}
+              onModelChange={(model) => onChange(selectCliModel(settings, activeEntry, model))}
+              onEffortChange={(effort) => onChange(selectCliEffort(settings, activeEntry, effort))}
+            />
+          ) : (
+            <ModelBehaviorSettings
+              entry={activeEntry}
+              entrySettings={aiEntrySettings(settings, activeEntry)}
+              capability={behaviorCapability}
+              behavior={behavior}
+              onChange={(nextBehavior) => updateBehavior(activeEntry, nextBehavior)}
+            />
+          )}
         </SettingsCard>
       ) : null}
     </section>
+  );
+}
+
+function CliAuthenticationAndModel({
+  entry,
+  settings,
+  pendingAction,
+  actionError,
+  onInspect,
+  onSignIn,
+  onCancelSignIn,
+  onPrepareUpdate,
+  onConfirmUpdate,
+  onModelChange,
+  onEffortChange,
+}: {
+  entry: AICliEntryKind;
+  settings: AISettingsState;
+  pendingAction: string;
+  actionError: string;
+  onInspect: () => void;
+  onSignIn: () => void;
+  onCancelSignIn: () => void;
+  onPrepareUpdate: () => void;
+  onConfirmUpdate: () => void;
+  onModelChange: (model: string) => void;
+  onEffortChange: (effort: string) => void;
+}) {
+  const snapshot = settings.cliSetupByEntry[entry];
+  const selection = validCliModelSelection(settings, entry);
+  const catalog = snapshot?.catalog;
+  const selectedModel = catalog?.models.find((model) => model.id === selection?.model);
+  const busy = Boolean(pendingAction);
+  const authenticationWaiting = snapshot?.authentication.state === "waiting" || snapshot?.phase === "authenticating";
+  const authenticationCanStart = snapshot?.phase === "loginRequired" || snapshot?.authentication.state === "failed";
+  const updateConfirmationReady = snapshot?.update.state === "confirmationRequired" && Boolean(snapshot.update.nonce);
+  const latestUpdateSupported = snapshot?.phase === "ready"
+    && snapshot.compatibility === "compatible"
+    && snapshot.managedUpdateSupported === true;
+  const compatibilityUpdateAction = snapshot?.compatibility === "updateRequired"
+    || (updateConfirmationReady && snapshot?.update.kind === "compatibility");
+  const latestUpdate = !compatibilityUpdateAction;
+  const modelSelectionEnabled = snapshot?.phase === "ready" && Boolean(catalog?.models.length) && !updateConfirmationReady;
+
+  return (
+    <div className="model-behavior-panel cli-auth-model-panel" aria-label={`${entryLabel(entry)} authentication and model settings`}>
+      <div className="setting-row inline-row cli-setup-summary">
+        <div>
+          <span>CLI status</span>
+          <strong>{cliSetupStatus(snapshot)}</strong>
+          <small>{snapshot?.message || "Inspect the installed CLI to load authentication and model availability."}</small>
+        </div>
+        <button type="button" className="secondary-button" onClick={onInspect} disabled={busy}>
+          {pendingAction === "inspect" ? "Checking..." : "Check again"}
+        </button>
+      </div>
+
+      <div className="settings-summary-grid cli-setup-facts" aria-label={`${entryLabel(entry)} setup summary`}>
+        <SummaryItem label="Version" value={snapshot?.cliVersion || "Not checked"} />
+        <SummaryItem label="Authentication" value={cliAuthenticationLabel(snapshot)} />
+        <SummaryItem label="Compatibility" value={cliCompatibilityLabel(snapshot)} />
+        <SummaryItem label="Catalog" value={catalog ? `${catalog.models.length} model${catalog.models.length === 1 ? "" : "s"}` : "Not loaded"} />
+      </div>
+
+      {snapshot?.foundationOnly ? (
+        <p className="settings-message warning">
+          Claude Code support is foundation-only in this validation environment. No live Claude authentication or model request was used to verify this build.
+        </p>
+      ) : null}
+
+      <div className="setting-row inline-row cli-auth-actions">
+        <div>
+          <span>Authentication</span>
+          <strong>{cliAuthenticationLabel(snapshot)}</strong>
+          <small>{snapshot?.authentication.message || "Authentication is owned by the installed CLI and is never stored in repository config."}</small>
+        </div>
+        {authenticationWaiting ? (
+          <button type="button" className="secondary-button" onClick={onCancelSignIn} disabled={busy}>
+            {pendingAction === "cancel" ? "Canceling..." : "Cancel sign-in"}
+          </button>
+        ) : authenticationCanStart ? (
+          <button type="button" className="secondary-button" onClick={onSignIn} disabled={busy || !snapshot || snapshot.phase === "notInstalled"}>
+            {pendingAction === "signIn" ? "Starting..." : "Sign in"}
+          </button>
+        ) : null}
+      </div>
+
+      {snapshot?.authentication.verificationUrl || snapshot?.authentication.userCode ? (
+        <div className="cli-auth-challenge" aria-label={`${entryLabel(entry)} sign-in instructions`}>
+          {snapshot.authentication.userCode ? (
+            <div>
+              <span>Verification code</span>
+              <strong>{snapshot.authentication.userCode}</strong>
+            </div>
+          ) : null}
+          {snapshot.authentication.verificationUrl ? (
+            <a href={snapshot.authentication.verificationUrl} target="_blank" rel="noreferrer">
+              Open sign-in page
+            </a>
+          ) : null}
+        </div>
+      ) : null}
+
+      {snapshot?.compatibility === "updateRequired" || updateConfirmationReady || latestUpdateSupported ? (
+        <div className="setting-row inline-row cli-update-actions">
+          <div>
+            <span>{latestUpdate ? "CLI release update" : "Compatibility update"}</span>
+            <strong>{updateConfirmationReady
+              ? "Confirmation required"
+              : latestUpdate && snapshot?.update.state === "succeeded"
+                ? "Updater completed"
+                : latestUpdate
+                  ? "Explicit action only"
+                  : "Update required"}</strong>
+            <small>{snapshot?.update.message || (latestUpdate
+              ? "The CLI has no availability-only check. After confirmation, its fixed updater checks for and applies a newer release if one is available."
+              : "Only a server-owned compatibility update command can run. Custom executables remain manual.")}</small>
+          </div>
+          <button
+            type="button"
+            className={updateConfirmationReady ? "primary-button" : "secondary-button"}
+            onClick={updateConfirmationReady ? onConfirmUpdate : onPrepareUpdate}
+            disabled={busy}
+          >
+            {pendingAction === "prepareUpdate"
+              ? "Preparing..."
+              : pendingAction === "confirmUpdate"
+                ? "Updating..."
+                : updateConfirmationReady
+                  ? latestUpdate ? "Run managed updater" : "Install compatible update"
+                  : latestUpdate ? "Check and apply latest" : "Prepare compatibility update"}
+          </button>
+        </div>
+      ) : snapshot?.compatibility === "unmanaged" ? (
+        <p className="settings-message warning">This executable is not managed by Local Reader App. Update it with its original package manager, then check again.</p>
+      ) : null}
+
+      <div className="cli-model-grid">
+        <label className="settings-field">
+          <span>Model</span>
+          <select
+            aria-label={`${entryLabel(entry)} model`}
+            value={selection?.model || ""}
+            disabled={!modelSelectionEnabled || busy}
+            onChange={(event) => onModelChange(event.target.value)}
+          >
+            <option value="">Select a model</option>
+            {(catalog?.models || []).map((model) => (
+              <option key={model.id} value={model.id}>{model.label}</option>
+            ))}
+          </select>
+          <small>{selectedModel?.description || "Models come from the authenticated CLI catalog. No fixed fallback is used."}</small>
+        </label>
+        <label className="settings-field">
+          <span>Reasoning effort</span>
+          <select
+            aria-label={`${entryLabel(entry)} reasoning effort`}
+            value={selection?.effort || ""}
+            disabled={!selection || !selectedModel || busy}
+            onChange={(event) => onEffortChange(event.target.value)}
+          >
+            <option value="">Select an effort</option>
+            {(selectedModel?.efforts || []).map((effort) => (
+              <option key={effort.id} value={effort.id}>{effort.label}</option>
+            ))}
+          </select>
+          <small>{selectedModel ? "Only effort levels advertised for this model are enabled, including previously unknown levels." : "Select a model to see its supported effort levels."}</small>
+        </label>
+      </div>
+
+      {!selection ? <p className="settings-message warning">Select a valid model and effort, then run CLI Readiness. AI Chat stays disabled until both checks pass.</p> : null}
+      {selection ? <p className="settings-message success">Selected for new requests: {selectedModel?.label || selection.model} / {selectedModel?.efforts.find((effort) => effort.id === selection.effort)?.label || selection.effort}</p> : null}
+      {actionError ? <p className="settings-message error" role="alert">{actionError}</p> : null}
+    </div>
   );
 }
 
@@ -1059,17 +1334,17 @@ function ProviderAccessModeControl({ provider, onUpdate }: { provider: AIProvide
   );
 }
 
-function CliAIForm({ entry, status, testing, onTest }: { entry: CliAIEntrySettings; status: AIConnectionStatus; testing: boolean; onTest: () => void }) {
+function CliAIForm({ entry, status, testing, selectionReady, onTest }: { entry: CliAIEntrySettings; status: AIConnectionStatus; testing: boolean; selectionReady: boolean; onTest: () => void }) {
   return (
     <div className="cli-readiness-panel">
       <div className={`cli-readiness-action ${statusClass(status) || "neutral"}`}>
         <div>
           <span>Readiness</span>
           <strong>{cliStatusLabel(status)}</strong>
-          <small>{cliStatusMessage(status)}</small>
+          <small>{selectionReady ? cliStatusMessage(status) : "Select a model and reasoning effort in Authentication and model before checking this boundary."}</small>
           <small>Last checked: {formatLastCheck(entry.lastCheckedAt || "")}</small>
         </div>
-        <button type="button" className={status.state === "ready" ? "success-button" : "secondary-button"} onClick={onTest} disabled={testing}>
+        <button type="button" className={status.state === "ready" ? "success-button" : "secondary-button"} onClick={onTest} disabled={testing || !selectionReady}>
           {status.state === "ready" ? <CheckCircle2 aria-hidden="true" focusable="false" /> : null}
           {testing ? "Checking..." : status.state === "ready" ? "Check again" : "Check readiness"}
         </button>
@@ -1308,6 +1583,10 @@ function providerSettingsFingerprint(provider: AIProviderSettings): string {
   });
 }
 
+function cliModelSelectionFingerprint(selection: AICliModelSelection | null | undefined): string {
+  return selection ? JSON.stringify([selection.model, selection.effort, selection.catalogRevision, selection.setupGeneration]) : "";
+}
+
 function localDefaults(runtime: string): Partial<AIProviderSettings> {
   if (runtime === "lmStudio") return { runtime: "lmStudio", baseUrl: "http://127.0.0.1:1234/v1", model: "" };
   if (runtime === "openaiLocal") return { runtime: "openaiLocal", baseUrl: "http://127.0.0.1:8000/v1", model: "" };
@@ -1319,6 +1598,35 @@ function modelBehaviorStatus(behavior: AIModelBehavior): string {
   if (behavior.kind === "intelligence") return `Intelligence ${intelligenceLabel(behavior.level)}`;
   if (behavior.kind === "thinking") return behavior.enabled ? "Thinking on" : "Thinking off";
   return "Model default";
+}
+
+function cliSetupStatus(snapshot: AICliSetupSnapshot | null | undefined): string {
+  if (!snapshot) return "Not inspected";
+  if (snapshot.phase === "ready") return "Catalog ready";
+  if (snapshot.phase === "notInstalled") return "Not installed";
+  if (snapshot.phase === "updateRequired") return "Update required";
+  if (snapshot.phase === "loginRequired") return "Sign-in required";
+  if (snapshot.phase === "authenticating") return "Waiting for sign-in";
+  if (snapshot.phase === "inspecting" || snapshot.phase === "loadingCatalog") return "Checking";
+  if (snapshot.phase === "unavailable") return "Unavailable";
+  if (snapshot.phase === "failed") return "Check failed";
+  return "Not inspected";
+}
+
+function cliAuthenticationLabel(snapshot: AICliSetupSnapshot | null | undefined): string {
+  if (!snapshot) return "Not checked";
+  if (snapshot.authentication.state === "waiting") return "Waiting for sign-in";
+  if (snapshot.authentication.state === "succeeded" || snapshot.phase === "ready") return "Signed in";
+  if (snapshot.authentication.state === "failed") return "Sign-in failed";
+  if (snapshot.phase === "loginRequired") return "Sign-in required";
+  return "Not checked";
+}
+
+function cliCompatibilityLabel(snapshot: AICliSetupSnapshot | null | undefined): string {
+  if (!snapshot || snapshot.compatibility === "unknown") return "Not checked";
+  if (snapshot.compatibility === "compatible") return "Compatible";
+  if (snapshot.compatibility === "updateRequired") return "Update required";
+  return "Manual update only";
 }
 
 function intelligenceLabel(level: AIIntelligenceLevel): string {
@@ -1340,7 +1648,8 @@ function aiEntryStatusLabel(entry: AIEntryKind | null, status: AIConnectionStatu
 function cliStatusLabel(status: AIConnectionStatus): string {
   if (status.state === "ready") return "Success";
   if (status.code === "cli_auth_missing") return "Needs sign-in";
-  if (status.state === "failed" || status.code === "wrapper_not_ready") return "Check failed";
+  if (status.code === "wrapper_not_ready") return "Needs check";
+  if (status.state === "failed") return "Check failed";
   return "Not checked";
 }
 

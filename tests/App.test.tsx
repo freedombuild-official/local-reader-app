@@ -4,6 +4,7 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import axe from "axe-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App, buildSandboxedHtmlSrcDoc } from "../src/App";
+import type { AICliEntryKind, AICliSetupSnapshot } from "../src/types";
 
 const fetchMock = vi.fn<typeof fetch>();
 const stylesCss = readFileSync(path.join(process.cwd(), "src/styles.css"), "utf8").replace(/\r\n/g, "\n");
@@ -41,6 +42,7 @@ let httpDeliverySessions: Array<{ id: string; repoId: string; path: string; url:
 let windowOpenMock: ReturnType<typeof vi.fn>;
 let openedHttpDeliveryTabs: MockOpenedTab[] = [];
 let repoOpenHandler: (body: Record<string, unknown>) => Promise<Response> | Response;
+let cliSetups: Record<AICliEntryKind, AICliSetupSnapshot> = createCliSetupCollection();
 
 type MockOpenedTab = {
   location: { href: string };
@@ -90,6 +92,7 @@ beforeEach(() => {
   installLocalStorageMock();
   httpDeliverySessions = [];
   openedHttpDeliveryTabs = [];
+  cliSetups = createCliSetupCollection();
   windowOpenMock = vi.fn(() => createMockOpenedTab() as unknown as Window);
   repoOpenHandler = (body) => {
     const repoId = String(body.repoId || "docs");
@@ -127,6 +130,62 @@ beforeEach(() => {
     }
     if (url === "/api/ai/test-connection") {
       return json({ state: "ready", code: "success", severity: "success", message: "Connected.", nextAction: "Run AI Entry readiness to confirm the selected access policy.", checkedAt: "2026-07-03T00:00:00.000Z" });
+    }
+    if (url === "/api/ai/cli-setup") {
+      return json({ setups: cliSetups });
+    }
+    if (url === "/api/ai/cli-setup/inspect") {
+      const body = parseJsonBody(init?.body) as { entry?: "codexCli" | "claudeCli" };
+      return json(cliSetups[body.entry || "codexCli"]);
+    }
+    if (url === "/api/ai/cli-setup/auth/start") {
+      const body = parseJsonBody(init?.body) as { entry?: "codexCli" | "claudeCli" };
+      const entry = body.entry || "codexCli";
+      cliSetups[entry] = {
+        ...cliSetups[entry],
+        setupGeneration: cliSetups[entry].setupGeneration + 1,
+        phase: "authenticating",
+        authentication: { state: "waiting", verificationUrl: "https://example.test/device", userCode: "TEST-CODE", message: "Complete sign-in in the browser." },
+      };
+      return json(cliSetups[entry]);
+    }
+    if (url === "/api/ai/cli-setup/auth/cancel") {
+      const body = parseJsonBody(init?.body) as { entry?: "codexCli" | "claudeCli" };
+      const entry = body.entry || "codexCli";
+      cliSetups[entry] = { ...cliSetups[entry], setupGeneration: cliSetups[entry].setupGeneration + 1, phase: "loginRequired", authentication: { state: "idle", message: "Sign-in canceled." } };
+      return json(cliSetups[entry]);
+    }
+    if (url === "/api/ai/cli-setup/update/prepare") {
+      const body = parseJsonBody(init?.body) as { entry?: "codexCli" | "claudeCli" };
+      const entry = body.entry || "codexCli";
+      const kind = cliSetups[entry].compatibility === "updateRequired" ? "compatibility" as const : "latest" as const;
+      cliSetups[entry] = {
+        ...cliSetups[entry],
+        setupGeneration: cliSetups[entry].setupGeneration + 1,
+        update: {
+          state: "confirmationRequired",
+          kind,
+          nonce: "update-nonce",
+          expiresAt: "2026-07-16T12:00:00.000Z",
+          message: kind === "compatibility" ? "Confirm the compatibility update." : "Confirm the managed CLI updater.",
+        },
+      };
+      return json(cliSetups[entry]);
+    }
+    if (url === "/api/ai/cli-setup/update/confirm") {
+      const body = parseJsonBody(init?.body) as { entry?: "codexCli" | "claudeCli" };
+      const entry = body.entry || "codexCli";
+      cliSetups[entry] = {
+        ...cliSetups[entry],
+        setupGeneration: cliSetups[entry].setupGeneration + 1,
+        compatibility: "compatible",
+        update: {
+          state: "succeeded",
+          kind: cliSetups[entry].update.kind,
+          message: cliSetups[entry].update.kind === "latest" ? "Managed CLI updater completed." : "Compatibility update installed.",
+        },
+      };
+      return json(cliSetups[entry]);
     }
     if (url === "/api/ai/entry-readiness") {
       const body = parseJsonBody(init?.body) as { entry?: string; provider?: Record<string, unknown> };
@@ -1194,6 +1253,37 @@ describe("App", () => {
     expect(screen.queryByLabelText("New repository repository entry")).toBeNull();
   });
 
+  it("clears the active repository and CLI readiness after the last repository is removed", async () => {
+    render(<App />);
+    expect(await screen.findByRole("heading", { name: "Hello" })).toBeTruthy();
+    fireEvent.click(openSettingsButton());
+    fireEvent.click(await screen.findByRole("tab", { name: "AI Chat" }));
+    await activateReadyCliEntry();
+    fireEvent.click(screen.getByRole("tab", { name: "Repositories" }));
+
+    const originalFetch = fetchMock.getMockImplementation();
+    let savedEmpty = false;
+    fetchMock.mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url === "/api/repository-config/save") {
+        savedEmpty = true;
+        return json({ ...repositoryConfigState(), entries: [], yaml: "repositories: []\n" });
+      }
+      if (url === "/api/repos" && savedEmpty) return json({ repositories: [] });
+      return originalFetch ? originalFetch(input, init) : json({ error: "missing fetch" }, 500);
+    });
+
+    const docsEditor = screen.getByLabelText("Docs repository entry");
+    fireEvent.click(within(docsEditor).getByRole("button", { name: "Remove from list" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save config" }));
+    await waitFor(() => expect(savedEmpty).toBe(true));
+    fireEvent.click(screen.getByRole("button", { name: "Back to viewer" }));
+    fireEvent.click(await screen.findByRole("tab", { name: "AI Chat" }));
+
+    expect(await screen.findByText("AI Entry is not ready.")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Send AI Chat message" })).toBeNull();
+  });
+
   it("keeps four AI Entries, retains CLI chat across repositories, and resets only from New Chat", async () => {
     render(<App />);
     expect(await screen.findByRole("heading", { name: "Hello" })).toBeTruthy();
@@ -1240,11 +1330,19 @@ describe("App", () => {
     fireEvent.change(screen.getByLabelText("Repository"), { target: { value: "alt" } });
     expect(await screen.findByRole("heading", { name: "Alt" })).toBeTruthy();
     expect(screen.getByText("codexCli says the active file says hello.")).toBeTruthy();
-    expect((screen.getByLabelText("AI Chat message") as HTMLTextAreaElement).value).toBe("repo switch draft");
+    expect(screen.getByText("AI Entry is not ready.")).toBeTruthy();
+    expect(screen.queryByLabelText("AI Chat message")).toBeNull();
     expect(fetchCallsTo("/api/ai/entry-readiness")).toHaveLength(readinessCallsBeforeSwitch);
 
     fireEvent.change(screen.getByLabelText("Repository"), { target: { value: "docs" } });
     expect(await screen.findByRole("heading", { name: "Hello" })).toBeTruthy();
+    expect(screen.getByText("AI Entry is not ready.")).toBeTruthy();
+    fireEvent.click(openSettingsButton());
+    fireEvent.click(await screen.findByRole("tab", { name: "AI Chat" }));
+    await activateReadyCliEntry();
+    fireEvent.click(screen.getByRole("button", { name: "Back to viewer" }));
+    fireEvent.click(await screen.findByRole("tab", { name: "AI Chat" }));
+    expect((screen.getByLabelText("AI Chat message") as HTMLTextAreaElement).value).toBe("repo switch draft");
     fireEvent.contextMenu(await screen.findByRole("button", { name: "guide.md" }), { clientX: 120, clientY: 120 });
     fireEvent.click(screen.getByRole("menuitem", { name: "Send a path to AI Chat" }));
     const fileInput = document.querySelector(".ai-chat-composer input[type='file']") as HTMLInputElement;
@@ -1438,6 +1536,12 @@ describe("App", () => {
     });
     expect(await screen.findByText("AI-refreshed guide content.")).toBeTruthy();
     expect(parseJsonBody(fetchCallsTo("/api/repo-open").at(-1)?.[1]?.body)).toMatchObject({ repoId: "docs", expectedRevision: refreshedRevision });
+    expect(screen.getByText("AI Entry is not ready.")).toBeTruthy();
+    fireEvent.click(openSettingsButton());
+    fireEvent.click(await screen.findByRole("tab", { name: "AI Chat" }));
+    await activateReadyCliEntry();
+    fireEvent.click(screen.getByRole("button", { name: "Back to viewer" }));
+    fireEvent.click(await screen.findByRole("tab", { name: "AI Chat" }));
     expect((screen.getByLabelText("AI Chat message") as HTMLTextAreaElement).disabled).toBe(false);
 
     fireEvent.contextMenu(await screen.findByRole("button", { name: "docs" }), { clientX: 120, clientY: 120 });
@@ -1554,6 +1658,70 @@ describe("App", () => {
       delayedController?.close();
     });
     expect(screen.queryByText("Old repository response.")).toBeNull();
+  });
+
+  it("aborts an in-flight CLI run when its setup generation is invalidated", async () => {
+    render(<App />);
+    expect(await screen.findByRole("heading", { name: "Hello" })).toBeTruthy();
+    fireEvent.click(openSettingsButton());
+    fireEvent.click(await screen.findByRole("tab", { name: "AI Chat" }));
+    await activateReadyCliEntry();
+    fireEvent.click(screen.getByRole("button", { name: "Back to viewer" }));
+    fireEvent.click(await screen.findByRole("tab", { name: "AI Chat" }));
+
+    const originalFetch = fetchMock.getMockImplementation();
+    let delayedController: ReadableStreamDefaultController<Uint8Array> | null = null;
+    let requestSignal: AbortSignal | undefined;
+    const encoder = new TextEncoder();
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input) === "/api/ai/chat/stream") {
+        requestSignal = init?.signal || undefined;
+        return new Response(new ReadableStream<Uint8Array>({
+          start(controller) {
+            delayedController = controller;
+            controller.enqueue(encoder.encode(`${JSON.stringify({ type: "meta", runId: "setup-invalidated-run", context: { repoId: "docs", revision: repoRevisions.docs, primaryItems: [], ruleItems: [], systemPromptVersion: "2.3.0" } })}\n`));
+          },
+        }), { status: 200, headers: { "Content-Type": "application/x-ndjson" } });
+      }
+      return originalFetch ? originalFetch(input, init) : json({ error: "missing fetch" }, 500);
+    });
+
+    fireEvent.change(screen.getByLabelText("AI Chat message"), { target: { value: "Start a run before setup invalidation." } });
+    fireEvent.click(screen.getByRole("button", { name: "Send AI Chat message" }));
+    await waitFor(() => expect(delayedController).toBeTruthy());
+    cliSetups.codexCli = {
+      ...cliSetups.codexCli,
+      setupGeneration: cliSetups.codexCli.setupGeneration + 1,
+      phase: "loginRequired",
+      authentication: { state: "idle" },
+      catalog: undefined,
+      failureReason: "authenticationChanged",
+    };
+    await act(async () => {
+      await new Promise((resolve) => window.setTimeout(resolve, 1_100));
+    });
+
+    await waitFor(() => expect(requestSignal?.aborted).toBe(true));
+    await waitFor(() => expect(fetchCallsTo("/api/ai/cancel")).toHaveLength(1));
+    await waitFor(() =>
+      expect(screen.getAllByText("AI Chat request canceled because the AI Entry setup changed.").length).toBeGreaterThan(0),
+    );
+    expect(screen.queryByText("Old setup response.")).toBeNull();
+    await act(async () => {
+      try {
+        delayedController?.enqueue(encoder.encode(`${JSON.stringify({
+          type: "done",
+          message: { role: "assistant", content: "Old setup response." },
+          context: { repoId: "docs", revision: repoRevisions.docs, primaryItems: [], ruleItems: [], systemPromptVersion: "2.3.0" },
+          status: { state: "ready", message: "Ready", checkedAt: "2026-07-16T00:00:00.000Z" },
+          run: { accessMode: "repoWrite", entry: "codexCli", substrate: "codexCli", auditState: "verified", changedPaths: [], repairs: [], warnings: [] },
+        })}\n`));
+        delayedController?.close();
+      } catch {
+        // The aborted reader may already have canceled the mocked stream.
+      }
+    });
+    expect(screen.queryByText("Old setup response.")).toBeNull();
   });
 
   it("keeps an in-flight repo-wide request alive when another file opens in the same repo", async () => {
@@ -1736,6 +1904,143 @@ describe("App", () => {
     expect(screen.queryByRole("button", { name: "Send AI Chat message" })).toBeNull();
   });
 
+  it("invalidates stale UI readiness for a pre-stream CLI catalog mismatch", async () => {
+    render(<App />);
+    expect(await screen.findByRole("heading", { name: "Hello" })).toBeTruthy();
+    fireEvent.click(openSettingsButton());
+    fireEvent.click(await screen.findByRole("tab", { name: "AI Chat" }));
+    await activateReadyCliEntry();
+
+    fireEvent.click(screen.getByRole("button", { name: "Back to viewer" }));
+    fireEvent.click(await screen.findByRole("tab", { name: "AI Chat" }));
+    const originalFetch = fetchMock.getMockImplementation();
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input) === "/api/ai/chat/stream") {
+        return json({
+          error: "__RAW_SELECTION_SENTINEL__ stale catalog",
+          details: { code: "invalidSelection" },
+        }, 400);
+      }
+      return originalFetch ? originalFetch(input, init) : json({ error: "missing fetch" }, 500);
+    });
+
+    fireEvent.change(await screen.findByLabelText("AI Chat message"), { target: { value: "Send with a stale catalog." } });
+    fireEvent.click(screen.getByRole("button", { name: "Send AI Chat message" }));
+
+    expect(await screen.findByText("AI Entry is not ready.")).toBeTruthy();
+    expect(document.body.textContent || "").not.toContain("__RAW_SELECTION_SENTINEL__");
+    expect(screen.queryByRole("button", { name: "Send AI Chat message" })).toBeNull();
+  });
+
+  it("invalidates CLI readiness when a chat reports expired authentication", async () => {
+    render(<App />);
+    expect(await screen.findByRole("heading", { name: "Hello" })).toBeTruthy();
+    fireEvent.click(openSettingsButton());
+    fireEvent.click(await screen.findByRole("tab", { name: "AI Chat" }));
+    await activateReadyCliEntry();
+
+    fireEvent.click(screen.getByRole("button", { name: "Back to viewer" }));
+    fireEvent.click(await screen.findByRole("tab", { name: "AI Chat" }));
+    const originalFetch = fetchMock.getMockImplementation();
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input) === "/api/ai/chat/stream") {
+        return json({
+          error: "__RAW_AUTH_SENTINEL__ not logged in",
+          details: { code: "authenticationInvalidated" },
+        }, 502);
+      }
+      return originalFetch ? originalFetch(input, init) : json({ error: "missing fetch" }, 500);
+    });
+
+    fireEvent.change(await screen.findByLabelText("AI Chat message"), { target: { value: "Send after authentication expires." } });
+    fireEvent.click(screen.getByRole("button", { name: "Send AI Chat message" }));
+
+    expect(await screen.findByText("AI Entry is not ready.")).toBeTruthy();
+    expect(document.body.textContent || "").not.toContain("__RAW_AUTH_SENTINEL__");
+    expect(screen.queryByRole("button", { name: "Send AI Chat message" })).toBeNull();
+  });
+
+  it("invalidates stale UI readiness when a streamed error marks a CLI catalog mismatch", async () => {
+    render(<App />);
+    expect(await screen.findByRole("heading", { name: "Hello" })).toBeTruthy();
+    fireEvent.click(openSettingsButton());
+    fireEvent.click(await screen.findByRole("tab", { name: "AI Chat" }));
+    await activateReadyCliEntry();
+
+    fireEvent.click(screen.getByRole("button", { name: "Back to viewer" }));
+    fireEvent.click(await screen.findByRole("tab", { name: "AI Chat" }));
+    const originalFetch = fetchMock.getMockImplementation();
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input) === "/api/ai/chat/stream") {
+        return streamJsonLines([{
+          type: "error",
+          error: "__RAW_STREAM_SELECTION_SENTINEL__ stale catalog",
+          details: { code: "invalidSelection" },
+        }]);
+      }
+      return originalFetch ? originalFetch(input, init) : json({ error: "missing fetch" }, 500);
+    });
+
+    fireEvent.change(await screen.findByLabelText("AI Chat message"), { target: { value: "Stream with a stale catalog." } });
+    fireEvent.click(screen.getByRole("button", { name: "Send AI Chat message" }));
+
+    expect(await screen.findByText("AI Entry is not ready.")).toBeTruthy();
+    expect(document.body.textContent || "").not.toContain("__RAW_STREAM_SELECTION_SENTINEL__");
+    expect(screen.queryByRole("button", { name: "Send AI Chat message" })).toBeNull();
+
+    fireEvent.click(openSettingsButton());
+    fireEvent.click(await screen.findByRole("tab", { name: "AI Chat" }));
+    const readiness = screen.getByLabelText(["Co", "dex CLI readiness"].join(""));
+    fireEvent.click(within(readiness).getByRole("button", { name: /Check/ }));
+    await waitFor(() => expect(within(readiness).getAllByText("Success").length).toBeGreaterThan(0));
+    fireEvent.click(screen.getByRole("button", { name: "Back to viewer" }));
+    fireEvent.click(await screen.findByRole("tab", { name: "AI Chat" }));
+    fireEvent.change(screen.getByLabelText("AI Chat message"), { target: { value: "Retry after readiness recovery." } });
+    expect(screen.getByRole("button", { name: "Send AI Chat message" })).toBeTruthy();
+  });
+
+  it("shows mandatory restart guidance for a pre-stream unverified CLI process tree", async () => {
+    render(<App />);
+    expect(await screen.findByRole("heading", { name: "Hello" })).toBeTruthy();
+    fireEvent.click(openSettingsButton());
+    fireEvent.click(await screen.findByRole("tab", { name: "AI Chat" }));
+    await activateReadyCliEntry();
+
+    fireEvent.click(screen.getByRole("button", { name: "Back to viewer" }));
+    fireEvent.click(await screen.findByRole("tab", { name: "AI Chat" }));
+    const originalFetch = fetchMock.getMockImplementation();
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input) === "/api/ai/chat/stream") {
+        return json({
+          error: "__RAW_PROCESS_TREE_SENTINEL__ internal cleanup output",
+          details: {
+            processTreeUnverified: true,
+            run: {
+              accessMode: "repoWrite",
+              entry: "codexCli",
+              substrate: "codexCli",
+              auditState: "unverified",
+              changedPaths: [],
+              repairs: [],
+              warnings: ["audit skipped"],
+            },
+          },
+        }, 502);
+      }
+      return originalFetch ? originalFetch(input, init) : json({ error: "missing fetch" }, 500);
+    });
+
+    fireEvent.change(await screen.findByLabelText("AI Chat message"), { target: { value: "Run the Current repo task." } });
+    fireEvent.click(screen.getByRole("button", { name: "Send AI Chat message" }));
+
+    const guidance = "AI Chat stopped unexpectedly, and Local Reader App could not confirm that the CLI process ended. Close the CLI, review the Current repo, restart the Local Reader App server, and reload the page before continuing.";
+    expect((await screen.findAllByText(guidance)).length).toBeGreaterThan(0);
+    expect(await screen.findByText("AI Entry is not ready.")).toBeTruthy();
+    expect(document.body.textContent || "").not.toContain("__RAW_PROCESS_TREE_SENTINEL__");
+    expect(screen.queryByRole("button", { name: "Retry AI Chat request" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Send AI Chat message" })).toBeNull();
+  });
+
   it("does not restore one-shot selected paths after cancelling a stream", async () => {
     render(<App />);
     expect(await screen.findByRole("heading", { name: "Hello" })).toBeTruthy();
@@ -1873,6 +2178,9 @@ describe("App", () => {
     expect(aiChatPanel.querySelector(".ai-chat-status")).toBeNull();
     expect(within(aiChatPanel).queryByText("Codex CLI")).toBeNull();
     expect(within(aiChatPanel).queryByText("codex / medium")).toBeNull();
+    const selectedModel = within(aiChatPanel).getByLabelText("AI Chat model selection");
+    expect(selectedModel.textContent).toContain("gpt-5.5-codex");
+    expect(selectedModel.textContent).toContain("medium");
     const actionRailLabels = Array.from(aiChatPanel.querySelectorAll(".ai-chat-action-rail button")).map((button) => button.getAttribute("aria-label"));
     expect(actionRailLabels).toEqual(["Upload file", "Voice input", "Send AI Chat message"]);
     fireEvent.change(messageInput, { target: { value: "Draft" } });
@@ -1917,8 +2225,13 @@ describe("App", () => {
     const streamBody = parseJsonBody(streamCalls[0]?.[1]?.body);
     expect(streamBody).toMatchObject({
       attachments: [expect.objectContaining({ name: "note.md", contentIncluded: true, content: "Attached note" })],
-      modelBehavior: { kind: "intelligence", level: "medium" },
+      target: {
+        kind: "codexCli",
+        entry: "codexCli",
+        selection: { model: "gpt-5.5-codex", effort: "medium", catalogRevision: "codex-catalog-v1", setupGeneration: 1 },
+      },
     });
+    expect(streamBody).not.toHaveProperty("modelBehavior");
 
     fireEvent.click(screen.getByRole("tab", { name: "Outline" }));
     fireEvent.click(screen.getByRole("tab", { name: "AI Chat" }));
@@ -1975,6 +2288,220 @@ describe("App", () => {
     expect(await screen.findByText("claudeCli says the active file says hello.")).toBeTruthy();
   });
 
+  it("reuses Model behavior for CLI authentication, accepts dynamic effort ids, and fails closed on a stale catalog", async () => {
+    render(<App />);
+    expect(await screen.findByRole("heading", { name: "Hello" })).toBeTruthy();
+    fireEvent.click(openSettingsButton());
+    fireEvent.click(await screen.findByRole("tab", { name: "AI Chat" }));
+
+    await activateReadyCliEntry();
+    expect(screen.getByRole("heading", { name: "CLI Readiness" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Authentication and model" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "Model behavior" })).toBeNull();
+
+    const setup = await screen.findByLabelText(["Co", "dex CLI authentication and model settings"].join(""));
+    expect(within(setup).queryByRole("button", { name: "Sign in" })).toBeNull();
+    const modelSelect = within(setup).getByLabelText(["Co", "dex CLI model"].join("")) as HTMLSelectElement;
+    fireEvent.change(modelSelect, { target: { value: "gpt-5.5-codex" } });
+    const effortSelect = within(setup).getByLabelText(["Co", "dex CLI reasoning effort"].join("")) as HTMLSelectElement;
+    expect(within(effortSelect).getByRole("option", { name: "Max" })).toBeTruthy();
+    expect(within(effortSelect).getByRole("option", { name: "Ultra" })).toBeTruthy();
+    expect(within(effortSelect).getByRole("option", { name: "Experimental depth" })).toBeTruthy();
+    fireEvent.change(effortSelect, { target: { value: "experimental-depth" } });
+
+    const readiness = screen.getByLabelText(["Co", "dex CLI readiness"].join(""));
+    fireEvent.click(within(readiness).getByRole("button", { name: "Check readiness" }));
+    await waitFor(() => expect(within(readiness).getByRole("button", { name: "Check again" })).toBeTruthy());
+    expect(parseJsonBody(fetchCallsTo("/api/ai/entry-readiness").at(-1)?.[1]?.body)).toMatchObject({
+      entry: "codexCli",
+      selection: { model: "gpt-5.5-codex", effort: "experimental-depth", catalogRevision: "codex-catalog-v1", setupGeneration: 1 },
+    });
+
+    cliSetups.codexCli = {
+      ...cliSetups.codexCli,
+      message: "Catalog changed and requires an explicit model selection.",
+      catalog: {
+        ...cliSetups.codexCli.catalog!,
+        revision: "codex-catalog-v2",
+        models: [cliSetups.codexCli.catalog!.models[1]],
+      },
+    };
+    fireEvent.click(within(setup).getByRole("button", { name: "Check again" }));
+    await waitFor(() => expect((within(setup).getByLabelText(["Co", "dex CLI model"].join("")) as HTMLSelectElement).value).toBe(""));
+    expect((within(readiness).getByRole("button", { name: "Check readiness" }) as HTMLButtonElement).disabled).toBe(true);
+
+    fireEvent.click(screen.getByRole("button", { name: "Back to viewer" }));
+    fireEvent.click(await screen.findByRole("tab", { name: "AI Chat" }));
+    expect(await screen.findByText("AI Entry is not ready.")).toBeTruthy();
+  });
+
+  it("does not apply stale CLI readiness after the selected effort changes", async () => {
+    render(<App />);
+    expect(await screen.findByRole("heading", { name: "Hello" })).toBeTruthy();
+    fireEvent.click(openSettingsButton());
+    fireEvent.click(await screen.findByRole("tab", { name: "AI Chat" }));
+    await activateReadyCliEntry();
+    const setup = await screen.findByLabelText(["Co", "dex CLI authentication and model settings"].join(""));
+
+    const originalFetch = fetchMock.getMockImplementation();
+    let releaseReadiness!: (response: Response) => void;
+    let markReadinessStarted!: () => void;
+    const readinessStarted = new Promise<void>((resolve) => { markReadinessStarted = resolve; });
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input) === "/api/ai/entry-readiness") {
+        markReadinessStarted();
+        return new Promise<Response>((resolve) => { releaseReadiness = resolve; });
+      }
+      return originalFetch ? originalFetch(input, init) : json({ error: "missing fetch" }, 500);
+    });
+
+    const readiness = screen.getByLabelText(["Co", "dex CLI readiness"].join(""));
+    fireEvent.click(within(readiness).getByRole("button", { name: "Check again" }));
+    await readinessStarted;
+    fireEvent.change(within(setup).getByLabelText(["Co", "dex CLI reasoning effort"].join("")), { target: { value: "ultra" } });
+    releaseReadiness(json(aiEntryReadiness("codexCli")));
+
+    await waitFor(() => expect(within(readiness).getByRole("button", { name: "Check readiness" })).toBeTruthy());
+    expect(within(readiness).getAllByText("Not tested").length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole("button", { name: "Back to viewer" }));
+    fireEvent.click(await screen.findByRole("tab", { name: "AI Chat" }));
+    expect(await screen.findByText("AI Entry is not ready.")).toBeTruthy();
+  });
+
+  it("does not apply stale CLI readiness after setup generation changes and the same pair is reselected", async () => {
+    render(<App />);
+    expect(await screen.findByRole("heading", { name: "Hello" })).toBeTruthy();
+    fireEvent.click(openSettingsButton());
+    fireEvent.click(await screen.findByRole("tab", { name: "AI Chat" }));
+    await activateReadyCliEntry();
+    const setup = await screen.findByLabelText(["Co", "dex CLI authentication and model settings"].join(""));
+    const model = within(setup).getByLabelText(["Co", "dex CLI model"].join(""));
+
+    const originalFetch = fetchMock.getMockImplementation();
+    let releaseReadiness!: (response: Response) => void;
+    let markReadinessStarted!: () => void;
+    const readinessStarted = new Promise<void>((resolve) => { markReadinessStarted = resolve; });
+    let delayedFirstReadiness = true;
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input) === "/api/ai/entry-readiness") {
+        if (delayedFirstReadiness) {
+          delayedFirstReadiness = false;
+          markReadinessStarted();
+          return new Promise<Response>((resolve) => { releaseReadiness = resolve; });
+        }
+      }
+      return originalFetch ? originalFetch(input, init) : json({ error: "missing fetch" }, 500);
+    });
+
+    const readiness = screen.getByLabelText(["Co", "dex CLI readiness"].join(""));
+    fireEvent.click(within(readiness).getByRole("button", { name: "Check again" }));
+    await readinessStarted;
+    cliSetups.codexCli = { ...cliSetups.codexCli, setupGeneration: cliSetups.codexCli.setupGeneration + 1 };
+    fireEvent.click(within(setup).getByRole("button", { name: "Check again" }));
+    await waitFor(() => expect((model as HTMLSelectElement).value).toBe("gpt-5.5-codex"));
+    await waitFor(() => expect(within(readiness).getByRole("button", { name: "Check again" })).toBeTruthy());
+    releaseReadiness(json(aiEntryReadiness("codexCli")));
+
+    await waitFor(() => expect(within(readiness).getAllByText("Success").length).toBeGreaterThan(0));
+  });
+
+  it("shows CLI sign-in only after inspection reports loginRequired and supports cancel", async () => {
+    cliSetups.codexCli = {
+      ...cliSetups.codexCli,
+      phase: "loginRequired",
+      message: "Codex CLI is installed. Sign in with ChatGPT to load the supported model catalog.",
+      authentication: { state: "idle" },
+      catalog: undefined,
+    };
+    render(<App />);
+    expect(await screen.findByRole("heading", { name: "Hello" })).toBeTruthy();
+    fireEvent.click(openSettingsButton());
+    fireEvent.click(await screen.findByRole("tab", { name: "AI Chat" }));
+
+    const codexEntry = screen.getByLabelText(["Co", "dex CLI entry"].join(""));
+    fireEvent.click(within(codexEntry).getByRole("button", { name: "Set active" }));
+    const setup = await screen.findByLabelText(["Co", "dex CLI authentication and model settings"].join(""));
+    fireEvent.click(within(setup).getByRole("button", { name: "Sign in" }));
+
+    expect(await within(setup).findByText("TEST-CODE")).toBeTruthy();
+    expect(within(setup).getByRole("link", { name: "Open sign-in page" }).getAttribute("href")).toBe("https://example.test/device");
+    expect(fetchCallsTo("/api/ai/cli-setup/auth/start")).toHaveLength(1);
+    fireEvent.click(within(setup).getByRole("button", { name: "Cancel sign-in" }));
+    await waitFor(() => expect(within(setup).getByRole("button", { name: "Sign in" })).toBeTruthy());
+    expect(fetchCallsTo("/api/ai/cli-setup/auth/cancel")).toHaveLength(1);
+
+    fireEvent.click(within(setup).getByRole("button", { name: "Sign in" }));
+    expect(await within(setup).findByText("TEST-CODE")).toBeTruthy();
+    cliSetups.codexCli = {
+      ...createCliSetupCollection().codexCli,
+      setupGeneration: cliSetups.codexCli.setupGeneration + 1,
+    };
+    await act(async () => {
+      await new Promise((resolve) => window.setTimeout(resolve, 1_100));
+    });
+    await waitFor(() => expect((within(setup).getByLabelText(["Co", "dex CLI model"].join("")) as HTMLSelectElement).disabled).toBe(false));
+    expect(within(setup).queryByText("TEST-CODE")).toBeNull();
+  });
+
+  it("polls both CLI snapshots and applies a global fatal invalidation to the inactive entry", async () => {
+    render(<App />);
+    expect(await screen.findByRole("heading", { name: "Hello" })).toBeTruthy();
+    fireEvent.click(openSettingsButton());
+    fireEvent.click(await screen.findByRole("tab", { name: "AI Chat" }));
+    await activateReadyCliEntry("codexCli");
+
+    cliSetups.codexCli = {
+      ...cliSetups.codexCli,
+      phase: "unavailable",
+      message: "Global CLI process ownership was lost.",
+      authentication: { state: "failed", message: "Restart Local Reader App." },
+      catalog: undefined,
+      failureReason: "processTreeUnverified",
+    };
+    cliSetups.claudeCli = {
+      ...cliSetups.claudeCli,
+      phase: "unavailable",
+      message: "Inactive Claude snapshot was invalidated by the global fatal latch.",
+      authentication: { state: "failed", message: "Restart Local Reader App." },
+      catalog: undefined,
+      failureReason: "processTreeUnverified",
+    };
+    await act(async () => {
+      await new Promise((resolve) => window.setTimeout(resolve, 1_100));
+    });
+
+    expect(await screen.findByText("Global CLI process ownership was lost.")).toBeTruthy();
+    const claudeEntry = screen.getByLabelText("Claude Code CLI entry");
+    fireEvent.click(within(claudeEntry).getByRole("button", { name: "Set active" }));
+    expect(await screen.findByText("Inactive Claude snapshot was invalidated by the global fatal latch.")).toBeTruthy();
+    expect((screen.getByLabelText("Claude Code CLI model") as HTMLSelectElement).disabled).toBe(true);
+  });
+
+  it("keeps the managed latest-release check explicit and reruns readiness after confirmation", async () => {
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    render(<App />);
+    expect(await screen.findByRole("heading", { name: "Hello" })).toBeTruthy();
+    fireEvent.click(openSettingsButton());
+    fireEvent.click(await screen.findByRole("tab", { name: "AI Chat" }));
+    await activateReadyCliEntry();
+
+    const setup = await screen.findByLabelText(["Co", "dex CLI authentication and model settings"].join(""));
+    const readinessCallsBeforeUpdate = fetchCallsTo("/api/ai/entry-readiness").length;
+    expect(within(setup).getByText("The CLI has no availability-only check. After confirmation, its fixed updater checks for and applies a newer release if one is available.")).toBeTruthy();
+    fireEvent.click(within(setup).getByRole("button", { name: "Check and apply latest" }));
+
+    const confirmUpdate = await within(setup).findByRole("button", { name: "Run managed updater" });
+    expect(fetchCallsTo("/api/ai/cli-setup/update/prepare")).toHaveLength(1);
+    expect((within(setup).getByLabelText(["Co", "dex CLI model"].join("")) as HTMLSelectElement).disabled).toBe(true);
+    fireEvent.click(confirmUpdate);
+
+    await waitFor(() => expect(fetchCallsTo("/api/ai/cli-setup/update/confirm")).toHaveLength(1));
+    expect(confirm).toHaveBeenCalledWith(expect.stringContaining("check for and apply a newer release if available"));
+    await waitFor(() => expect(fetchCallsTo("/api/ai/entry-readiness")).toHaveLength(readinessCallsBeforeUpdate + 1));
+    await waitFor(() => expect(within(setup).getAllByText("Updater completed").length).toBeGreaterThan(0));
+    expect((within(setup).getByLabelText(["Co", "dex CLI model"].join("")) as HTMLSelectElement).value).toBe("gpt-5.5-codex");
+  });
+
   it("enables Codex CLI and Claude Code CLI after readiness succeeds", async () => {
     render(<App />);
     expect(await screen.findByRole("heading", { name: "Hello" })).toBeTruthy();
@@ -1982,14 +2509,12 @@ describe("App", () => {
     expect(await screen.findByRole("heading", { name: "Settings" })).toBeTruthy();
     fireEvent.click(screen.getByRole("tab", { name: "AI Chat" }));
 
-    const codexEntry = screen.getByLabelText(["Co", "dex CLI entry"].join(""));
-    fireEvent.click(within(codexEntry).getByRole("button", { name: "Set active" }));
-    const codexAuth = screen.getByLabelText(["Co", "dex CLI readiness"].join(""));
+    const codexAuth = await activateReadyCliEntry();
     expect(screen.getByRole("heading", { name: "CLI Readiness" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Authentication and model" })).toBeTruthy();
     const codexDetails = screen.getByLabelText(["Co", "dex CLI readiness details"].join("")) as HTMLDetailsElement;
     expect(codexDetails.open).toBe(false);
     expect(within(codexDetails).getByLabelText("Readiness checklist").textContent).toContain("Current repo-only boundary");
-    await waitFor(() => expect(within(codexAuth).getByRole("button", { name: "Check again" })).toBeTruthy());
     expect(within(codexAuth).getAllByText("Success").length).toBeGreaterThan(0);
     expect(fetchCallsTo("/api/ai/entry-readiness")).toHaveLength(1);
 
@@ -1999,10 +2524,7 @@ describe("App", () => {
 
     fireEvent.click(openSettingsButton());
     fireEvent.click(await screen.findByRole("tab", { name: "AI Chat" }));
-    const claudeEntry = screen.getByLabelText("Claude Code CLI entry");
-    fireEvent.click(within(claudeEntry).getByRole("button", { name: "Set active" }));
-    const claudeAuth = screen.getByLabelText("Claude Code CLI readiness");
-    await waitFor(() => expect(within(claudeAuth).getByRole("button", { name: "Check again" })).toBeTruthy());
+    const claudeAuth = await activateReadyCliEntry("claudeCli");
     expect(within(claudeAuth).getAllByText("Success").length).toBeGreaterThan(0);
     expect(fetchCallsTo("/api/ai/entry-readiness")).toHaveLength(2);
 
@@ -2045,7 +2567,16 @@ async function waitForScopedButton(container: HTMLElement, name: string): Promis
 async function activateReadyCliEntry(entry: "codexCli" | "claudeCli" = "codexCli"): Promise<HTMLElement> {
   const label = entry === "codexCli" ? ["Co", "dex CLI"].join("") : "Claude Code CLI";
   const card = screen.getByLabelText(`${label} entry`);
-  fireEvent.click(within(card).getByRole("button", { name: "Set active" }));
+  const activate = within(card).queryByRole("button", { name: "Set active" });
+  if (activate) {
+    fireEvent.click(activate);
+  } else {
+    const setup = await screen.findByLabelText(`${label} authentication and model settings`);
+    fireEvent.click(within(setup).getByRole("button", { name: "Check again" }));
+  }
+  const modelSelect = await screen.findByLabelText(`${label} model`) as HTMLSelectElement;
+  await waitFor(() => expect(modelSelect.disabled).toBe(false));
+  await waitFor(() => expect(modelSelect.value).toBe(entry === "codexCli" ? "gpt-5.5-codex" : "claude-sonnet-4-5"));
   const readiness = await screen.findByLabelText(`${label} readiness`);
   await waitFor(() => expect(within(readiness).getByRole("button", { name: "Check again" })).toBeTruthy());
   return readiness;
@@ -2195,6 +2726,64 @@ function repositoryValidation() {
       { id: "config:writable", label: "Config file is writable", status: "ready", message: "Ready" },
       { id: "yaml:generated", label: "YAML can be generated", status: "ready", message: "Ready" },
     ],
+  };
+}
+
+function createCliSetupCollection(): Record<AICliEntryKind, AICliSetupSnapshot> {
+  const effortOptions = [
+    { id: "low", label: "Low", description: null, isDefault: false },
+    { id: "medium", label: "Medium", description: null, isDefault: true },
+    { id: "high", label: "High", description: null, isDefault: false },
+    { id: "xhigh", label: "X High", description: null, isDefault: false },
+    { id: "max", label: "Max", description: null, isDefault: false },
+    { id: "ultra", label: "Ultra", description: null, isDefault: false },
+    { id: "experimental-depth", label: "Experimental depth", description: "Unknown future effort remains selectable.", isDefault: false },
+  ];
+  return {
+    codexCli: {
+      entry: "codexCli" as const,
+      setupGeneration: 1,
+      phase: "ready" as const,
+      message: "Codex CLI authentication and model catalog are ready.",
+      cliVersion: "codex-cli 0.144.1",
+      checkedAt: "2026-07-16T00:00:00.000Z",
+      compatibility: "compatible" as const,
+      managedUpdateSupported: true,
+      authentication: { state: "succeeded" as const, message: "Signed in." },
+      update: { state: "idle" as const },
+      catalog: {
+        entry: "codexCli" as const,
+        cliVersion: "codex-cli 0.144.1",
+        revision: "codex-catalog-v1",
+        fetchedAt: "2026-07-16T00:00:00.000Z",
+        models: [
+          { id: "gpt-5.5-codex", label: "GPT-5.5 Codex", description: "Primary coding model", isDefault: true, defaultEffort: "medium", efforts: effortOptions },
+          { id: "gpt-5.4-mini", label: "GPT-5.4 mini", description: null, isDefault: false, defaultEffort: "low", efforts: effortOptions.slice(0, 3) },
+        ],
+      },
+    },
+    claudeCli: {
+      entry: "claudeCli" as const,
+      setupGeneration: 1,
+      phase: "ready" as const,
+      message: "Claude Code CLI setup foundation is available for mock validation.",
+      cliVersion: "2.1.199",
+      checkedAt: "2026-07-16T00:00:00.000Z",
+      compatibility: "compatible" as const,
+      managedUpdateSupported: true,
+      authentication: { state: "succeeded" as const, message: "Mock authentication state only." },
+      update: { state: "idle" as const },
+      foundationOnly: true,
+      catalog: {
+        entry: "claudeCli" as const,
+        cliVersion: "2.1.199",
+        revision: "claude-catalog-v1",
+        fetchedAt: "2026-07-16T00:00:00.000Z",
+        models: [
+          { id: "claude-sonnet-4-5", label: "Claude Sonnet 4.5", description: "Mocked SDK catalog entry", isDefault: true, defaultEffort: "medium", efforts: effortOptions.slice(0, 5) },
+        ],
+      },
+    },
   };
 }
 

@@ -28,11 +28,29 @@ type ProbeOptions = {
 };
 
 export async function probeAIEntryReadiness(entry: AIEntryKind, options: ProbeOptions = {}): Promise<AIEntryReadiness> {
+  const platform = options.platform || process.platform;
+  if ((entry === "codexCli" || entry === "claudeCli") && options.signal?.aborted) {
+    throw new HttpError(499, "CLI readiness request was canceled.");
+  }
+  if ((entry === "codexCli" || entry === "claudeCli") && platform === "win32") {
+    return unsupportedNativeWindowsCliReadiness(entry);
+  }
   if (entry === "codexCli") return probeCxReadiness(options.runner || runAICommand, options.repo, options.signal);
-  if (entry === "claudeCli") return probeClaudeReadiness(options.runner || runAICommand, options.repo, options.signal, options.platform || process.platform);
+  if (entry === "claudeCli") return probeClaudeReadiness(options.runner || runAICommand, options.repo, options.signal, platform);
   if (entry === "aiApi") return probeProviderReadiness(options.provider, options.repo, options.signal, options.providerRequester);
   if (entry === "localAi") return probeLocalReadiness(options.provider, options.repo, options.signal, options.providerRequester);
   throw new HttpError(400, "Unknown AI entry.");
+}
+
+function unsupportedNativeWindowsCliReadiness(entry: AICliEntryKind): AIEntryReadiness {
+  const message = "Native Windows CLI execution is unavailable until Local Reader App can own and verify the complete CLI process tree.";
+  return cliReadinessResult(entry, entry === "codexCli" ? "codex" : "claude", "", false, [
+    check("binary", "Binary", false, message),
+    check("auth", "Existing CLI auth", false, message),
+    check("wrapper", "Current repo CLI execution", false, message),
+    check("workspace", "Workspace", false, message),
+    check("execution-policy", "Readiness execution policy", true, "No CLI process was started."),
+  ]);
 }
 
 export async function probeCliEntryReadiness(entry: AICliEntryKind, runner: AICommandRunner = runAICommand): Promise<AIEntryReadiness> {
@@ -104,6 +122,7 @@ async function probeClaudeReadiness(runner: AICommandRunner, repo: RepositoryCon
 }
 
 async function runClaudeAuthenticationProbe(runner: AICommandRunner, cwd: string, signal?: AbortSignal): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (signal?.aborted) throw new HttpError(499, "CLI readiness request was canceled.");
   try {
     const result = await runner("claude", claudeAuthenticationProbeArgs(), {
       cwd,
@@ -119,6 +138,8 @@ async function runClaudeAuthenticationProbe(runner: AICommandRunner, cwd: string
     }
     return { ok: true };
   } catch (error) {
+    rethrowUnverifiedProcessTree(error);
+    if (signal?.aborted) throw error;
     const message = error instanceof Error ? error.message : String(error);
     return { ok: false, error: sanitizeCliText(message) || "Claude Code authentication probe failed." };
   }
@@ -190,12 +211,14 @@ async function readinessWorkspace(repo: RepositoryConfig | undefined): Promise<{
     await access(workspace.root, constants.W_OK);
     return { cwd: workspace.root, ready: true, message: "Active repository root is available and writable by the Local Reader App process.", repoScoped: true, writable: true };
   } catch (error) {
+    rethrowUnverifiedProcessTree(error);
     const message = error instanceof Error ? error.message : String(error);
     return { cwd: await ensureSafeCwd(), ready: false, message: sanitizeCliText(message), repoScoped: false, writable: false };
   }
 }
 
 async function runProbe(runner: AICommandRunner, binary: string, args: string[], cwd: string, entry: AIEntryKind, signal?: AbortSignal): Promise<{ ok: true; stdout: string; stderr: string } | { ok: false; stdout: string; stderr: string; error: string }> {
+  if (signal?.aborted) throw new HttpError(499, "CLI readiness request was canceled.");
   try {
     const result = await runner(binary, args, {
       cwd,
@@ -206,6 +229,8 @@ async function runProbe(runner: AICommandRunner, binary: string, args: string[],
     });
     return { ok: true, stdout: result.stdout, stderr: result.stderr };
   } catch (error) {
+    rethrowUnverifiedProcessTree(error);
+    if (signal?.aborted) throw error;
     const message = error instanceof Error ? error.message : String(error);
     return { ok: false, stdout: "", stderr: "", error: sanitizeCliText(message) };
   }
@@ -231,13 +256,25 @@ function codexHelpSupportsRepoWrite(help: string): boolean {
 }
 
 async function runCodexMcpProbe(runner: AICommandRunner, cwd: string, signal?: AbortSignal): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (signal?.aborted) throw new HttpError(499, "CLI readiness request was canceled.");
   try {
     await probeCodexProjectMcpServers(runner, cwd, signal);
     return { ok: true };
   } catch (error) {
+    rethrowUnverifiedProcessTree(error);
+    if (signal?.aborted) throw error;
     const message = error instanceof Error ? error.message : String(error);
     return { ok: false, error: sanitizeCliText(message) };
   }
+}
+
+function rethrowUnverifiedProcessTree(error: unknown): void {
+  if (
+    error instanceof HttpError
+    && error.details
+    && typeof error.details === "object"
+    && (error.details as { processTreeUnverified?: unknown }).processTreeUnverified === true
+  ) throw error;
 }
 
 function claudeHelpSupportsRepoWrite(help: string): boolean {

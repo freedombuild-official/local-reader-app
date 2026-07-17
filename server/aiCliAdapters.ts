@@ -14,6 +14,7 @@ import type {
   AIChatRunSummary,
   AIConnectionStatus,
   AIEntryKind,
+  AICliModelSelection,
   AIModelBehavior,
   RepositoryConfig,
 } from "./types.js";
@@ -27,6 +28,7 @@ type RepoWriteChatRequest = {
   modelBehavior?: AIModelBehavior;
   runner?: AICommandRunner;
   signal?: AbortSignal;
+  beforeCliSpawn: () => Promise<AICommandLaunch>;
 };
 
 type WorkspaceFileFingerprint = {
@@ -118,16 +120,34 @@ export async function requestRepoWriteAIChatCompletion(request: RepoWriteChatReq
   const runner = request.runner || runAICommand;
   const workspace = await resolveAIWorkspace(request.repo);
   const before = await collectWorkspaceSnapshot(workspace.root);
-  const prompt = buildRepoWritePrompt(request.context, request.messages, request.attachments || [], request.modelBehavior);
+  const prompt = buildRepoWritePrompt(request.context, request.messages, request.attachments || [], undefined);
   const entry = request.target.entry;
   const substrate = request.target.kind;
   let resultText = "";
   let executionError: unknown;
   try {
-    resultText = substrate === "codexCli"
-      ? await runCodexChat(runner, workspace.root, prompt, request.signal)
-      : await runClaudeChat(runner, workspace.root, prompt, request.signal);
+    if (substrate === "codexCli") {
+      resultText = await runCodexChat(runner, workspace.root, prompt, request.target.selection, request.signal, request.beforeCliSpawn);
+    } else {
+      resultText = await runClaudeChat(runner, workspace.root, prompt, request.target.selection, request.signal, request.beforeCliSpawn);
+    }
   } catch (error) {
+    const httpError = userFacingCliError(entry, error);
+    if (hasUnverifiedProcessTree(httpError)) {
+      const run: AIChatRunSummary = {
+        accessMode: "repoWrite",
+        entry,
+        substrate,
+        auditState: "unverified",
+        changedPaths: [],
+        repairs: [],
+        warnings: [
+          ...before.warnings,
+          "Repository change audit was skipped because Local Reader App could not confirm that the CLI process tree stopped.",
+        ],
+      };
+      throw new HttpError(httpError.status, httpError.message, { run, processTreeUnverified: true });
+    }
     executionError = error;
   }
 
@@ -150,8 +170,16 @@ export async function requestRepoWriteAIChatCompletion(request: RepoWriteChatReq
   };
   if (executionError) {
     const httpError = userFacingCliError(entry, executionError);
-    const processTreeUnverified = Boolean(httpError.details && typeof httpError.details === "object" && (httpError.details as { processTreeUnverified?: unknown }).processTreeUnverified === true);
-    throw new HttpError(httpError.status, httpError.message, { run, ...(processTreeUnverified ? { processTreeUnverified: true } : {}) });
+    const detail = httpError.details && typeof httpError.details === "object"
+      ? httpError.details as { code?: unknown; processTreeUnverified?: unknown }
+      : undefined;
+    const processTreeUnverified = detail?.processTreeUnverified === true;
+    const code = typeof detail?.code === "string" ? detail.code : undefined;
+    throw new HttpError(httpError.status, httpError.message, {
+      run,
+      ...(code ? { code } : {}),
+      ...(processTreeUnverified ? { processTreeUnverified: true } : {}),
+    });
   }
   if (!finalAnswer.content) throw new HttpError(502, "CLI adapter returned an empty response.", { run });
   return { content: finalAnswer.content, status: status("ready", "CLI response received."), run };
@@ -197,17 +225,31 @@ export async function runAICommand(binary: string, args: string[], options: AICo
       terminate(new HttpError(502, error.code === "EPIPE" ? "CLI closed its input before the request was sent." : "CLI input failed."));
     });
     child.once("error", (error) => {
-      if (!terminationError) finishReject(new HttpError(502, userFacingCliFailure(binary, error)));
+      if (!terminationError) terminate(new HttpError(502, userFacingCliFailure(binary, error)));
     });
-    child.once("close", (code) => {
+    child.once("close", (code) => { void finishAfterClose(code); });
+    async function finishAfterClose(code: number | null): Promise<void> {
       if (terminationError || settled) return;
+      try {
+        // A CLI or owned worker can exit before one of its descendants. The
+        // detached POSIX process group remains ours until every member exits.
+        await terminateChildTree(child);
+      } catch {
+        finishReject(new HttpError(502, "Local Reader App could not confirm that the CLI process stopped. Close the CLI, review the Current repo, restart the Local Reader App server, and reload the page before trying again.", { processTreeUnverified: true }));
+        return;
+      }
       const result = { stdout, stderr };
       if (code !== 0) {
-        finishReject(new HttpError(502, userFacingCliFailure(binary, [stdout, stderr].filter(Boolean).join("\n"))));
+        const rawFailure = [stdout, stderr].filter(Boolean).join("\n");
+        finishReject(new HttpError(
+          502,
+          userFacingCliFailure(binary, rawFailure),
+          missingCliCapabilityOutput(rawFailure) ? { cliFailureKind: "missingCapability" } : undefined,
+        ));
         return;
       }
       finishResolve(result);
-    });
+    }
     const terminate = (error: HttpError) => {
       if (terminationError) return;
       terminationError = error;
@@ -247,6 +289,10 @@ export async function runAICommand(binary: string, args: string[], options: AICo
       terminate(new HttpError(502, "CLI input failed."));
     }
   });
+}
+
+function missingCliCapabilityOutput(value: string): boolean {
+  return /(?:unknown|unrecognized|invalid|no such)\s+(?:command|subcommand|option)\b/i.test(value);
 }
 
 export async function resolveAICommandLaunch(binary: string, args: string[], options: AICommandResolutionOptions = {}): Promise<AICommandLaunch> {
@@ -388,7 +434,9 @@ async function terminateChildTree(child: ChildProcess, platform: NodeJS.Platform
   const gracefulDeadline = Date.now() + 1_500;
   while (processGroupExists(child.pid) && Date.now() < gracefulDeadline) await delay(50);
   if (processGroupExists(child.pid)) signalPosixProcessGroup(child, "SIGKILL");
-  while (processGroupExists(child.pid)) await delay(50);
+  const forcedDeadline = Date.now() + 2_000;
+  while (processGroupExists(child.pid) && Date.now() < forcedDeadline) await delay(50);
+  if (processGroupExists(child.pid)) throw new Error("POSIX process group termination could not be verified.");
 }
 
 function signalPosixProcessGroup(child: ChildProcess, signal: NodeJS.Signals): void {
@@ -502,7 +550,7 @@ export function parseCodexMcpServers(stdout: string): CodexMcpDisableSpec[] {
   return Array.from(new Map(servers.map((server) => [server.name, server])).values()).sort((left, right) => left.name.localeCompare(right.name));
 }
 
-export async function probeCodexProjectMcpServers(runner: AICommandRunner, cwd: string, signal?: AbortSignal): Promise<CodexMcpDisableSpec[]> {
+export async function probeCodexProjectMcpServers(runner: AICommandRunner, cwd: string, signal?: AbortSignal, launch: AICommandLaunch = { binary: "codex", args: [] }): Promise<CodexMcpDisableSpec[]> {
   const probeHome = await mkdtemp(path.join(tmpdir(), "reader-wiki-codex-config-probe-"));
   try {
     await chmod(probeHome, 0o700);
@@ -511,7 +559,7 @@ export async function probeCodexProjectMcpServers(runner: AICommandRunner, cwd: 
       "trust_level = \"trusted\"",
       "",
     ].join("\n"), { encoding: "utf8", mode: 0o600 });
-    const result = await runner("codex", codexMcpListArgs(), {
+    const result = await runner(launch.binary, [...launch.args, ...codexMcpListArgs()], {
       cwd,
       env: safeCliEnv("codexCli", { CODEX_HOME: probeHome }),
       timeoutMs: 30_000,
@@ -520,7 +568,7 @@ export async function probeCodexProjectMcpServers(runner: AICommandRunner, cwd: 
     });
     return parseCodexMcpServers(result.stdout);
   } catch (error) {
-    if (error instanceof HttpError && error.status === 499) throw error;
+    if (error instanceof HttpError && (error.status === 499 || hasUnverifiedProcessTree(error))) throw error;
     throw new HttpError(502, "Codex project MCP isolation preflight failed.");
   } finally {
     await rm(probeHome, { recursive: true, force: true });
@@ -603,11 +651,26 @@ export function claudeAuthenticationProbeArgs(): string[] {
   ];
 }
 
-async function runCodexChat(runner: AICommandRunner, cwd: string, prompt: string, signal?: AbortSignal): Promise<string> {
-  const disabledMcpServers = await probeCodexProjectMcpServers(runner, cwd, signal);
-  const result = await runner("codex", [
+async function runCodexChat(
+  runner: AICommandRunner,
+  cwd: string,
+  prompt: string,
+  selection: AICliModelSelection,
+  signal?: AbortSignal,
+  beforeMainSpawn?: () => Promise<AICommandLaunch>,
+): Promise<string> {
+  if (!beforeMainSpawn) throw new HttpError(500, "CLI execution is missing its server-owned executable lease.");
+  const discoveryLaunch = await beforeMainSpawn();
+  const disabledMcpServers = await probeCodexProjectMcpServers(runner, cwd, signal, discoveryLaunch);
+  const modelLaunch = await beforeMainSpawn();
+  const result = await runner(modelLaunch.binary, [
+    ...modelLaunch.args,
     "exec",
     ...codexCurrentRepoArgs(undefined, disabledMcpServers),
+    "--model",
+    selection.model,
+    "--config",
+    `model_reasoning_effort=${JSON.stringify(selection.effort)}`,
     "--ephemeral",
     "--skip-git-repo-check",
     "--json",
@@ -625,9 +688,22 @@ async function runCodexChat(runner: AICommandRunner, cwd: string, prompt: string
   return parseCodexJsonl(result.stdout);
 }
 
-async function runClaudeChat(runner: AICommandRunner, cwd: string, prompt: string, signal?: AbortSignal): Promise<string> {
-  const result = await runner("claude", [
+async function runClaudeChat(
+  runner: AICommandRunner,
+  cwd: string,
+  prompt: string,
+  selection: AICliModelSelection,
+  signal?: AbortSignal,
+  beforeMainSpawn?: () => Promise<AICommandLaunch>,
+): Promise<string> {
+  if (!beforeMainSpawn) throw new HttpError(500, "CLI execution is missing its server-owned executable lease.");
+  const modelLaunch = await beforeMainSpawn();
+  const result = await runner(modelLaunch.binary, [
+    ...modelLaunch.args,
     ...claudeNonInteractiveBaseArgs(),
+    "--model",
+    selection.model,
+    ...(selection.effort === "default" ? [] : ["--effort", selection.effort]),
     "--tools",
     CLAUDE_CURRENT_REPO_TOOLS,
     "--permission-mode",
@@ -697,7 +773,26 @@ function parseClaudeJson(stdout: string): string {
 function userFacingCliError(entry: AIEntryKind, error: unknown): HttpError {
   const statusCode = error instanceof HttpError ? error.status : 502;
   const details = error instanceof HttpError ? error.details : undefined;
-  return new HttpError(statusCode, userFacingCliFailure(entry, error, statusCode), details);
+  const detailRecord = details && typeof details === "object" && !Array.isArray(details)
+    ? details as Record<string, unknown>
+    : undefined;
+  const classifiedDetails = isCliAuthenticationFailure(error)
+    ? { ...(detailRecord || {}), code: "authenticationInvalidated" }
+    : details;
+  return new HttpError(statusCode, userFacingCliFailure(entry, error, statusCode), classifiedDetails);
+}
+
+function isCliAuthenticationFailure(error: unknown): boolean {
+  const raw = error instanceof Error ? error.message : String(error || "");
+  return /invalid api key|not logged in|authenticat|credential|sign.?in|unauthorized|\b401\b/i.test(raw);
+}
+
+function hasUnverifiedProcessTree(error: HttpError): boolean {
+  return Boolean(
+    error.details
+    && typeof error.details === "object"
+    && (error.details as { processTreeUnverified?: unknown }).processTreeUnverified === true,
+  );
 }
 
 function userFacingCliFailure(entryOrBinary: AIEntryKind | string, error: unknown, statusCode = 502): string {
@@ -713,7 +808,7 @@ function userFacingCliFailure(entryOrBinary: AIEntryKind | string, error: unknow
   if (statusCode === 504 || /timed? out|time limit|timeout/.test(normalized)) {
     return `${label} did not finish before the time limit. Try a smaller request or try again.`;
   }
-  if (/invalid api key|not logged in|authentication|credential|sign.?in|unauthorized|\b401\b/.test(normalized)) {
+  if (/invalid api key|not logged in|authenticat|credential|sign.?in|unauthorized|\b401\b/.test(normalized)) {
     return `${label} could not authenticate. Open Settings, complete CLI sign-in, and check readiness again.`;
   }
   if (/output exceeded|byte limit|more information than (?:local reader app|reader-wiki)|response.*too large/.test(normalized)) {

@@ -175,6 +175,83 @@ export type CliAIEntrySettings = {
   readinessMessage?: string;
 };
 
+export type AICliSetupPhase =
+  | "idle"
+  | "inspecting"
+  | "notInstalled"
+  | "updateRequired"
+  | "loginRequired"
+  | "authenticating"
+  | "loadingCatalog"
+  | "ready"
+  | "unavailable"
+  | "failed";
+
+export type AICliEffortOption = {
+  id: string;
+  label: string;
+  description: string | null;
+  isDefault: boolean;
+};
+
+export type AICliModelOption = {
+  id: string;
+  label: string;
+  description: string | null;
+  isDefault: boolean;
+  defaultEffort: string;
+  efforts: AICliEffortOption[];
+};
+
+export type AICliModelCatalog = {
+  entry: AICliEntryKind;
+  cliVersion: string;
+  revision: string;
+  fetchedAt: string;
+  models: AICliModelOption[];
+};
+
+export type AICliModelSelection = {
+  model: string;
+  effort: string;
+  catalogRevision: string;
+  setupGeneration: number;
+};
+
+export type AICliAuthenticationState = {
+  state: "idle" | "waiting" | "succeeded" | "failed";
+  verificationUrl?: string;
+  userCode?: string;
+  startedAt?: string;
+  message?: string;
+};
+
+export type AICliUpdateState = {
+  state: "idle" | "confirmationRequired" | "running" | "succeeded" | "failed";
+  kind?: "compatibility" | "latest";
+  nonce?: string;
+  expiresAt?: string;
+  startedAt?: string;
+  finishedAt?: string;
+  message?: string;
+};
+
+export type AICliSetupSnapshot = {
+  entry: AICliEntryKind;
+  setupGeneration: number;
+  phase: AICliSetupPhase;
+  message: string;
+  cliVersion?: string;
+  checkedAt?: string;
+  compatibility: "unknown" | "compatible" | "updateRequired" | "unmanaged";
+  managedUpdateSupported?: boolean;
+  authentication: AICliAuthenticationState;
+  update: AICliUpdateState;
+  catalog?: AICliModelCatalog;
+  failureReason?: string;
+  foundationOnly?: boolean;
+};
+
 export type AIEntrySettings = AIProviderSettings | CliAIEntrySettings;
 
 export type AIReadinessCode =
@@ -192,6 +269,7 @@ export type AIReadinessCode =
   | "workspace_not_ready"
   | "unsupported_provider"
   | "readiness_renewal_failed"
+  | "authenticationInvalidated"
   | "success";
 
 export type AIReadinessSeverity = "info" | "success" | "warning" | "error";
@@ -296,8 +374,8 @@ export type AIChatSessionState = {
 };
 
 export type AIChatExecutionTarget =
-  | { kind: "codexCli"; entry: "codexCli"; status?: AIConnectionStatus }
-  | { kind: "claudeCli"; entry: "claudeCli"; status?: AIConnectionStatus }
+  | { kind: "codexCli"; entry: "codexCli"; selection: AICliModelSelection; status?: AIConnectionStatus }
+  | { kind: "claudeCli"; entry: "claudeCli"; selection: AICliModelSelection; status?: AIConnectionStatus }
   | { kind: "codexBackedProvider"; provider: AIProviderSettings; status?: AIConnectionStatus }
   | { kind: "codexBackedLocal"; provider: AIProviderSettings; status?: AIConnectionStatus };
 
@@ -315,6 +393,14 @@ export type AIChatRunSummary = {
   changedPaths: AIChangedPath[];
   repairs: string[];
   warnings: string[];
+};
+
+export type AIChatFailureDetails = {
+  code?: string;
+  entry?: AIEntryKind;
+  rollbackState?: string;
+  run?: AIChatRunSummary;
+  processTreeUnverified?: boolean;
 };
 
 export type AIEntryReadiness = {
@@ -351,4 +437,4 @@ export type AIChatStreamEvent =
   | { type: "meta"; runId: string; context: AIChatContext; status?: AIConnectionStatus }
   | { type: "delta"; content: string }
   | { type: "done"; message: AIChatMessage; context: AIChatContext; status: AIConnectionStatus; run: AIChatRunSummary }
-  | { type: "error"; error: string; details?: { run?: AIChatRunSummary; processTreeUnverified?: boolean } };
+  | { type: "error"; error: string; details?: AIChatFailureDetails };

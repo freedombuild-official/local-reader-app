@@ -461,7 +461,7 @@ HTTP Delivery は、選択したファイルに同じローカル Local Reader A
 
 ### AI Chat
 
-1つのAI Entryを選び、必要な接続情報だけを入力し、準備確認を実行して、対応するmodelの動作を調整します。Local Reader Appへ入力した値は現在のpageだけに残り、`repositories.yaml`やbrowserの永続記憶領域へ書き込みません。CLIのpersistent sign-inはLocal Reader Appの外にある各CLI自身のstorageへ残ります。
+1つのAI Entryを選び、必要な接続情報だけを入力して、準備確認を実行します。CLI Entryでは、**Authentication and model**からCLI自身が管理するsign-inを確認し、CLIの通常の認証flowを開始または取消し、現在そのCLIが提示するmodelとmodel別reasoning effortを読み込めます。Local Reader Appへ入力した値と選択内容は現在のpageだけに残り、`repositories.yaml`やbrowserの永続記憶領域へ書き込みません。CLIのpersistent sign-inはLocal Reader Appの外にある各CLI自身のstorageへ残ります。
 
 ## 保存されるものを理解する
 
@@ -472,7 +472,7 @@ HTTP Delivery は、選択したファイルに同じローカル Local Reader A
 | 開いているファイルタブ | 現在のページのメモリ | 消える |
 | Memo | ダウンロードするまで現在のページのメモリ | 消える |
 | AI との会話 | 現在のページのメモリ | 消える |
-| Local Reader App内のAI Entry stateと入力したcredential値 | 現在のpage memoryのみ | 消える |
+| Local Reader App内のAI Entry state、入力したcredential値、CLI model/effort選択 | 現在のpage memoryのみ | 消える |
 | Codex CLIまたはClaude Code CLIのpersistent sign-in | 各CLIが外部で管理するstorage | Local Reader Appでは消えない |
 | 音声入力のaudioとtranscript | browserまたはOSのspeech recognition。外部speech serviceがaudioを処理する場合があり、Local Reader Appはtranscriptを受け取る | browser/providerによる |
 | HTTP Delivery セッション | 現在の Local Reader App サーバープロセス | サーバー停止時に消える |
@@ -482,7 +482,7 @@ Local Reader Appにはrepositoryの組み込みbackup/restore機能がありま�
 
 ## 任意のAI Chatを設定する
 
-AI Chatは任意です。このREADMEでいう「MVP」と「this build」は、説明対象の`0.1.0` sourceを指します。MVPで対応するのは、installと認証が完了している**Codex CLI**と**Claude Code CLI**です。Current repo境界を強制できるruntimeでは、どちらもnative toolを使ってCurrent repoを操作できます。**AI API**と**Local AI**は将来用の項目として表示を残しますが、actionはdisabledな**Coming soon**となり、通常UIからactiveにできません。4つのcardとも通常の`pnpm start`を入口とし、AI専用の別起動commandはありません。
+AI Chatは任意です。このREADMEでいう「MVP」と「this build」は、説明対象の`0.1.0` sourceを指します。MVPで対応するのは、install済みの**Codex CLI**と**Claude Code CLI**です。Local Reader Appは、選択したCLI自身の認証flowを確認または開始し、認証後のCLI catalogを利用できますが、Local Reader App accountを作ったりcredentialの管理主体になったりはしません。Current repo境界を強制できるruntimeでは、どちらのCLIもnative toolを使ってCurrent repoを操作できます。**AI API**と**Local AI**は将来用の項目として表示を残しますが、actionはdisabledな**Coming soon**となり、通常UIからactiveにできません。既存のconnection fieldとModel behaviorは変更しません。4つのcardとも通常の`pnpm start`を入口とし、AI専用の別起動commandはありません。
 
 AI Chat で使う AI アカウント、API キー、ローカル実行環境、モデル、接続先、認証情報は、利用者自身が用意して管理します。事業者の契約料金、API 利用料、token や quota の上限、ネットワーク利用、ローカルモデルのダウンロード、モデルのライセンス、ストレージ、メモリ、計算資源、電力、更新、モデル選択は利用者の責任と負担です。Local Reader App は AI 利用料を負担せず、事業者への支払いの返金、quota の増加、モデル選定の代行、事業者別の個別サポートを提供しません。
 
@@ -492,17 +492,24 @@ AI APIとLocal AIの実装は、provider設定やguarded edit protocolを含め�
 
 ### CLIの項目
 
-Codex CLIとClaude Code CLIは、Local Reader Appで選択中のCurrent repoにあるfileをnative toolで編集できます。Local Reader Appは、binary、既存の認証、必要な非対話flag、workspaceのreadinessが成功した場合だけ、登録済みrepository rootを作業directoryとして選択CLIを起動します。
+Codex CLIとClaude Code CLIは、Local Reader Appで選択中のCurrent repoにあるfileをnative toolで編集できます。Local Reader Appは、binary、認証、選択したcatalog model/effort pair、必要な非対話flag、workspaceのreadinessが成功した場合だけ、登録済みrepository rootを作業directoryとして選択CLIを起動します。
 
 1. Codex CLIまたはClaude Code CLIを、各CLIの公式手順に従って別途インストールします。
-2. 自分のterminalからCLIの通常の認証を完了し、Local Reader Appを起動する前に動作を確認します。Codex CLIは既存のpersistent sign-inを使い、Local Reader Appは`OPENAI_API_KEY`と`CODEX_API_KEY`をCodexへ意図的に渡しません。Claude Code CLIはpersistent sign-inまたはlauncherの対応環境変数`ANTHROPIC_API_KEY`、`ANTHROPIC_AUTH_TOKEN`、`CLAUDE_CODE_OAUTH_TOKEN`、`CLAUDE_CONFIG_DIR`を利用できます。Local Reader Appはそれらの値を表示または永続保存しません。
-3. Local Reader Appを通常どおり`pnpm start`で起動します。
-4. **Settings** > **AI Chat**を開き、インストール済みCLIを使用中にして、**Check readiness**を選びます。
-5. readinessの成功を確認し、Current repoを確かめてからAI Chatで依頼を送ります。
+2. Local Reader Appを通常どおり`pnpm start`で起動します。
+3. **Settings** > **AI Chat**を開き、インストール済みCLIの**Set active**を選びます。Local Reader Appはsetupを再検査し、初回有効化ではcatalogが明示したdefault model/effortを結合して、**CLI Readiness**まで自動実行します。すでにactiveな場合は、**Authentication and model**の**Check again**で同じ一連処理を再実行します。
+4. sign-inが必要な場合は**Sign in**を選び、CLIが管理するURL/device-code flowを完了します。Local Reader Appが表示するのはCLIから返された一時的な認証URLまたはcodeだけで、認証後のcredentialはCLI自身のstorageへ残ります。自分のterminalで認証しても構いません。Codexはpersistent sign-inを使い、Local Reader Appは`OPENAI_API_KEY`と`CODEX_API_KEY`をCodexへ意図的に渡しません。Claude Codeはpersistent sign-inまたはlauncherの対応環境変数`ANTHROPIC_API_KEY`、`ANTHROPIC_AUTH_TOKEN`、`CLAUDE_CODE_OAUTH_TOKEN`、`CLAUDE_CONFIG_DIR`を利用できます。Local Reader Appはそれらの値を表示または永続保存しません。
+5. 選択されたmodelとreasoning effortを確認するか、提示された別のpairを選びます。catalogの明示defaultを使うのはprior selectionが存在しない場合だけです。Local Reader Appは固定fallbackを持たず、catalogまたはCLIの変更後にprior pairが消えた場合も黙って別候補へ置き換えません。
+6. **CLI Readiness**が成功したことを確認し、AI Chatで依頼を送ります。model/effortまたはCurrent repoを変更するとreadinessは無効になります。**Check readiness**、またはsetup再検査からreadinessまで行う**Check again**を選びます。
 
-準備確認はrepository fileを編集しません。Codexの準備確認はmodel requestを送らず、installed CLI、persistent sign-in、flag、Current repoの書込権限、project MCP isolationを確認します。Claude Codeの準備確認は、期限切れまたは拒否されたcredentialをreadyと誤表示しないため、追加でtoolを渡さないmodel promptを1回送ります。Local Reader Appは、sign-in手順、browser認証、CLIのinstall、model download、app内terminalを開始しません。
+setup確認と準備確認はrepository fileを編集しません。**Authentication and model**はCodex App ServerまたはClaude Agent SDKのaccount/catalog metadataを使い、このcardの確認ではchat model requestを送りません。Codexの**CLI Readiness**はmodel requestを送らず、installed CLI、persistent sign-in、選択済みcatalog pair、flag、Current repoの書込権限、project MCP isolationを確認します。Claude Codeの**CLI Readiness**は、期限切れまたは拒否されたcredentialをreadyと誤表示しないため、追加でtoolを渡さないmodel promptを1回送ります。Local Reader AppはCLI自身が管理する認証flowを開始できますが、CLIのinstall、model download、app内terminalの提供、認証後credentialの保存は行いません。
 
-Codex CLIはCurrent repoを`-C`に指定し、そのworkspaceだけを書き込み可能にするrunごとに固有のpermission profileを使って非対話で起動します。runでは利用者configを読み込まず、無関係な組み込みintegrationを無効にしますが、既存のexec-policy ruleは迂回しません。Claude Code CLIはCurrent repoを作業directoryにし、user / project / localのsetting sourceと追加directoryを読み込まず、nativeな`Bash`、`Glob`、`Grep`、`Read`、`Edit`、`Write` toolを`acceptEdits` modeで使います。macOSとLinux runtimeではnative Bash sandboxの起動成功を必須にし、sandbox外でのcommand再実行を許可しません。native Windowsでは同じsandbox境界を利用できないため、Claude Code CLIのreadinessをfail-closedにして編集runを開始しません。WSL2はこの確認ではLinux runtimeとして分類しますが、その分類はWSL2をsupported Local Reader App user platformにするものではありません。
+app内compatibility updateは、installed CLIに既知のcompatibility不足があり、Local Reader Appが再検証できるpackage layoutにexecutableが属する場合に提示します。compatibleなmanaged CLIには、明示的な**Check and apply latest**も表示します。この操作前に新versionが存在すると断定しません。CLI updaterは確認と適用が一体であり、serverが発行する短時間有効な確認とbrowser確認の後だけ実行します。updater完了後はsetupを再検査してreadinessを再実行し、versionが変化したと推測せずupdater結果を表示します。managed Codex packageではcanonicalなlauncher、package/platform metadata、native payload、runtime metadata、Node interpreterをfile identityとcontent digestで固定します。managed Claude layoutではexactなpackage manifestとlauncher/interpreter chain、または公式native version pathを固定します。固定した全memberをupdate command直前に再読込し、差替えまたは不一致があればupdateを停止します。custom executableまたはunmanaged executableは元のpackage managerで更新してください。Local Reader Appは**Set active**、**Check again**、起動時、polling、自動検証の一部としてCLIを更新せず、この仕組みをpackage真正性の暗号学的証明として扱いません。setup、authentication、readiness、AI Chatはserverが解決したexecution descriptorだけを使います。managed package memberとcustom launcher identityをcanonical path、regular-file identity、content digestで使用前とversion再検証後に再読込し、bounded custom scriptでは1段のnative shebang interpreterも固定します。browserからbinaryやpathを受け取らず、検査済みdescriptorをoperation中固定します。
+
+Claude Agent SDKは`0.3.211`へexact pinしています。catalog discoveryは、macOSとLinuxでLocal Reader Appが所有する固定worker process group内だけで実行し、再検証済みのmanaged native packageまたはmanaged Node/npm launcher chainに対応します。serverがworkerへ渡すのはserver-resolved execution descriptor、つまりcanonical native binaryと最大1件のcanonical launcher prefixだけです。SDKにはそのbinaryとprefixをexecutable / executable argumentsとして指定し、launcherのshebangや`PATH`を再解決させません。browserからworker commandやpathを受け取らず、catalog結果を受理する前にgroup全体の停止を確認します。安定したprocess-tree ownershipを利用できるまで、native Windowsでは両CLIのsetup inspection、authentication、catalog discovery、update、readiness probe、AI Chat turnを起動前にfail closedにします。通常のLocal Reader App viewerはnative Windowsでも引き続きsupportedです。この制限はCodex CLIとClaude Code CLIのentryだけに適用し、AI APIとLocal AIは変更せずdisabledの**Coming soon**のままです。
+
+このreleaseのClaude Code setupはfoundation-onlyです。production adapterとLocal HTTP contractは実装し、fake/static testで確認していますが、maintainerはClaude subscriptionを使った認証、catalog読込、model requestのlive検証を行っていません。対象accountで検証するまではClaudeのlive compatibilityを未確認として扱ってください。この変更ではCodexのsetup、catalog選択、通常送信をlive validation gateとします。
+
+CLIを利用できるruntimeでは、Codex CLIはCurrent repoを`-C`に指定し、そのworkspaceだけを書き込み可能にするrunごとに固有のpermission profileを使って非対話で起動します。runでは利用者configを読み込まず、無関係な組み込みintegrationを無効にしますが、既存のexec-policy ruleは迂回しません。Claude Code CLIはCurrent repoを作業directoryにし、user / project / localのsetting sourceと追加directoryを読み込まず、nativeな`Bash`、`Glob`、`Grep`、`Read`、`Edit`、`Write` toolを`acceptEdits` modeで使います。macOSとLinux runtimeではnative Bash sandboxの起動成功を必須にし、sandbox外でのcommand再実行を許可しません。native Windowsでは同等の完全なprocess-tree境界を強制・検証できないため、どちらのCLI entryも起動しません。WSL2はこの確認ではLinux runtimeとして分類しますが、その分類はWSL2をsupported Local Reader App user platformにするものではありません。
 
 Local Reader AppはCLI responseをLocal Reader Appのguarded provider edit protocolへ変換せず、そのprotocolにあるfile個数、directory、read round、operation種別の上限をCLI runへ課しません。依頼の完了に必要であれば、CLIはCurrent repo内の追加fileを確認・変更できます。選択context chipと設定済み`excludes`は、編集pathまたはnative tool accessの上限ではありません。残す内容はresponseと実際のworking-tree diffを確認して判断してください。
 
@@ -524,7 +531,7 @@ AI へ送る情報には、主要項目12件、規則項目2件、合計64 KiB�
 ### 会話の操作
 
 - AI Chat専用headerの**New chat**を選び、使用中のAI Entryとreadinessを保ったまま、transcript、下書き、再試行状態、添付file、1回限りのcontextを消去する。
-- repositoryを切り替えても、使用中のAI Entry、readiness表示、transcriptを保持する。次の依頼は新しく選んだCurrent repoで実行する。
+- repositoryを切り替えても、使用中のAI Entry、transcript、下書きを保持する。CLI readinessは直ちに失効し、新しく選んだCurrent repoでreadinessが成功するまでcomposerを利用できない。
 - 選択したCLI runが完了すると、応答を会話へ追加する。
 - 利用者または AI のメッセージをコピーする。
 - 実行中の送信をキャンセルする。
@@ -534,9 +541,9 @@ AI へ送る情報には、主要項目12件、規則項目2件、合計64 KiB�
 - ブラウザが対応する音声認識機能を提供する場合、音声入力を使う。
 - 最大5ファイルをアップロードする。認識できる64 KiB以下のテキストファイルは本文の候補になりますが、AI 事業者への指示で使うのは添付ファイル1件につき最大12,000文字です。それ以外の添付ファイルは名前、種類、サイズの情報だけを送る。
 - AI へ送る要求全体は約140 KiBが上限です。そのため、大きめのテキストファイルを複数添付すると拒否される場合があります。その場合は、数またはサイズを減らしてください。
-- Codex CLIでは利用可能なresponse depthを選ぶ。Claude Code CLIは設定済みの既定動作を使う。
+- 使用中のCodex CLIまたはClaude Code CLIが提示するmodelとmodel別reasoning effortを選ぶ。選択pairはcomposer付近にも表示し、実際のCLI引数として送る。
 
-同じrepositoryで同時に実行できるAI処理は1件、server全体では最大4件です。CLI readinessはrepository切替後も共有する短いserver-side leaseを使い、各送信では選択中Current repoのrootと書込権限を引き続き検証します。leaseの期限切れ後は、送信時にEntry、認証、Current repo、revisionを自動再確認してから続行します。更新に失敗した場合はCLI runの前に停止します。page reloadはmemory上の会話を消去します。server restartは古いbrowser sessionを無効にしますが、開いたままのpageを単独では消去しません。新serverが表示したURLをreloadまたは開き直すと新しいsessionを作り、その際に会話も消去します。
+同じrepositoryで同時に実行できるAI処理は1件、server全体では最大4件です。CLI readiness leaseは、選択したrepository/revision、Entry、CLI version、catalog revision、server所有のsetup generation、model、effort、検査済みexecution descriptorに紐付きます。catalog refresh、authentication変更、update遷移、provider invalidationのたびにgenerationが進みます。そのためrepository切替、selection/catalog値の変更、新しいsetup generationの受信後は、同じcatalog revisionとpairが再登場しても、現在のselectionを明示して新しいreadiness結果を得るまで以前のleaseを再利用しません。古いsetup responseは新しいterminal stateを上書きできず、setup identityの変更を検知した実行中browser requestもcancelします。leaseの期限切れ後は、送信時に同じ項目を再確認してから続行します。更新に失敗した場合やpairが古い場合はCLI runの前に停止します。page reloadはmemory上の会話とmodel選択を消去します。server restartは古いbrowser sessionを無効にしますが、開いたままのpageを単独では消去しません。新serverが表示したURLをreloadまたは開き直すと新しいsessionを作り、その際に会話も消去します。
 
 AI ChatにはAI Entryが返した利用者向けの自然言語応答だけを表示します。Local Reader Appのbest-effort change auditとwarningは、会話へ追記せずrepository refreshとretry制御に使う内部run metadataとして保持します。実行に失敗した場合もraw CLI outputではなく、短い説明と次のactionを表示します。AIは助言を行うだけであり、人間が応答、repository、実際のworking-tree diffを確認して残す内容を判断します。
 
@@ -550,7 +557,7 @@ AI ChatにはAI Entryが返した利用者向けの自然言語応答だけを�
 - 音声入力はbrowserのspeech-recognition機能を使います。browserとOSによっては音声を外部speech serviceで処理する場合があり、Local Reader Appはそのserviceの選択、確認、保存を制御できません。許容できない場合は文字入力を使ってください。
 - 通常閲覧はリポジトリ内のファイルを編集しません。Repository Settings が書き込むのは、選択された Local Reader App の設定ファイルだけです。
 - AI APIとLocal AIは通常UIでdisabledな**Coming soon**項目であり、通常UIからrepository contextや編集依頼を送信できません。将来用のinternal loopback API実装は、supported interfaceまたはaccess-controlの保証ではありません。
-- Codex CLIと、macOSまたはLinux上のClaude Code CLIは、AI Chatで明示的にwriteを行う項目です。会話と画面上のcontextを受け取り、native toolでCurrent repo内の追加fileを確認し、Local Reader Appのprovider編集上限を受けずに複数fileやnested directoryを作成・更新・rename・削除できます。Local Reader Appは追加workspace rootを渡しません。native WindowsのClaude Code CLI編集はCurrent repo限定のBash境界を強制できないため、このMVPでは有効にしません。
+- Codex CLIとClaude Code CLIは、CLIを利用できるruntimeでAI Chatによる明示的なwriteを行う項目です。会話と画面上のcontextを受け取り、native toolでCurrent repo内の追加fileを確認し、Local Reader Appのprovider編集上限を受けずに複数fileやnested directoryを作成・更新・rename・削除できます。Local Reader Appは追加workspace rootを渡しません。完全なprocess-tree ownershipをまだ強制・検証できないため、このMVPではnative Windows上でどちらのCLI entryも起動しません。
 - HTTP Delivery は一時的で制限されたローカル URL を使い、Local Reader App を公開サーバーにはしません。
 
 信頼できない Local Reader App のソースを実行せず、ポートをトンネルやネットワーク規則で外部公開しないでください。セキュリティ上の問題を非公開で報告するには、[SECURITY.md](SECURITY.md)に従ってください。
@@ -672,13 +679,16 @@ Git がインストール済みか、登録フォルダが Git の作業ツリ�
 
 ### AIの準備確認が失敗する
 
+- native Windowsでは、安定した完全なprocess-tree ownershipを実装するまで、CLI setup、readiness、AI Chatを意図的に利用不可にしています。通常のrepository閲覧は引き続き利用できます。
 - Codex CLIまたはClaude Code CLIがインストール済みで、自分のterminalから動くか確認する。
-- 同じterminalでCLI自身の認証status commandを実行し、必要ならsign-inを完了する。
+- **Set active**を選ぶか、active entryの**Authentication and model**で**Check again**を選ぶ。Local Reader Appはsetupを再検査し、利用可能なcatalog pairを安全に結合してreadinessを実行する。必要なら**Sign in**を完了し、prior pairが消えた場合は現在提示されるmodelとreasoning effortを明示的に選ぶ。
+- 自分のterminalでCLI自身の認証status commandを実行し、そこでsign-inを完了してもよい。
 - Codex CLIはpersistent sign-inを使う。Local Reader Appは`OPENAI_API_KEY`と`CODEX_API_KEY`をCodexへ渡さない。
 - Claude Code CLIはpersistent sign-in、またはLocal Reader Appを起動したprocessから継承する対応Claude authentication environmentを利用できる。
 - Claude Codeでは、古いまたは拒否された`ANTHROPIC_API_KEY`がpersistent sign-inより優先される場合がある。その変数を削除または更新し、必要なら`claude auth login`を完了してから、修正したterminalでLocal Reader Appを起動する。
+- catalogが変わった場合は、有効なmodel/effort pairを選び直す。Local Reader Appは古いselectionを別modelへ意図的に置換しない。
 - 選択中のCurrent repoが存在し、利用者accountで書き込み可能か確認する。
-- **Check readiness**をもう一度選ぶ。AI APIとLocal AIは、このbuildではdisabledな**Coming soon**項目のままです。
+- model/effortまたはrepositoryを変更した後は、**Check readiness**をもう一度選ぶ。AI APIとLocal AIは、このbuildではdisabledな**Coming soon**項目のままです。
 
 ### CLIが停止したことをLocal Reader Appで確認できない
 

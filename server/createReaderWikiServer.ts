@@ -3,6 +3,8 @@ import type { Server } from "node:http";
 import { createServer as createNetServer } from "node:net";
 import path from "node:path";
 import { createApiRouter } from "./api.js";
+import type { AICommandRunner } from "./aiCliAdapters.js";
+import { createDefaultAiCliSetupService, type AiCliSetupService } from "./aiCliSetup.js";
 import { createHttpDeliveryService } from "./httpDelivery.js";
 import { createRepositoryRegistry, type RepositoryRegistry } from "./repositoryRegistry.js";
 import { createReaderWikiSecurity, formatUrlHost, isLoopbackHost } from "./security.js";
@@ -18,6 +20,8 @@ export type ReaderWikiServerOptions = {
   hmrPort?: number;
   allowNonLoopback?: boolean;
   sessionToken?: string;
+  aiCliSetupService?: AiCliSetupService;
+  aiCommandRunner?: AICommandRunner;
 };
 
 export type ReaderWikiServerHandle = {
@@ -40,13 +44,21 @@ export async function startReaderWikiServer(options: ReaderWikiServerOptions = {
   }
   const repositoryRegistry = options.repositoryRegistry || createRepositoryRegistry({ configPath });
   const httpDelivery = createHttpDeliveryService(repositoryRegistry);
+  const aiCliSetupService = options.aiCliSetupService || createDefaultAiCliSetupService(packageRoot);
+  const aiRequestShutdownController = new AbortController();
   const security = createReaderWikiSecurity({ bindHost: host, token: options.sessionToken, dev: options.dev });
   const app = express();
 
   app.disable("x-powered-by");
   app.use(security.headers);
   app.use(security.issueSession);
-  app.use("/api", security.protectApi, createApiRouter(repositoryRegistry, httpDelivery, { configPath, packageRoot }));
+  app.use("/api", security.protectApi, createApiRouter(repositoryRegistry, httpDelivery, {
+    configPath,
+    packageRoot,
+    aiCliSetupService,
+    aiCommandRunner: options.aiCommandRunner,
+    shutdownSignal: aiRequestShutdownController.signal,
+  }));
   app.use("/delivery", httpDelivery.router);
 
   const hmrPort = options.dev ? await resolveHmrPort(options.hmrPort, host) : undefined;
@@ -62,15 +74,34 @@ export async function startReaderWikiServer(options: ReaderWikiServerOptions = {
   const address = server.address();
   const actualPort = typeof address === "object" && address ? address.port : port;
   security.setPort(actualPort);
+  let closePromise: Promise<void> | null = null;
   return {
     app,
     server,
     url: `http://${formatUrlHost(host)}:${actualPort}`,
     port: actualPort,
     sessionToken: security.token,
-    close: async () => {
-      await closeServer(server);
-      if (vite) await vite.close();
+    close: () => {
+      if (closePromise) return closePromise;
+      closePromise = (async () => {
+        aiRequestShutdownController.abort();
+        const results = await Promise.allSettled([
+          closeServer(server),
+          aiCliSetupService.shutdown(),
+          ...(vite ? [vite.close()] : []),
+        ]);
+        const failures = results
+          .filter((result): result is PromiseRejectedResult => result.status === "rejected")
+          .map((result) => result.reason);
+        try {
+          aiCliSetupService.assertNoUnverifiedProcessTree();
+        } catch (error) {
+          if (!failures.includes(error)) failures.push(error);
+        }
+        if (failures.length === 1) throw failures[0];
+        if (failures.length > 1) throw new AggregateError(failures, "Local Reader App shutdown did not complete cleanly.");
+      })();
+      return closePromise;
     },
   };
 }
