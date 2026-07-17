@@ -31,9 +31,11 @@
   "packageManager": "pnpm@10.27.0",
   "scripts": {
     "dev": "tsx server/index.ts --dev",
-    "build": "tsc -p tsconfig.node.json && vite build && node scripts/check-bundle-size.mjs",
+    "build": "node scripts/clean-build-output.mjs && tsc -p tsconfig.node.json && vite build && node scripts/check-bundle-size.mjs",
     "check:bundle": "node scripts/check-bundle-size.mjs",
+    "package:judge": "node scripts/package-judge-build.mjs",
     "start": "node dist-server/server/index.js",
+    "start:judge": "node scripts/start-judge.mjs",
     "scan:history": "node scripts/scan-history.mjs",
     "scan:public": "node scripts/scan-public.mjs",
     "test": "vitest run",

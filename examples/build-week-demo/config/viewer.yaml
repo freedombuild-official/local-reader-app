@@ -1,0 +1,11 @@
+workspace:
+  title: Build Week Demo
+  mode: local
+  default_file: README.md
+  panels:
+    - tree
+    - reader
+    - outline
+safety:
+  normal_view_writes: false
+  hosted_upload: false

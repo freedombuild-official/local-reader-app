@@ -1,0 +1,8 @@
+# start:judge replaces this token with the packaged sample's absolute path.
+repositories:
+  - id: build-week-demo
+    label: Build Week Demo
+    root: '__SAMPLE_ROOT__'
+    defaultPath: README.md
+    excludes:
+      - .git
