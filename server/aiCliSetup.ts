@@ -2077,14 +2077,26 @@ async function readIdentitySnapshot(
 
 async function resolvePathExecutable(binary: string, env: NodeJS.ProcessEnv): Promise<string> {
   if (path.isAbsolute(binary)) return await canonicalPath(binary);
+  const executableNames = process.platform === "win32" && !path.extname(binary)
+    ? [
+        binary,
+        ...(env.PATHEXT || ".COM;.EXE;.BAT;.CMD")
+          .split(";")
+          .filter((extension) => /^\.[A-Za-z0-9]{1,16}$/u.test(extension))
+          .slice(0, 16)
+          .map((extension) => `${binary}${extension}`),
+      ]
+    : [binary];
   for (const directory of (env.PATH || "").split(path.delimiter)) {
     if (!directory) continue;
-    const candidate = path.join(directory, binary);
-    try {
-      await access(candidate, fsConstants.X_OK);
-      return await canonicalPath(candidate);
-    } catch {
-      // Continue through the fixed PATH candidates.
+    for (const executableName of new Set(executableNames)) {
+      const candidate = path.join(directory, executableName);
+      try {
+        await access(candidate, fsConstants.X_OK);
+        return await canonicalPath(candidate);
+      } catch {
+        // Continue through the bounded PATH and PATHEXT candidates.
+      }
     }
   }
   throw new Error(`Managed CLI interpreter ${binary} was not found.`);

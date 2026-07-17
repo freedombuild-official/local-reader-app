@@ -2007,6 +2007,7 @@ describe("CLI provider normalization and lazy defaults", () => {
   });
 
   it("normalizes Codex and Claude through injected default-provider seams only", async () => {
+    const packageRoot = path.resolve("/tmp/reader-wiki");
     const executable: ResolvedAiCliExecutable = { binary: "/mock/bin/cli", argvPrefix: [], identityPath: "/mock/pkg/cli.js" };
     const client = new EventEmitter() as EventEmitter & {
       request: ReturnType<typeof vi.fn>;
@@ -2037,7 +2038,7 @@ describe("CLI provider normalization and lazy defaults", () => {
       }],
     };
     const codexRunner = vi.fn(async () => ({ stdout: "codex-cli 1.2.3\n", stderr: "" }));
-    const codexProvider = createCodexAiCliSetupProvider("/tmp/reader-wiki", {
+    const codexProvider = createCodexAiCliSetupProvider(packageRoot, {
       runner: codexRunner,
       locateExecutable: vi.fn(async () => executable),
       inspectManagedExecutable: vi.fn(async () => mockManagedIdentity("codexCli", executable)),
@@ -2047,7 +2048,7 @@ describe("CLI provider normalization and lazy defaults", () => {
     });
     const codex = await codexProvider.inspect(new AbortController().signal);
     expect(codex.catalog?.models[0]).toMatchObject({ id: "gpt-future", defaultEffort: "max" });
-    expect(codexRunner).toHaveBeenCalledWith("/mock/bin/cli", ["--version"], expect.objectContaining({ cwd: "/tmp/reader-wiki" }));
+    expect(codexRunner).toHaveBeenCalledWith("/mock/bin/cli", ["--version"], expect.objectContaining({ cwd: packageRoot }));
 
     const claudeCatalog = catalog("claudeCli");
     const claudeRunner = vi.fn(async (_binary: string, args: string[]) => {
@@ -2055,12 +2056,12 @@ describe("CLI provider normalization and lazy defaults", () => {
       if (args.includes("--help")) return { stdout: "Usage: claude --effort <level>", stderr: "" };
       return { stdout: '{"loggedIn":true}', stderr: "" };
     });
-    const claudeProvider = createClaudeAiCliSetupProvider("/tmp/reader-wiki", {
+    const claudeProvider = createClaudeAiCliSetupProvider(packageRoot, {
       runner: claudeRunner,
       locateExecutable: vi.fn(async () => executable),
       inspectManagedExecutable: vi.fn(async () => mockManagedIdentity("claudeCli", executable)),
       loadClaudeCatalog: vi.fn(async (options) => {
-        expect(options).toMatchObject({ execution: executable, cwd: "/tmp/reader-wiki", cliVersion: "2.1.0" });
+        expect(options).toMatchObject({ execution: executable, cwd: packageRoot, cliVersion: "2.1.0" });
         return claudeCatalog;
       }),
       now: () => new Date(NOW),
