@@ -9,9 +9,9 @@ import {
   AiCliSetupError,
   AiCliSetupService,
   codexCatalogToAiCli,
-  createClaudeAiCliSetupProvider,
-  createCodexAiCliSetupProvider,
-  createDefaultAiCliSetupService,
+  createClaudeAiCliSetupProvider as createClaudeAiCliSetupProviderBase,
+  createCodexAiCliSetupProvider as createCodexAiCliSetupProviderBase,
+  createDefaultAiCliSetupService as createDefaultAiCliSetupServiceBase,
   inspectManagedAiCliExecutable,
   parseClaudeAuthenticationStatus,
   sameManagedRuntimeIdentity,
@@ -29,6 +29,29 @@ import { HttpError } from "../server/errors.js";
 import type { AICliEntryKind, AICliModelCatalog } from "../server/types.js";
 
 const NOW = "2026-07-16T00:00:00.000Z";
+// Most provider tests exercise the supported POSIX path; the dedicated win32 case overrides this default.
+const TEST_AI_CLI_PLATFORM: NodeJS.Platform = process.platform === "win32" ? "linux" : process.platform;
+
+function createCodexAiCliSetupProvider(
+  packageRoot: string,
+  dependencies: Parameters<typeof createCodexAiCliSetupProviderBase>[1] = {},
+): ReturnType<typeof createCodexAiCliSetupProviderBase> {
+  return createCodexAiCliSetupProviderBase(packageRoot, { platform: TEST_AI_CLI_PLATFORM, ...dependencies });
+}
+
+function createClaudeAiCliSetupProvider(
+  packageRoot: string,
+  dependencies: Parameters<typeof createClaudeAiCliSetupProviderBase>[1] = {},
+): ReturnType<typeof createClaudeAiCliSetupProviderBase> {
+  return createClaudeAiCliSetupProviderBase(packageRoot, { platform: TEST_AI_CLI_PLATFORM, ...dependencies });
+}
+
+function createDefaultAiCliSetupService(
+  packageRoot: string,
+  dependencies: Parameters<typeof createDefaultAiCliSetupServiceBase>[1] = {},
+): ReturnType<typeof createDefaultAiCliSetupServiceBase> {
+  return createDefaultAiCliSetupServiceBase(packageRoot, { platform: TEST_AI_CLI_PLATFORM, ...dependencies });
+}
 
 function mockManagedIdentity(
   entry: AICliEntryKind,

@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it, vi } from "vitest";
-import { createApiRouter } from "../server/api.js";
+import { createApiRouter as createApiRouterBase } from "../server/api.js";
 import { safeCliEnv, type AICommandRunner } from "../server/aiCliAdapters.js";
 import { AiCliSetupService, type AiCliSetupProvider } from "../server/aiCliSetup.js";
 import { HttpError } from "../server/errors.js";
@@ -21,6 +21,17 @@ import { createRepositoryRegistry } from "../server/repositoryRegistry.js";
 import type { AICliEntryKind, AICliModelSelection, RepositoryConfigState } from "../server/types.js";
 
 const execFileAsync = promisify(execFile);
+// API CLI scenarios model supported POSIX execution; native Windows fail-closed is covered separately.
+const TEST_AI_CLI_PLATFORM: NodeJS.Platform = process.platform === "win32" ? "linux" : process.platform;
+
+function createApiRouter(
+  registryOrConfigPath: Parameters<typeof createApiRouterBase>[0],
+  httpDelivery?: Parameters<typeof createApiRouterBase>[1],
+  options: NonNullable<Parameters<typeof createApiRouterBase>[2]> = {},
+): ReturnType<typeof createApiRouterBase> {
+  return createApiRouterBase(registryOrConfigPath, httpDelivery, { aiCliPlatform: TEST_AI_CLI_PLATFORM, ...options });
+}
+
 async function listen(app: express.Express): Promise<{ url: string; close: () => Promise<void> }> {
   const server = await new Promise<Server>((resolve, reject) => {
     const nextServer = app.listen(0);

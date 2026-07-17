@@ -162,7 +162,8 @@ describe("Local Reader App public server boundary", () => {
     expect(claude.shutdown).toHaveBeenCalledOnce();
   });
 
-  it("aborts an active one-shot CLI readiness request before waiting for HTTP shutdown", async () => {
+  // Native Windows rejects CLI readiness before a process starts, so there is no active request to abort.
+  it.skipIf(process.platform === "win32")("aborts an active one-shot CLI readiness request before waiting for HTTP shutdown", async () => {
     const next = await fixture();
     const provider = (entry: AICliEntryKind): AiCliSetupProvider => ({
       entry,
