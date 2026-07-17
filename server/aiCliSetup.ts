@@ -520,8 +520,12 @@ export class AiCliSetupService {
       throw new AiCliSetupError("invalidSelection", "The selected CLI model catalog is unavailable or stale. Inspect and select again.");
     }
     const model = catalog.models.find((candidate) => candidate.id === selection.model);
-    if (!model || !model.efforts.some((effort) => effort.id === selection.effort)) {
-      throw new AiCliSetupError("invalidSelection", "The selected CLI model or effort is not available in the current catalog.");
+    if (
+      !model
+      || !model.efforts.some((effort) => effort.id === selection.effort)
+      || !model.speedModes.some((speedMode) => speedMode.id === selection.speedMode)
+    ) {
+      throw new AiCliSetupError("invalidSelection", "The selected CLI model, effort, or inference speed is not available in the current catalog.");
     }
     return structuredClone(selection);
   }
@@ -1636,19 +1640,44 @@ export function codexCatalogToAiCli(catalog: CodexModelCatalog): AICliModelCatal
     cliVersion: catalog.cliVersion,
     revision: catalog.revision,
     fetchedAt: catalog.fetchedAt,
-    models: catalog.models.map((model) => ({
-      id: model.model,
-      label: model.displayName,
-      description: model.description || null,
-      isDefault: model.isDefault,
-      defaultEffort: model.defaultReasoningEffort,
-      efforts: model.supportedReasoningEfforts.map((effort) => ({
-        id: effort.reasoningEffort,
-        label: effortLabel(effort.reasoningEffort),
-        description: effort.description || null,
-        isDefault: effort.reasoningEffort === model.defaultReasoningEffort,
-      })),
-    })),
+    models: catalog.models.map((model) => {
+      const fastTier = (model.serviceTiers || []).find((tier) => (
+        tier.id === "fast"
+        || (tier.id === "priority" && tier.name.trim().toLowerCase() === "fast")
+      ));
+      const supportsLegacyFast = (model.additionalSpeedTiers || []).includes("fast");
+      const supportsFast = Boolean(fastTier || supportsLegacyFast);
+      return {
+        id: model.model,
+        label: model.displayName,
+        description: model.description || null,
+        isDefault: model.isDefault,
+        defaultEffort: model.defaultReasoningEffort,
+        efforts: model.supportedReasoningEfforts.map((effort) => ({
+          id: effort.reasoningEffort,
+          label: effortLabel(effort.reasoningEffort),
+          description: effort.description || null,
+          isDefault: effort.reasoningEffort === model.defaultReasoningEffort,
+        })),
+        defaultSpeedMode: "standard",
+        speedModes: [
+          {
+            id: "standard",
+            label: "Standard",
+            description: null,
+            isDefault: true,
+          },
+          ...(supportsFast
+            ? [{
+                id: "fast" as const,
+                label: "Fast",
+                description: fastTier?.description || null,
+                isDefault: false,
+              }]
+            : []),
+        ],
+      };
+    }),
   };
 }
 

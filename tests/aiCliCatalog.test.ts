@@ -7,6 +7,7 @@ import {
   normalizeCodexCatalogModel,
   type CodexModelListRequester,
 } from "../server/aiCliCatalog.js";
+import { codexCatalogToAiCli } from "../server/aiCliSetup.js";
 
 function rawModel(index = 1, overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
@@ -48,6 +49,73 @@ describe("Codex app-server model catalog", () => {
     expect(catalog.models[0]?.supportedReasoningEfforts.map((option) => option.reasoningEffort)).toEqual(["max", "ultra", "future-depth"]);
     expect(catalog).toMatchObject({ cliVersion: "codex-cli 1.2.3", fetchedAt: "2026-07-16T00:00:00.000Z" });
     expect(catalog.revision).toMatch(/^[a-f0-9]{64}$/);
+  });
+
+  it("retains bounded service tiers while exposing only Standard and an explicitly advertised Fast mode", async () => {
+    const catalog = await loadCodexModelCatalog(requesterFor([{
+      data: [rawModel(1, {
+        additionalSpeedTiers: ["fast"],
+        serviceTiers: [
+          { id: "future-tier", name: "Future", description: "Provider-defined future tier" },
+          { id: "priority", name: "Fast", description: "1.5x speed" },
+        ],
+        defaultServiceTier: null,
+      })],
+      nextCursor: null,
+    }]), { cliVersion: "codex-cli 1.2.3" });
+
+    expect(catalog.models[0]).toMatchObject({
+      additionalSpeedTiers: ["fast"],
+      serviceTiers: [
+        { id: "future-tier", name: "Future", description: "Provider-defined future tier" },
+        { id: "priority", name: "Fast", description: "1.5x speed" },
+      ],
+      defaultServiceTier: null,
+    });
+    expect(codexCatalogToAiCli(catalog).models[0]).toMatchObject({
+      defaultSpeedMode: "standard",
+      speedModes: [
+        { id: "standard", label: "Standard", isDefault: true },
+        { id: "fast", label: "Fast", description: "1.5x speed", isDefault: false },
+      ],
+    });
+  });
+
+  it("keeps the deprecated additional speed tier as a bounded Fast compatibility fallback", () => {
+    const model = normalizeCodexCatalogModel(rawModel(1, {
+      additionalSpeedTiers: ["fast"],
+      serviceTiers: [],
+      defaultServiceTier: "future-default",
+    }));
+    expect(model).toMatchObject({
+      additionalSpeedTiers: ["fast"],
+      defaultServiceTier: "future-default",
+    });
+    expect(codexCatalogToAiCli({
+      cliVersion: "1.2.3",
+      revision: fingerprintCodexModelCatalog("1.2.3", [model]),
+      fetchedAt: "2026-07-17T00:00:00.000Z",
+      models: [model],
+    }).models[0]?.speedModes).toEqual([
+      { id: "standard", label: "Standard", description: null, isDefault: true },
+      { id: "fast", label: "Fast", description: null, isDefault: false },
+    ]);
+  });
+
+  it("exposes Fast from the preferred priority service tier after the legacy field disappears", () => {
+    const model = normalizeCodexCatalogModel(rawModel(1, {
+      additionalSpeedTiers: [],
+      serviceTiers: [{ id: "priority", name: "Fast", description: "Current fast tier" }],
+    }));
+    expect(codexCatalogToAiCli({
+      cliVersion: "1.2.3",
+      revision: fingerprintCodexModelCatalog("1.2.3", [model]),
+      fetchedAt: "2026-07-17T00:00:00.000Z",
+      models: [model],
+    }).models[0]?.speedModes).toEqual([
+      { id: "standard", label: "Standard", description: null, isDefault: true },
+      { id: "fast", label: "Fast", description: "Current fast tier", isDefault: false },
+    ]);
   });
 
   it("paginates model/list with a bounded cursor contract", async () => {
@@ -115,6 +183,18 @@ describe("Codex app-server model catalog", () => {
       supportedReasoningEfforts: Array.from({ length: 33 }, (_, index) => ({ reasoningEffort: `effort-${index}`, description: "" })),
     }))).toThrow(/reasoning effort options/);
     expect(() => normalizeCodexCatalogModel(rawModel(1, { model: "x".repeat(161) }))).toThrow(/model name/);
+    expect(() => normalizeCodexCatalogModel(rawModel(1, { serviceTiers: "fast" }))).toThrow(/service tier options/);
+    expect(() => normalizeCodexCatalogModel(rawModel(1, {
+      serviceTiers: Array.from({ length: 33 }, (_, index) => ({ id: `tier-${index}`, name: "Tier", description: "" })),
+    }))).toThrow(/service tier options/);
+    expect(() => normalizeCodexCatalogModel(rawModel(1, {
+      serviceTiers: [
+        { id: "fast", name: "Fast", description: "" },
+        { id: "fast", name: "Fast copy", description: "" },
+      ],
+    }))).toThrow(/duplicate service tier/);
+    expect(() => normalizeCodexCatalogModel(rawModel(1, { additionalSpeedTiers: "fast" }))).toThrow(/additional speed tier options/);
+    expect(() => normalizeCodexCatalogModel(rawModel(1, { additionalSpeedTiers: ["fast", "fast"] }))).toThrow(/duplicate additional speed tier/);
     await expect(loadCodexModelCatalog(requesterFor([{
       data: Array.from({ length: 201 }, (_, index) => rawModel(index + 1, { isDefault: index === 0 })),
       nextCursor: null,
@@ -130,6 +210,11 @@ describe("Codex app-server model catalog", () => {
     const first = fingerprintCodexModelCatalog("1.2.3", [model]);
     expect(fingerprintCodexModelCatalog("1.2.3", [model])).toBe(first);
     expect(fingerprintCodexModelCatalog("1.2.4", [model])).not.toBe(first);
+    expect(fingerprintCodexModelCatalog("1.2.3", [normalizeCodexCatalogModel(rawModel(1, {
+      additionalSpeedTiers: ["fast"],
+      serviceTiers: [{ id: "priority", name: "Fast", description: "1.5x speed" }],
+      defaultServiceTier: "priority",
+    }))])).not.toBe(first);
     expect(first).toMatch(/^[a-f0-9]{64}$/);
   });
 });

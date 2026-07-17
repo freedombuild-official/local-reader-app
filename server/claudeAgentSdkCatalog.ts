@@ -199,6 +199,9 @@ function normalizeModels(value: unknown): AICliModelOption[] {
       { allowEmpty: true },
     );
     const description = rawDescription === "" ? null : rawDescription;
+    if (model.supportsFastMode !== undefined && typeof model.supportsFastMode !== "boolean") {
+      throw new Error(`Model ${id} supportsFastMode must be a boolean.`);
+    }
     const effort = normalizeEfforts(model, id);
     return {
       id,
@@ -207,6 +210,13 @@ function normalizeModels(value: unknown): AICliModelOption[] {
       isDefault: false,
       defaultEffort: effort.defaultEffort,
       efforts: effort.efforts,
+      defaultSpeedMode: "standard",
+      speedModes: [
+        { id: "standard", label: "Standard", description: null, isDefault: true },
+        ...(model.supportsFastMode === true
+          ? [{ id: "fast" as const, label: "Fast", description: null, isDefault: false }]
+          : []),
+      ],
     };
   });
 

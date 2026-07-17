@@ -71,7 +71,7 @@ export function AIChatPanel({ aiSettings, session, onSessionChange, modelBehavio
   const targetIdentity = target
     ? "provider" in target
       ? [target.kind, target.provider.entry, target.provider.executionMode || "readOnly", target.provider.provider || "", target.provider.runtime || "", target.provider.model, target.provider.baseUrl, target.provider.apiFormat].join(":")
-      : [target.kind, target.entry, target.selection.model, target.selection.effort, target.selection.catalogRevision, target.selection.setupGeneration].join(":")
+      : [target.kind, target.entry, target.selection.model, target.selection.effort, target.selection.speedMode, target.selection.catalogRevision, target.selection.setupGeneration].join(":")
     : "none";
   const targetIdentityRef = useRef(targetIdentity);
   const effectTargetIdentityRef = useRef(targetIdentity);
@@ -603,6 +603,7 @@ export function AIChatPanel({ aiSettings, session, onSessionChange, modelBehavio
             <div className="ai-chat-model-selection" aria-label="AI Chat model selection">
               <span>{target.selection.model}</span>
               <span>{target.selection.effort}</span>
+              <span>{target.selection.speedMode === "fast" ? "Fast" : "Standard"}</span>
             </div>
           ) : null}
           <textarea

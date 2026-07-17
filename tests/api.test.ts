@@ -36,6 +36,7 @@ function cliSelection(entry: AICliEntryKind): AICliModelSelection {
   return {
     model: entry === "codexCli" ? "gpt-test" : "claude-test",
     effort: entry === "codexCli" ? "ultra" : "max",
+    speedMode: "standard",
     catalogRevision: `${entry}-catalog-r1`,
     setupGeneration: 1,
   };
@@ -71,6 +72,26 @@ async function createReadyAiCliSetupService(
           isDefault: true,
           defaultEffort: entry === "codexCli" ? "ultra" : "max",
           efforts: [{ id: entry === "codexCli" ? "ultra" : "max", label: entry === "codexCli" ? "Ultra" : "Max", description: null, isDefault: true }],
+          defaultSpeedMode: "standard",
+          speedModes: [
+            { id: "standard", label: "Standard", description: null, isDefault: true },
+            { id: "fast", label: "Fast", description: null, isDefault: false },
+          ],
+        }, {
+          id: entry === "codexCli" ? "gpt-alternate" : "claude-alternate",
+          label: entry === "codexCli" ? "GPT Alternate" : "Claude Alternate",
+          description: null,
+          isDefault: false,
+          defaultEffort: "low",
+          efforts: [
+            { id: "low", label: "Low", description: null, isDefault: true },
+            { id: "high", label: "High", description: null, isDefault: false },
+          ],
+          defaultSpeedMode: "standard",
+          speedModes: [
+            { id: "standard", label: "Standard", description: null, isDefault: true },
+            { id: "fast", label: "Fast", description: null, isDefault: false },
+          ],
         }],
       },
     }),
@@ -965,6 +986,85 @@ describe("api", () => {
     } finally {
       await server.close();
       await aiCliSetupService.shutdown();
+    }
+  });
+
+  it("reuses fresh Codex readiness after model, effort, and speed change while revalidating the new selection", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "reader-wiki-cli-selection-readiness-"));
+    await writeFile(path.join(root, "README.md"), "# Selection-local readiness\n");
+    const configPath = path.join(root, "repositories.yaml");
+    await writeFile(configPath, `repositories:\n  - id: docs\n    label: Docs\n    root: ${root}\n    defaultPath: README.md\n`);
+    let loginStatusCalls = 0;
+    let helpCalls = 0;
+    const calls: Array<{ args: string[]; input: string }> = [];
+    const runner: AICommandRunner = async (_binary, args, options) => {
+      calls.push({ args, input: options.input || "" });
+      if (args.includes("--version")) return { stdout: "codex-cli 0.144.1\n", stderr: "" };
+      if (args.includes("login")) {
+        loginStatusCalls += 1;
+        return { stdout: "Logged in using ChatGPT\n", stderr: "" };
+      }
+      if (args.includes("--help")) {
+        helpCalls += 1;
+        return { stdout: "--strict-config --disable --config --cd --ignore-user-config --skip-git-repo-check --ephemeral --json\n", stderr: "" };
+      }
+      if (args.includes("mcp")) return { stdout: "[]", stderr: "" };
+      if (options.input) {
+        return { stdout: '{"type":"item.completed","item":{"type":"agent_message","text":"Selection changed without another readiness check."}}\n', stderr: "" };
+      }
+      throw new Error("Unexpected CLI command.");
+    };
+    const aiCliSetupService = await createReadyAiCliSetupService();
+    const initialSelection = cliSelection("codexCli");
+    const changedSelection: AICliModelSelection = {
+      ...initialSelection,
+      model: "gpt-alternate",
+      effort: "high",
+      speedMode: "fast",
+    };
+    const app = express();
+    app.use("/api", createApiRouter(configPath, undefined, { aiCommandRunner: runner, aiCliSetupService }));
+    const server = await listen(app);
+    try {
+      const readinessResponse = await postJson(`${server.url}/api/ai/entry-readiness`, {
+        entry: "codexCli",
+        repoId: "docs",
+        selection: initialSelection,
+      });
+      expect(readinessResponse.status).toBe(200);
+      const readiness = await readinessResponse.json() as { status: { state?: string; code?: string } };
+      expect(loginStatusCalls).toBe(1);
+      expect(helpCalls).toBe(1);
+
+      const chatResponse = await postJson(`${server.url}/api/ai/chat`, {
+        target: { kind: "codexCli", entry: "codexCli", selection: changedSelection, status: readiness.status },
+        messages: [{ role: "user", content: "Use the changed selection." }],
+        context: { repoId: "docs", primaryPaths: [] },
+      });
+
+      expect(chatResponse.status).toBe(200);
+      expect(loginStatusCalls).toBe(1);
+      expect(helpCalls).toBe(1);
+      const modelCall = calls.find((call) => call.input.includes("Use the changed selection."));
+      expect(modelCall?.args).toEqual(expect.arrayContaining([
+        "--model",
+        "gpt-alternate",
+        'model_reasoning_effort="high"',
+        'service_tier="fast"',
+      ]));
+
+      const invalidSpeedResponse = await postJson(`${server.url}/api/ai/chat`, {
+        target: { kind: "codexCli", entry: "codexCli", selection: { ...changedSelection, speedMode: "turbo" }, status: readiness.status },
+        messages: [{ role: "user", content: "Reject an untrusted speed." }],
+        context: { repoId: "docs", primaryPaths: [] },
+      });
+      expect(invalidSpeedResponse.status).toBe(400);
+      await expect(invalidSpeedResponse.json()).resolves.toMatchObject({ error: "CLI inference speed is invalid." });
+      expect(calls.some((call) => call.input === "Reject an untrusted speed.")).toBe(false);
+    } finally {
+      await server.close();
+      await aiCliSetupService.shutdown();
+      await rm(root, { recursive: true, force: true });
     }
   });
 

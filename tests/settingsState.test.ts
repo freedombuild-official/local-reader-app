@@ -18,6 +18,7 @@ import {
   selectAIEntry,
   selectCliEffort,
   selectCliModel,
+  selectCliSpeedMode,
   updateAIEntry,
   updateCliEntryReadiness,
   updateAIModelBehavior,
@@ -251,7 +252,7 @@ describe("settings state", () => {
     });
     expect(activeAIChatTarget({ ...defaultAISettings, activeEntry: "codexCli", entries: { ...defaultAISettings.entries, codexCli: codexReady } })).toBeUndefined();
     const codexSetup = cliSetupSnapshot("codexCli", "catalog-r1");
-    const codexSelection = { model: "codex-current", effort: "Max", catalogRevision: "catalog-r1", setupGeneration: 1 };
+    const codexSelection = { model: "codex-current", effort: "Max", speedMode: "standard" as const, catalogRevision: "catalog-r1", setupGeneration: 1 };
     expect(activeAIChatTarget({
       ...defaultAISettings,
       activeEntry: "codexCli",
@@ -278,6 +279,7 @@ describe("settings state", () => {
     expect(settings.cliModelSelectionByEntry.codexCli).toEqual({
       model: "codex-current",
       effort: "Max",
+      speedMode: "standard",
       catalogRevision: "catalog-r1",
       setupGeneration: 1,
     });
@@ -292,6 +294,56 @@ describe("settings state", () => {
     expect(validCliModelSelection(settings, "codexCli")?.effort).toBe("adaptive-super");
   });
 
+  it("keeps fresh CLI readiness while model, effort, and speed selections change", () => {
+    const snapshot = cliSetupSnapshot("codexCli", "catalog-r1");
+    snapshot.catalog!.models.push({
+      id: "codex-standard-only",
+      label: "Standard-only model",
+      description: null,
+      isDefault: false,
+      defaultEffort: "Max",
+      efforts: [{ id: "Max", label: "Max", description: null, isDefault: true }],
+      defaultSpeedMode: "standard",
+      speedModes: [{ id: "standard", label: "Standard", description: null, isDefault: true }],
+    });
+    const checkedAt = "2026-07-17T00:00:00.000Z";
+    const readyEntry: CliAIEntrySettings = {
+      ...(defaultAISettings.entries.codexCli as CliAIEntrySettings),
+      authState: "configured",
+      readOnlyWrapperState: "ready",
+      executionMode: "repoWrite",
+      lastCheckedAt: checkedAt,
+    };
+    let settings: AISettingsState = {
+      ...selectCliModel(applyCliSetupSnapshot(defaultAISettings, snapshot), "codexCli", "codex-current"),
+      entries: { ...defaultAISettings.entries, codexCli: readyEntry },
+      statuses: {
+        ...defaultAISettings.statuses,
+        codexCli: { state: "ready", code: "success", message: "Ready.", checkedAt },
+      },
+      lastCheckedAtByEntry: { ...defaultAISettings.lastCheckedAtByEntry, codexCli: checkedAt },
+    };
+
+    settings = selectCliEffort(settings, "codexCli", "Ultra");
+    expect(settings.statuses.codexCli?.state).toBe("ready");
+    expect((settings.entries.codexCli as CliAIEntrySettings).executionMode).toBe("repoWrite");
+    expect(settings.lastCheckedAtByEntry.codexCli).toBe(checkedAt);
+
+    settings = selectCliSpeedMode(settings, "codexCli", "fast");
+    expect(settings.cliModelSelectionByEntry.codexCli?.speedMode).toBe("fast");
+    expect(settings.statuses.codexCli?.state).toBe("ready");
+
+    settings = selectCliModel(settings, "codexCli", "codex-standard-only");
+    expect(settings.cliModelSelectionByEntry.codexCli).toMatchObject({
+      model: "codex-standard-only",
+      effort: "Max",
+      speedMode: "standard",
+    });
+    expect(settings.statuses.codexCli?.state).toBe("ready");
+    expect((settings.entries.codexCli as CliAIEntrySettings).readOnlyWrapperState).toBe("ready");
+    expect(activeAIChatTarget({ ...settings, activeEntry: "codexCli" })).toMatchObject({ kind: "codexCli" });
+  });
+
   it("binds only the explicit default model and its declared default effort for an initial activation", () => {
     const snapshot = cliSetupSnapshot("codexCli", "catalog-r1");
     snapshot.catalog!.models = [
@@ -302,6 +354,8 @@ describe("settings state", () => {
         isDefault: false,
         defaultEffort: "first-default",
         efforts: [{ id: "first-default", label: "First default", description: null, isDefault: true }],
+        defaultSpeedMode: "standard",
+        speedModes: [{ id: "standard", label: "Standard", description: null, isDefault: true }],
       },
       {
         id: "explicit-default",
@@ -313,6 +367,8 @@ describe("settings state", () => {
           { id: "flagged-effort", label: "Flagged effort", description: null, isDefault: true },
           { id: "declared-effort", label: "Declared effort", description: null, isDefault: false },
         ],
+        defaultSpeedMode: "standard",
+        speedModes: [{ id: "standard", label: "Standard", description: null, isDefault: true }],
       },
     ];
 
@@ -322,6 +378,7 @@ describe("settings state", () => {
     expect(applied.cliModelSelectionByEntry.codexCli).toEqual({
       model: "explicit-default",
       effort: "declared-effort",
+      speedMode: "standard",
       catalogRevision: "catalog-r1",
       setupGeneration: 1,
     });
@@ -355,6 +412,8 @@ describe("settings state", () => {
       isDefault: true,
       defaultEffort: "medium",
       efforts: [{ id: "medium", label: "Medium", description: null, isDefault: true }],
+      defaultSpeedMode: "standard",
+      speedModes: [{ id: "standard", label: "Standard", description: null, isDefault: true }],
     });
 
     const applied = applyCliSetupSnapshotAndBindSelection(selected, refreshed);
@@ -363,6 +422,7 @@ describe("settings state", () => {
     expect(applied.cliModelSelectionByEntry.codexCli).toEqual({
       model: "codex-current",
       effort: "Ultra",
+      speedMode: "standard",
       catalogRevision: "catalog-r2",
       setupGeneration: 2,
     });
@@ -388,6 +448,7 @@ describe("settings state", () => {
     expect(applied.cliModelSelectionByEntry.codexCli).toEqual({
       model: "codex-current",
       effort: "Ultra",
+      speedMode: "standard",
       catalogRevision: "catalog-r2",
       setupGeneration: 2,
     });
@@ -408,6 +469,8 @@ describe("settings state", () => {
       isDefault: true,
       defaultEffort: "medium",
       efforts: [{ id: "medium", label: "Medium", description: null, isDefault: true }],
+      defaultSpeedMode: "standard",
+      speedModes: [{ id: "standard", label: "Standard", description: null, isDefault: true }],
     }];
     const missingEffort = { ...cliSetupSnapshot("codexCli", "catalog-r3"), setupGeneration: 2 };
     missingEffort.catalog!.models[0].efforts = missingEffort.catalog!.models[0].efforts.filter((effort) => effort.id !== "Ultra");
@@ -455,6 +518,7 @@ describe("settings state", () => {
     expect(current.cliModelSelectionByEntry.codexCli).toEqual({
       model: "codex-current",
       effort: "Max",
+      speedMode: "standard",
       catalogRevision: "catalog-r3",
       setupGeneration: 3,
     });
@@ -480,7 +544,7 @@ describe("settings state", () => {
       cliSetupByEntry: { ...defaultAISettings.cliSetupByEntry, codexCli: cliSetupSnapshot("codexCli", "catalog-r1") },
       cliModelSelectionByEntry: {
         ...defaultAISettings.cliModelSelectionByEntry,
-        codexCli: { model: "codex-current", effort: "Max", catalogRevision: "catalog-r1", setupGeneration: 1 },
+        codexCli: { model: "codex-current", effort: "Max", speedMode: "standard", catalogRevision: "catalog-r1", setupGeneration: 1 },
       },
     };
     expect(activeAIChatTarget(settings)).toMatchObject({ kind: "codexCli" });
@@ -514,7 +578,7 @@ describe("settings state", () => {
       cliSetupByEntry: { ...defaultAISettings.cliSetupByEntry, codexCli: first },
       cliModelSelectionByEntry: {
         ...defaultAISettings.cliModelSelectionByEntry,
-        codexCli: { model: "codex-current", effort: "Max", catalogRevision: "catalog-r1", setupGeneration: 1 },
+        codexCli: { model: "codex-current", effort: "Max", speedMode: "standard", catalogRevision: "catalog-r1", setupGeneration: 1 },
       },
     };
 
@@ -571,7 +635,7 @@ describe("settings state", () => {
       cliSetupByEntry: { ...defaultAISettings.cliSetupByEntry, codexCli: cliSetupSnapshot("codexCli", "catalog-r1") },
       cliModelSelectionByEntry: {
         ...defaultAISettings.cliModelSelectionByEntry,
-        codexCli: { model: "codex-current", effort: "Max", catalogRevision: "catalog-r1", setupGeneration: 1 },
+        codexCli: { model: "codex-current", effort: "Max", speedMode: "standard", catalogRevision: "catalog-r1", setupGeneration: 1 },
       },
     };
 
@@ -606,7 +670,7 @@ describe("settings state", () => {
       cliSetupByEntry: { ...defaultAISettings.cliSetupByEntry, codexCli: cliSetupSnapshot("codexCli", "catalog-r1") },
       cliModelSelectionByEntry: {
         ...defaultAISettings.cliModelSelectionByEntry,
-        codexCli: { model: "codex-current", effort: "Max", catalogRevision: "catalog-r1", setupGeneration: 1 },
+        codexCli: { model: "codex-current", effort: "Max", speedMode: "standard", catalogRevision: "catalog-r1", setupGeneration: 1 },
       },
     };
 
@@ -721,6 +785,11 @@ function cliSetupSnapshot(entry: AICliEntryKind, revision: string): AICliSetupSn
             { id: "Max", label: "Max", description: null, isDefault: true },
             { id: "Ultra", label: "Ultra", description: null, isDefault: false },
             { id: "adaptive-super", label: "Adaptive super", description: null, isDefault: false },
+          ],
+          defaultSpeedMode: "standard",
+          speedModes: [
+            { id: "standard", label: "Standard", description: "Regular service tier.", isDefault: true },
+            { id: "fast", label: "Fast", description: "Faster inference when supported.", isDefault: false },
           ],
         },
       ],

@@ -194,6 +194,15 @@ export type AICliEffortOption = {
   isDefault: boolean;
 };
 
+export type AICliSpeedMode = "standard" | "fast";
+
+export type AICliSpeedModeOption = {
+  id: AICliSpeedMode;
+  label: string;
+  description: string | null;
+  isDefault: boolean;
+};
+
 export type AICliModelOption = {
   id: string;
   label: string;
@@ -201,6 +210,8 @@ export type AICliModelOption = {
   isDefault: boolean;
   defaultEffort: string;
   efforts: AICliEffortOption[];
+  defaultSpeedMode: AICliSpeedMode;
+  speedModes: AICliSpeedModeOption[];
 };
 
 export type AICliModelCatalog = {
@@ -214,6 +225,7 @@ export type AICliModelCatalog = {
 export type AICliModelSelection = {
   model: string;
   effort: string;
+  speedMode: AICliSpeedMode;
   catalogRevision: string;
   setupGeneration: number;
 };

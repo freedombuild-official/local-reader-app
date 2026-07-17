@@ -2181,6 +2181,7 @@ describe("App", () => {
     const selectedModel = within(aiChatPanel).getByLabelText("AI Chat model selection");
     expect(selectedModel.textContent).toContain("gpt-5.5-codex");
     expect(selectedModel.textContent).toContain("medium");
+    expect(selectedModel.textContent).toContain("Standard");
     const actionRailLabels = Array.from(aiChatPanel.querySelectorAll(".ai-chat-action-rail button")).map((button) => button.getAttribute("aria-label"));
     expect(actionRailLabels).toEqual(["Upload file", "Voice input", "Send AI Chat message"]);
     fireEvent.change(messageInput, { target: { value: "Draft" } });
@@ -2228,7 +2229,7 @@ describe("App", () => {
       target: {
         kind: "codexCli",
         entry: "codexCli",
-        selection: { model: "gpt-5.5-codex", effort: "medium", catalogRevision: "codex-catalog-v1", setupGeneration: 1 },
+        selection: { model: "gpt-5.5-codex", effort: "medium", speedMode: "standard", catalogRevision: "codex-catalog-v1", setupGeneration: 1 },
       },
     });
     expect(streamBody).not.toHaveProperty("modelBehavior");
@@ -2279,6 +2280,10 @@ describe("App", () => {
     fireEvent.click(openSettingsButton());
     fireEvent.click(await screen.findByRole("tab", { name: "AI Chat" }));
     await activateReadyCliEntry("claudeCli");
+    const claudeSetup = await screen.findByLabelText("Claude Code CLI authentication and model settings");
+    const claudeSpeed = within(claudeSetup).getByLabelText("Claude Code CLI inference speed");
+    expect(within(claudeSpeed).getByRole("option", { name: "Standard" })).toBeTruthy();
+    expect(within(claudeSpeed).getByRole("option", { name: "Fast" })).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Back to viewer" }));
     fireEvent.click(await screen.findByRole("tab", { name: "AI Chat" }));
     expect(screen.getByText("codexCli says the active file says hello.")).toBeTruthy();
@@ -2288,7 +2293,7 @@ describe("App", () => {
     expect(await screen.findByText("claudeCli says the active file says hello.")).toBeTruthy();
   });
 
-  it("reuses Model behavior for CLI authentication, accepts dynamic effort ids, and fails closed on a stale catalog", async () => {
+  it("reuses Model behavior for CLI authentication, keeps readiness for dynamic effort ids, and fails closed on a stale catalog", async () => {
     render(<App />);
     expect(await screen.findByRole("heading", { name: "Hello" })).toBeTruthy();
     fireEvent.click(openSettingsButton());
@@ -2307,15 +2312,14 @@ describe("App", () => {
     expect(within(effortSelect).getByRole("option", { name: "Max" })).toBeTruthy();
     expect(within(effortSelect).getByRole("option", { name: "Ultra" })).toBeTruthy();
     expect(within(effortSelect).getByRole("option", { name: "Experimental depth" })).toBeTruthy();
+    const readinessCalls = fetchCallsTo("/api/ai/entry-readiness").length;
     fireEvent.change(effortSelect, { target: { value: "experimental-depth" } });
 
     const readiness = screen.getByLabelText(["Co", "dex CLI readiness"].join(""));
-    fireEvent.click(within(readiness).getByRole("button", { name: "Check readiness" }));
-    await waitFor(() => expect(within(readiness).getByRole("button", { name: "Check again" })).toBeTruthy());
-    expect(parseJsonBody(fetchCallsTo("/api/ai/entry-readiness").at(-1)?.[1]?.body)).toMatchObject({
-      entry: "codexCli",
-      selection: { model: "gpt-5.5-codex", effort: "experimental-depth", catalogRevision: "codex-catalog-v1", setupGeneration: 1 },
-    });
+    expect(within(readiness).getByRole("button", { name: "Check again" })).toBeTruthy();
+    expect(within(readiness).getAllByText("Success").length).toBeGreaterThan(0);
+    expect(fetchCallsTo("/api/ai/entry-readiness")).toHaveLength(readinessCalls);
+    expect(within(setup).getByText(/Experimental depth \/ Standard/u)).toBeTruthy();
 
     cliSetups.codexCli = {
       ...cliSetups.codexCli,
@@ -2335,7 +2339,45 @@ describe("App", () => {
     expect(await screen.findByText("AI Entry is not ready.")).toBeTruthy();
   });
 
-  it("does not apply stale CLI readiness after the selected effort changes", async () => {
+  it("keeps verified readiness while model, effort, and inference speed change", async () => {
+    render(<App />);
+    expect(await screen.findByRole("heading", { name: "Hello" })).toBeTruthy();
+    fireEvent.click(openSettingsButton());
+    fireEvent.click(await screen.findByRole("tab", { name: "AI Chat" }));
+    const readiness = await activateReadyCliEntry();
+    const setup = await screen.findByLabelText(["Co", "dex CLI authentication and model settings"].join(""));
+    const readinessCalls = fetchCallsTo("/api/ai/entry-readiness").length;
+
+    const speedSelect = within(setup).getByLabelText(["Co", "dex CLI inference speed"].join("")) as HTMLSelectElement;
+    expect(within(speedSelect).getByRole("option", { name: "Standard" })).toBeTruthy();
+    expect(within(speedSelect).getByRole("option", { name: "Fast" })).toBeTruthy();
+    fireEvent.change(speedSelect, { target: { value: "fast" } });
+    expect(speedSelect.value).toBe("fast");
+    expect(within(readiness).getAllByText("Success").length).toBeGreaterThan(0);
+
+    const effortSelect = within(setup).getByLabelText(["Co", "dex CLI reasoning effort"].join("")) as HTMLSelectElement;
+    fireEvent.change(effortSelect, { target: { value: "ultra" } });
+    expect(effortSelect.value).toBe("ultra");
+    expect(within(readiness).getByRole("button", { name: "Check again" })).toBeTruthy();
+
+    const modelSelect = within(setup).getByLabelText(["Co", "dex CLI model"].join("")) as HTMLSelectElement;
+    fireEvent.change(modelSelect, { target: { value: "gpt-5.4-mini" } });
+    expect(modelSelect.value).toBe("gpt-5.4-mini");
+    expect(effortSelect.value).toBe("low");
+    expect(speedSelect.value).toBe("standard");
+    expect(within(speedSelect).queryByRole("option", { name: "Fast" })).toBeNull();
+    expect(fetchCallsTo("/api/ai/entry-readiness")).toHaveLength(readinessCalls);
+    expect(within(readiness).getAllByText("Success").length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getByRole("button", { name: "Back to viewer" }));
+    fireEvent.click(await screen.findByRole("tab", { name: "AI Chat" }));
+    const selected = screen.getByLabelText("AI Chat model selection");
+    expect(selected.textContent).toContain("gpt-5.4-mini");
+    expect(selected.textContent).toContain("low");
+    expect(selected.textContent).toContain("Standard");
+  });
+
+  it("does not let delayed CLI readiness overwrite the existing success after the selected effort changes", async () => {
     render(<App />);
     expect(await screen.findByRole("heading", { name: "Hello" })).toBeTruthy();
     fireEvent.click(openSettingsButton());
@@ -2359,13 +2401,24 @@ describe("App", () => {
     fireEvent.click(within(readiness).getByRole("button", { name: "Check again" }));
     await readinessStarted;
     fireEvent.change(within(setup).getByLabelText(["Co", "dex CLI reasoning effort"].join("")), { target: { value: "ultra" } });
-    releaseReadiness(json(aiEntryReadiness("codexCli")));
+    releaseReadiness(json({
+      ...aiEntryReadiness("codexCli"),
+      ready: false,
+      status: {
+        state: "failed",
+        code: "cli_unavailable",
+        message: "This delayed result must be ignored.",
+        checkedAt: "2026-07-17T00:00:00.000Z",
+      },
+    }));
 
-    await waitFor(() => expect(within(readiness).getByRole("button", { name: "Check readiness" })).toBeTruthy());
-    expect(within(readiness).getAllByText("Not tested").length).toBeGreaterThan(0);
+    await waitFor(() => expect(within(readiness).getByRole("button", { name: "Check again" })).toBeTruthy());
+    expect(within(readiness).getAllByText("Success").length).toBeGreaterThan(0);
+    expect(within(readiness).queryByText("This delayed result must be ignored.")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Back to viewer" }));
     fireEvent.click(await screen.findByRole("tab", { name: "AI Chat" }));
-    expect(await screen.findByText("AI Entry is not ready.")).toBeTruthy();
+    expect(screen.queryByText("AI Entry is not ready.")).toBeNull();
+    expect(screen.getByLabelText("AI Chat model selection").textContent).toContain("ultra");
   });
 
   it("does not apply stale CLI readiness after setup generation changes and the same pair is reselected", async () => {
@@ -2757,8 +2810,29 @@ function createCliSetupCollection(): Record<AICliEntryKind, AICliSetupSnapshot> 
         revision: "codex-catalog-v1",
         fetchedAt: "2026-07-16T00:00:00.000Z",
         models: [
-          { id: "gpt-5.5-codex", label: "GPT-5.5 Codex", description: "Primary coding model", isDefault: true, defaultEffort: "medium", efforts: effortOptions },
-          { id: "gpt-5.4-mini", label: "GPT-5.4 mini", description: null, isDefault: false, defaultEffort: "low", efforts: effortOptions.slice(0, 3) },
+          {
+            id: "gpt-5.5-codex",
+            label: "GPT-5.5 Codex",
+            description: "Primary coding model",
+            isDefault: true,
+            defaultEffort: "medium",
+            efforts: effortOptions,
+            defaultSpeedMode: "standard",
+            speedModes: [
+              { id: "standard", label: "Standard", description: "Regular service tier.", isDefault: true },
+              { id: "fast", label: "Fast", description: "Faster inference.", isDefault: false },
+            ],
+          },
+          {
+            id: "gpt-5.4-mini",
+            label: "GPT-5.4 mini",
+            description: null,
+            isDefault: false,
+            defaultEffort: "low",
+            efforts: effortOptions.slice(0, 3),
+            defaultSpeedMode: "standard",
+            speedModes: [{ id: "standard", label: "Standard", description: null, isDefault: true }],
+          },
         ],
       },
     },
@@ -2780,7 +2854,19 @@ function createCliSetupCollection(): Record<AICliEntryKind, AICliSetupSnapshot> 
         revision: "claude-catalog-v1",
         fetchedAt: "2026-07-16T00:00:00.000Z",
         models: [
-          { id: "claude-sonnet-4-5", label: "Claude Sonnet 4.5", description: "Mocked SDK catalog entry", isDefault: true, defaultEffort: "medium", efforts: effortOptions.slice(0, 5) },
+          {
+            id: "claude-sonnet-4-5",
+            label: "Claude Sonnet 4.5",
+            description: "Mocked SDK catalog entry",
+            isDefault: true,
+            defaultEffort: "medium",
+            efforts: effortOptions.slice(0, 5),
+            defaultSpeedMode: "standard",
+            speedModes: [
+              { id: "standard", label: "Standard", description: "Regular inference.", isDefault: true },
+              { id: "fast", label: "Fast", description: "Faster inference.", isDefault: false },
+            ],
+          },
         ],
       },
     },

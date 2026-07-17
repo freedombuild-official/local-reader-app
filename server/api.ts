@@ -63,7 +63,7 @@ export function createApiRouter(registryOrConfigPath: RepositoryRegistry | strin
     const cliSetupGeneration = selection && (entry === "codexCli" || entry === "claudeCli")
       ? requireAiCliSetupService().getSetupGeneration(entry)
       : undefined;
-    const key = readinessAttestationKey(entry, repoId, revision, provider, selection, cliSetupGeneration);
+    const key = readinessAttestationKey(entry, repoId, revision, provider, cliSetupGeneration);
     readinessAttestations.delete(key);
     readinessAttestations.set(key, now + readinessAttestationTtlMs);
     while (readinessAttestations.size > readinessAttestationMaxEntries) {
@@ -80,7 +80,7 @@ export function createApiRouter(registryOrConfigPath: RepositoryRegistry | strin
     const cliSetupGeneration = isCliTarget(target)
       ? requireAiCliSetupService().getSetupGeneration(target.entry)
       : undefined;
-    const key = readinessAttestationKey(targetEntry(target), repoId, revision, provider, isCliTarget(target) ? target.selection : undefined, cliSetupGeneration);
+    const key = readinessAttestationKey(targetEntry(target), repoId, revision, provider, cliSetupGeneration);
     if (!readinessAttestations.has(key)) return false;
     readinessAttestations.delete(key);
     readinessAttestations.set(key, now + readinessAttestationTtlMs);
@@ -803,12 +803,10 @@ function readinessAttestationKey(
   repoId: string,
   revision: string,
   provider: AIProviderSettings | undefined,
-  selection?: AICliModelSelection,
   cliSetupGeneration?: number,
 ): string {
   const fingerprint = createHash("sha256").update(JSON.stringify({
     provider: providerAttestationSnapshot(provider),
-    selection: selection || null,
     cliSetupGeneration: cliSetupGeneration ?? null,
   })).digest("hex");
   const scope = `${repoId}:${revision}`;
@@ -817,15 +815,23 @@ function readinessAttestationKey(
 
 function normalizeCliModelSelection(value: unknown): AICliModelSelection {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new HttpError(400, "Select a CLI model and reasoning effort.");
+    throw new HttpError(400, "Select a CLI model, reasoning effort, and inference speed.");
   }
   const source = value as Record<string, unknown>;
   return {
     model: boundedCliSelectionValue(source.model, "model"),
     effort: boundedCliSelectionValue(source.effort, "reasoning effort"),
+    speedMode: boundedCliSpeedMode(source.speedMode),
     catalogRevision: boundedCliSelectionValue(source.catalogRevision, "catalog revision", 128),
     setupGeneration: boundedCliSetupGeneration(source.setupGeneration),
   };
+}
+
+function boundedCliSpeedMode(value: unknown): AICliModelSelection["speedMode"] {
+  if (value !== "standard" && value !== "fast") {
+    throw new HttpError(400, "CLI inference speed is invalid.");
+  }
+  return value;
 }
 
 function boundedCliSetupGeneration(value: unknown): number {

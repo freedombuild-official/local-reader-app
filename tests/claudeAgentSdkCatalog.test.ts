@@ -47,12 +47,14 @@ describe("Claude Agent SDK catalog adapter", () => {
             displayName: "Default model",
             description: "Claude Code default",
             supportedEffortLevels: ["low", "high", "ultra"],
+            supportsFastMode: true,
           },
           {
             value: "haiku",
             displayName: "Haiku",
             description: "Fast model",
             supportedEffortLevels: [],
+            supportsFastMode: false,
           },
         ];
       }),
@@ -86,12 +88,19 @@ describe("Claude Agent SDK catalog adapter", () => {
             { id: "high", label: "High", isDefault: true },
             { id: "ultra", label: "Ultra", isDefault: false },
           ],
+          defaultSpeedMode: "standard",
+          speedModes: [
+            { id: "standard", label: "Standard", isDefault: true },
+            { id: "fast", label: "Fast", isDefault: false },
+          ],
         },
         {
           id: "haiku",
           isDefault: false,
           defaultEffort: "default",
           efforts: [{ id: "default", label: "Default", isDefault: true }],
+          defaultSpeedMode: "standard",
+          speedModes: [{ id: "standard", label: "Standard", isDefault: true }],
         },
       ],
     });
@@ -300,6 +309,11 @@ describe("Claude Agent SDK catalog adapter", () => {
       name: "control characters",
       models: [{ value: "sonnet\nunsafe", displayName: "Sonnet", description: "A" }],
       message: /control characters/u,
+    },
+    {
+      name: "non-boolean fast mode capability",
+      models: [{ value: "sonnet", displayName: "Sonnet", description: "A", supportsFastMode: "yes" }],
+      message: /supportsFastMode must be a boolean/u,
     },
     {
       name: "empty catalogs",

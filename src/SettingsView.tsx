@@ -38,6 +38,7 @@ import {
   updateCliEntryReadiness,
   selectCliEffort,
   selectCliModel,
+  selectCliSpeedMode,
   selectAIEntry,
   validCliModelSelection,
   type AISettingsState,
@@ -749,7 +750,7 @@ function AIChatSettingsPanel({
               entry="codexCli"
               title={entryLabel("codexCli")}
               subtitle="Current repo execution boundary"
-              note="Verifies the selected catalog pair and Current repo-only execution boundary. Sign-in, CLI compatibility, model, and effort are managed in Authentication and model below."
+              note="Verifies the CLI runtime and Current repo-only execution boundary. Sign-in, compatibility, model, effort, and speed are managed and revalidated through Authentication and model below."
               configured={configured}
               lastCheckedAt={settings.lastCheckedAtByEntry.codexCli}
               status={effectiveAIStatus(settings, "codexCli")}
@@ -772,7 +773,7 @@ function AIChatSettingsPanel({
               entry="claudeCli"
               title={entryLabel("claudeCli")}
               subtitle="Current repo execution boundary"
-              note="Verifies the selected catalog pair and Current repo-only execution boundary. Sign-in, CLI compatibility, model, and effort are managed in Authentication and model below."
+              note="Verifies the CLI runtime and Current repo-only execution boundary. Sign-in, compatibility, model, effort, and speed are managed and revalidated through Authentication and model below."
               configured={configured}
               lastCheckedAt={settings.lastCheckedAtByEntry.claudeCli}
               status={effectiveAIStatus(settings, "claudeCli")}
@@ -854,6 +855,7 @@ function AIChatSettingsPanel({
               onConfirmUpdate={() => void runSetupAction(activeEntry, "confirmUpdate")}
               onModelChange={(model) => onChange(selectCliModel(settings, activeEntry, model))}
               onEffortChange={(effort) => onChange(selectCliEffort(settings, activeEntry, effort))}
+              onSpeedModeChange={(speedMode) => onChange(selectCliSpeedMode(settings, activeEntry, speedMode))}
             />
           ) : (
             <ModelBehaviorSettings
@@ -882,6 +884,7 @@ function CliAuthenticationAndModel({
   onConfirmUpdate,
   onModelChange,
   onEffortChange,
+  onSpeedModeChange,
 }: {
   entry: AICliEntryKind;
   settings: AISettingsState;
@@ -894,6 +897,7 @@ function CliAuthenticationAndModel({
   onConfirmUpdate: () => void;
   onModelChange: (model: string) => void;
   onEffortChange: (effort: string) => void;
+  onSpeedModeChange: (speedMode: string) => void;
 }) {
   const snapshot = settings.cliSetupByEntry[entry];
   const selection = validCliModelSelection(settings, entry);
@@ -1035,10 +1039,27 @@ function CliAuthenticationAndModel({
           </select>
           <small>{selectedModel ? "Only effort levels advertised for this model are enabled, including previously unknown levels." : "Select a model to see its supported effort levels."}</small>
         </label>
+        <label className="settings-field">
+          <span>Inference speed</span>
+          <select
+            aria-label={`${entryLabel(entry)} inference speed`}
+            value={selection?.speedMode || ""}
+            disabled={!selection || !selectedModel || busy}
+            onChange={(event) => onSpeedModeChange(event.target.value)}
+          >
+            <option value="">Select a speed</option>
+            {(selectedModel?.speedModes || []).map((speedMode) => (
+              <option key={speedMode.id} value={speedMode.id}>{speedMode.label}</option>
+            ))}
+          </select>
+          <small>{selectedModel?.speedModes.some((speedMode) => speedMode.id === "fast")
+            ? "Standard uses the regular service tier. Fast is model-dependent and may consume usage at a higher rate."
+            : "This model currently advertises Standard speed only."}</small>
+        </label>
       </div>
 
-      {!selection ? <p className="settings-message warning">Select a valid model and effort, then run CLI Readiness. AI Chat stays disabled until both checks pass.</p> : null}
-      {selection ? <p className="settings-message success">Selected for new requests: {selectedModel?.label || selection.model} / {selectedModel?.efforts.find((effort) => effort.id === selection.effort)?.label || selection.effort}</p> : null}
+      {!selection ? <p className="settings-message warning">Select a valid model, effort, and inference speed. If CLI Readiness is not already verified, run it before using AI Chat.</p> : null}
+      {selection ? <p className="settings-message success">Selected for new requests: {selectedModel?.label || selection.model} / {selectedModel?.efforts.find((effort) => effort.id === selection.effort)?.label || selection.effort} / {selectedModel?.speedModes.find((speedMode) => speedMode.id === selection.speedMode)?.label || selection.speedMode}</p> : null}
       {actionError ? <p className="settings-message error" role="alert">{actionError}</p> : null}
     </div>
   );
@@ -1584,7 +1605,7 @@ function providerSettingsFingerprint(provider: AIProviderSettings): string {
 }
 
 function cliModelSelectionFingerprint(selection: AICliModelSelection | null | undefined): string {
-  return selection ? JSON.stringify([selection.model, selection.effort, selection.catalogRevision, selection.setupGeneration]) : "";
+  return selection ? JSON.stringify([selection.model, selection.effort, selection.speedMode, selection.catalogRevision, selection.setupGeneration]) : "";
 }
 
 function localDefaults(runtime: string): Partial<AIProviderSettings> {

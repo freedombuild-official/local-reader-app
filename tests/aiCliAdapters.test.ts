@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promi
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { claudeCurrentRepoSandboxSupported, claudeCurrentRepoSettings, codexCurrentRepoArgs, requestRepoWriteAIChatCompletion, resolveAICommandLaunch, runAICommand, safeCliEnv, sanitizeCliText } from "../server/aiCliAdapters.js";
+import { claudeAuthenticationProbeArgs, claudeCurrentRepoSandboxSupported, claudeCurrentRepoSettings, codexCurrentRepoArgs, requestRepoWriteAIChatCompletion, resolveAICommandLaunch, runAICommand, safeCliEnv, sanitizeCliText } from "../server/aiCliAdapters.js";
 import { probeAIEntryReadiness } from "../server/aiEntries.js";
 import { HttpError } from "../server/errors.js";
 
@@ -20,7 +20,7 @@ describe("AI CLI process boundary", () => {
     let runnerCalls = 0;
     try {
       await expect(requestRepoWriteAIChatCompletion({
-        target: { kind: "codexCli", entry: "codexCli", selection: { model: "gpt-current", effort: "high", catalogRevision: "catalog-r1", setupGeneration: 1 }, status: { state: "ready", code: "success", message: "ready", checkedAt: new Date().toISOString() } },
+        target: { kind: "codexCli", entry: "codexCli", selection: { model: "gpt-current", effort: "high", speedMode: "standard", catalogRevision: "catalog-r1", setupGeneration: 1 }, status: { state: "ready", code: "success", message: "ready", checkedAt: new Date().toISOString() } },
         messages: [{ role: "user", content: "This request must not reach the CLI." }],
         context: { repoId: "docs", revision: "revision", primaryItems: [], ruleItems: [], systemPromptVersion: "test" },
         repo: { id: "docs", label: "Docs", root, defaultPath: "README.md", excludes: [] },
@@ -46,7 +46,7 @@ describe("AI CLI process boundary", () => {
     let modelRuns = 0;
     try {
       await expect(requestRepoWriteAIChatCompletion({
-        target: { kind: "codexCli", entry: "codexCli", selection: { model: "gpt-current", effort: "high", catalogRevision: "catalog-r1", setupGeneration: 1 }, status: { state: "ready", code: "success", message: "ready", checkedAt: new Date().toISOString() } },
+        target: { kind: "codexCli", entry: "codexCli", selection: { model: "gpt-current", effort: "high", speedMode: "standard", catalogRevision: "catalog-r1", setupGeneration: 1 }, status: { state: "ready", code: "success", message: "ready", checkedAt: new Date().toISOString() } },
         messages: [{ role: "user", content: "This request must stop after MCP discovery." }],
         context: { repoId: "docs", revision: "revision", primaryItems: [], ruleItems: [], systemPromptVersion: "test" },
         repo: { id: "docs", label: "Docs", root, defaultPath: "README.md", excludes: [] },
@@ -73,7 +73,7 @@ describe("AI CLI process boundary", () => {
     await writeFile(path.join(root, "README.md"), "# Unverified process tree\n");
     try {
       const request = requestRepoWriteAIChatCompletion({
-        target: { kind: "codexCli", entry: "codexCli", selection: { model: "gpt-current", effort: "high", catalogRevision: "catalog-r1", setupGeneration: 1 }, status: { state: "ready", code: "success", message: "ready", checkedAt: new Date().toISOString() } },
+        target: { kind: "codexCli", entry: "codexCli", selection: { model: "gpt-current", effort: "high", speedMode: "standard", catalogRevision: "catalog-r1", setupGeneration: 1 }, status: { state: "ready", code: "success", message: "ready", checkedAt: new Date().toISOString() } },
         messages: [{ role: "user", content: "Trigger a mocked process ownership failure." }],
         context: { repoId: "docs", revision: "revision", primaryItems: [], ruleItems: [], systemPromptVersion: "test" },
         repo: { id: "docs", label: "Docs", root, defaultPath: "README.md", excludes: [] },
@@ -108,7 +108,7 @@ describe("AI CLI process boundary", () => {
     const calls: Array<{ args: string[]; cwd: string; input: string }> = [];
     try {
       const result = await requestRepoWriteAIChatCompletion({
-        target: { kind: "codexCli", entry: "codexCli", selection: { model: "gpt-current", effort: "ultra", catalogRevision: "catalog-r1", setupGeneration: 1 }, status: { state: "ready", code: "success", message: "ready", checkedAt: new Date().toISOString() } },
+        target: { kind: "codexCli", entry: "codexCli", selection: { model: "gpt-current", effort: "ultra", speedMode: "standard", catalogRevision: "catalog-r1", setupGeneration: 1 }, status: { state: "ready", code: "success", message: "ready", checkedAt: new Date().toISOString() } },
         messages: [{ role: "user", content: "Create the requested directory tree and files." }],
         context: { repoId: "docs", revision: "revision", primaryItems: [], ruleItems: [], systemPromptVersion: "test" },
         repo: { id: "docs", label: "Docs", root, defaultPath: "README.md", excludes: [] },
@@ -153,6 +153,8 @@ describe("AI CLI process boundary", () => {
       ]));
       expect(captured?.args).not.toContain("--add-dir");
       expect(captured?.args).not.toContain("--ignore-rules");
+      expect(captured?.args).toContain('service_tier="flex"');
+      expect(captured?.args).not.toContain("fast_mode");
       expect(captured?.args.some((argument) => /^default_permissions="reader_wiki_[a-f0-9]{32}"$/.test(argument))).toBe(true);
       expect(captured?.args.some((argument) => /^permissions\.reader_wiki_[a-f0-9]{32}\.filesystem=/.test(argument))).toBe(true);
       expect(captured?.args).toContain('mcp_servers."project-tools"={enabled=false,command="reader-wiki-disabled-mcp",args=[]}');
@@ -175,7 +177,7 @@ describe("AI CLI process boundary", () => {
     const calls: Array<{ args: string[]; cwd: string; env: NodeJS.ProcessEnv }> = [];
     try {
       const result = await requestRepoWriteAIChatCompletion({
-        target: { kind: "claudeCli", entry: "claudeCli", selection: { model: "claude-current", effort: "max", catalogRevision: "catalog-r1", setupGeneration: 1 }, status: { state: "ready", code: "success", message: "ready", checkedAt: new Date().toISOString() } },
+        target: { kind: "claudeCli", entry: "claudeCli", selection: { model: "claude-current", effort: "max", speedMode: "standard", catalogRevision: "catalog-r1", setupGeneration: 1 }, status: { state: "ready", code: "success", message: "ready", checkedAt: new Date().toISOString() } },
         messages: [{ role: "user", content: "Create a nested file." }],
         context: { repoId: "docs", revision: "revision", primaryItems: [], ruleItems: [], systemPromptVersion: "test" },
         repo: { id: "docs", label: "Docs", root, defaultPath: "README.md", excludes: [] },
@@ -211,10 +213,87 @@ describe("AI CLI process boundary", () => {
       ]));
       expect(captured?.args).not.toContain("--disallowedTools");
       expect(captured?.args).not.toContain("--max-budget-usd");
+      expect(JSON.parse(claudeCurrentRepoSettings())).toMatchObject({ fastMode: false });
+      const authProbeArgs = claudeAuthenticationProbeArgs();
+      expect(JSON.parse(authProbeArgs[authProbeArgs.indexOf("--settings") + 1] || "{}")).toMatchObject({ fastMode: false });
       expect(captured?.env.CLAUDE_CODE_OAUTH_TOKEN).toBe("test-claude-oauth-token");
     } finally {
       if (previousToken === undefined) delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
       else process.env.CLAUDE_CODE_OAUTH_TOKEN = previousToken;
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("maps Fast to fixed provider-owned Codex argv and Claude session settings", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "reader-wiki-fast-modes-"));
+    await writeFile(path.join(root, "README.md"), "# Fast modes\n");
+    const codexCalls: string[][] = [];
+    const claudeCalls: string[][] = [];
+    try {
+      await requestRepoWriteAIChatCompletion({
+        target: { kind: "codexCli", entry: "codexCli", selection: { model: "gpt-current", effort: "high", speedMode: "fast", catalogRevision: "catalog-r1", setupGeneration: 1 }, status: { state: "ready", code: "success", message: "ready", checkedAt: new Date().toISOString() } },
+        messages: [{ role: "user", content: "Respond without changing files." }],
+        context: { repoId: "docs", revision: "revision", primaryItems: [], ruleItems: [], systemPromptVersion: "test" },
+        repo: { id: "docs", label: "Docs", root, defaultPath: "README.md", excludes: [] },
+        beforeCliSpawn: fixedCliLaunch("codexCli"),
+        runner: async (_binary, args) => {
+          codexCalls.push(args);
+          return args.includes("mcp")
+            ? { stdout: "[]", stderr: "" }
+            : { stdout: '{"type":"item.completed","item":{"type":"agent_message","text":"Fast Codex response."}}\n', stderr: "" };
+        },
+      });
+      await requestRepoWriteAIChatCompletion({
+        target: { kind: "claudeCli", entry: "claudeCli", selection: { model: "claude-current", effort: "high", speedMode: "fast", catalogRevision: "catalog-r1", setupGeneration: 1 }, status: { state: "ready", code: "success", message: "ready", checkedAt: new Date().toISOString() } },
+        messages: [{ role: "user", content: "Respond without changing files." }],
+        context: { repoId: "docs", revision: "revision", primaryItems: [], ruleItems: [], systemPromptVersion: "test" },
+        repo: { id: "docs", label: "Docs", root, defaultPath: "README.md", excludes: [] },
+        beforeCliSpawn: fixedCliLaunch("claudeCli"),
+        runner: async (_binary, args) => {
+          claudeCalls.push(args);
+          return { stdout: JSON.stringify({ is_error: false, result: "Fast Claude response." }), stderr: "" };
+        },
+      });
+
+      const codexArgs = codexCalls.find((args) => args.includes("exec"));
+      expect(codexArgs).toEqual(expect.arrayContaining([
+        "--config",
+        'service_tier="fast"',
+        "--enable",
+        "fast_mode",
+      ]));
+      const claudeArgs = claudeCalls[0] || [];
+      const settings = claudeArgs[claudeArgs.indexOf("--settings") + 1];
+      expect(JSON.parse(settings || "{}")).toMatchObject({ fastMode: true });
+      expect(settings).toBe(claudeCurrentRepoSettings(true));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a raw speed/config value before acquiring a CLI execution lease", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "reader-wiki-speed-injection-"));
+    await writeFile(path.join(root, "README.md"), "# Speed injection\n");
+    let leaseCalls = 0;
+    let runnerCalls = 0;
+    try {
+      await expect(requestRepoWriteAIChatCompletion({
+        target: { kind: "codexCli", entry: "codexCli", selection: { model: "gpt-current", effort: "high", speedMode: 'fast" --config sandbox_mode="danger-full-access' as never, catalogRevision: "catalog-r1", setupGeneration: 1 }, status: { state: "ready", code: "success", message: "ready", checkedAt: new Date().toISOString() } },
+        messages: [{ role: "user", content: "This request must not reach Codex." }],
+        context: { repoId: "docs", revision: "revision", primaryItems: [], ruleItems: [], systemPromptVersion: "test" },
+        repo: { id: "docs", label: "Docs", root, defaultPath: "README.md", excludes: [] },
+        beforeCliSpawn: async () => {
+          leaseCalls += 1;
+          return { binary: "codex", args: [] };
+        },
+        runner: async () => {
+          runnerCalls += 1;
+          return { stdout: "must not run", stderr: "" };
+        },
+      })).rejects.toMatchObject({ status: 400 });
+      expect(leaseCalls).toBe(0);
+      expect(runnerCalls).toBe(0);
+    } finally {
       await rm(root, { recursive: true, force: true });
     }
   });
@@ -224,7 +303,7 @@ describe("AI CLI process boundary", () => {
     await writeFile(path.join(root, "README.md"), "# Codex natural error\n");
     try {
       const request = requestRepoWriteAIChatCompletion({
-        target: { kind: "codexCli", entry: "codexCli", selection: { model: "gpt-current", effort: "high", catalogRevision: "catalog-r1", setupGeneration: 1 }, status: { state: "ready", code: "success", message: "ready", checkedAt: new Date().toISOString() } },
+        target: { kind: "codexCli", entry: "codexCli", selection: { model: "gpt-current", effort: "high", speedMode: "standard", catalogRevision: "catalog-r1", setupGeneration: 1 }, status: { state: "ready", code: "success", message: "ready", checkedAt: new Date().toISOString() } },
         messages: [{ role: "user", content: "Complete the request." }],
         context: { repoId: "docs", revision: "revision", primaryItems: [], ruleItems: [], systemPromptVersion: "test" },
         repo: { id: "docs", label: "Docs", root, defaultPath: "README.md", excludes: [] },
@@ -247,7 +326,7 @@ describe("AI CLI process boundary", () => {
     await writeFile(path.join(root, "README.md"), "# Claude natural error\n");
     try {
       const request = requestRepoWriteAIChatCompletion({
-        target: { kind: "claudeCli", entry: "claudeCli", selection: { model: "claude-current", effort: "default", catalogRevision: "catalog-r1", setupGeneration: 1 }, status: { state: "ready", code: "success", message: "ready", checkedAt: new Date().toISOString() } },
+        target: { kind: "claudeCli", entry: "claudeCli", selection: { model: "claude-current", effort: "default", speedMode: "standard", catalogRevision: "catalog-r1", setupGeneration: 1 }, status: { state: "ready", code: "success", message: "ready", checkedAt: new Date().toISOString() } },
         messages: [{ role: "user", content: "Complete the request." }],
         context: { repoId: "docs", revision: "revision", primaryItems: [], ruleItems: [], systemPromptVersion: "test" },
         repo: { id: "docs", label: "Docs", root, defaultPath: "README.md", excludes: [] },

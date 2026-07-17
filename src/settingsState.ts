@@ -228,7 +228,9 @@ export function applyCliSetupSnapshotAndBindSelection(
     : catalog.models.find((candidate) => candidate.isDefault);
   const effortId = previousSelection?.effort || model?.defaultEffort;
   const effort = model?.efforts.find((candidate) => candidate.id === effortId);
-  if (!model || !effort) return applied;
+  const speedModeId = previousSelection?.speedMode || model?.defaultSpeedMode;
+  const speedMode = model?.speedModes.find((candidate) => candidate.id === speedModeId);
+  if (!model || !effort || !speedMode) return applied;
 
   return {
     ...applied,
@@ -237,6 +239,7 @@ export function applyCliSetupSnapshotAndBindSelection(
       [entry]: {
         model: model.id,
         effort: effort.id,
+        speedMode: speedMode.id,
         catalogRevision: catalog.revision,
         setupGeneration: acceptedSnapshot.setupGeneration,
       },
@@ -251,16 +254,19 @@ export function selectCliModel(settings: AISettingsState, entry: AICliEntryKind,
   const defaultEffort = model?.efforts.find((effort) => effort.id === model.defaultEffort)
     || model?.efforts.find((effort) => effort.isDefault)
     || model?.efforts[0];
-  const selection = snapshot && model && defaultEffort && catalog
-    ? { model: model.id, effort: defaultEffort.id, catalogRevision: catalog.revision, setupGeneration: snapshot.setupGeneration }
+  const defaultSpeedMode = model?.speedModes.find((speedMode) => speedMode.id === model.defaultSpeedMode)
+    || model?.speedModes.find((speedMode) => speedMode.isDefault)
+    || model?.speedModes[0];
+  const selection = snapshot && model && defaultEffort && defaultSpeedMode && catalog
+    ? { model: model.id, effort: defaultEffort.id, speedMode: defaultSpeedMode.id, catalogRevision: catalog.revision, setupGeneration: snapshot.setupGeneration }
     : null;
-  return invalidateCliEntryReadiness({
+  return {
     ...settings,
     cliModelSelectionByEntry: {
       ...settings.cliModelSelectionByEntry,
       [entry]: selection,
     },
-  }, entry);
+  };
 }
 
 function shouldIgnoreCliSetupSnapshot(
@@ -284,15 +290,34 @@ export function selectCliEffort(settings: AISettingsState, entry: AICliEntryKind
     : undefined;
   const effort = model?.efforts.find((candidate) => candidate.id === effortId);
   const selection = current && effort && snapshot?.catalog
-    ? { model: current.model, effort: effort.id, catalogRevision: snapshot.catalog.revision, setupGeneration: snapshot.setupGeneration }
+    ? { model: current.model, effort: effort.id, speedMode: current.speedMode, catalogRevision: snapshot.catalog.revision, setupGeneration: snapshot.setupGeneration }
     : null;
-  return invalidateCliEntryReadiness({
+  return {
     ...settings,
     cliModelSelectionByEntry: {
       ...settings.cliModelSelectionByEntry,
       [entry]: selection,
     },
-  }, entry);
+  };
+}
+
+export function selectCliSpeedMode(settings: AISettingsState, entry: AICliEntryKind, speedModeId: string): AISettingsState {
+  const snapshot = settings.cliSetupByEntry[entry];
+  const current = settings.cliModelSelectionByEntry[entry];
+  const model = snapshot?.phase === "ready" && snapshot.catalog?.entry === entry
+    ? snapshot.catalog.models.find((candidate) => candidate.id === current?.model)
+    : undefined;
+  const speedMode = model?.speedModes.find((candidate) => candidate.id === speedModeId);
+  const selection = current && speedMode && snapshot?.catalog
+    ? { model: current.model, effort: current.effort, speedMode: speedMode.id, catalogRevision: snapshot.catalog.revision, setupGeneration: snapshot.setupGeneration }
+    : null;
+  return {
+    ...settings,
+    cliModelSelectionByEntry: {
+      ...settings.cliModelSelectionByEntry,
+      [entry]: selection,
+    },
+  };
 }
 
 export function validateCliModelSelection(
@@ -306,7 +331,10 @@ export function validateCliModelSelection(
     || selection.setupGeneration !== snapshot.setupGeneration
   ) return false;
   const model = snapshot.catalog.models.find((candidate) => candidate.id === selection.model);
-  return Boolean(model?.efforts.some((effort) => effort.id === selection.effort));
+  return Boolean(
+    model?.efforts.some((effort) => effort.id === selection.effort)
+    && model.speedModes.some((speedMode) => speedMode.id === selection.speedMode),
+  );
 }
 
 export function validCliModelSelection(settings: AISettingsState, entry: AICliEntryKind): AICliModelSelection | null {

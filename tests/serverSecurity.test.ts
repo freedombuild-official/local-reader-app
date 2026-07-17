@@ -185,6 +185,8 @@ describe("Local Reader App public server boundary", () => {
             isDefault: true,
             defaultEffort: "high",
             efforts: [{ id: "high", label: "High", description: null, isDefault: true }],
+            defaultSpeedMode: "standard",
+            speedModes: [{ id: "standard", label: "Standard", description: null, isDefault: true }],
           }],
         },
       }),
@@ -237,7 +239,7 @@ describe("Local Reader App public server boundary", () => {
         entry: "codexCli",
         repoId: "docs",
         expectedRevision: revision,
-        selection: { model: "gpt-test", effort: "high", catalogRevision: "codexCli-catalog-r1", setupGeneration: 1 },
+        selection: { model: "gpt-test", effort: "high", speedMode: "standard", catalogRevision: "codexCli-catalog-r1", setupGeneration: 1 },
       }),
     });
     await runnerStarted;

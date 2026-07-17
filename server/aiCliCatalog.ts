@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 const MAX_PAGES = 8;
 const MAX_MODELS = 200;
 const MAX_EFFORTS_PER_MODEL = 32;
+const MAX_SERVICE_TIERS_PER_MODEL = 32;
 const MAX_IDENTIFIER_LENGTH = 160;
 const MAX_CURSOR_LENGTH = 1_024;
 const MAX_LABEL_LENGTH = 200;
@@ -14,6 +15,12 @@ export type CodexReasoningOption = {
   description: string;
 };
 
+export type CodexServiceTierOption = {
+  id: string;
+  name: string;
+  description: string;
+};
+
 export type CodexModelOption = {
   id: string;
   model: string;
@@ -22,6 +29,9 @@ export type CodexModelOption = {
   isDefault: boolean;
   defaultReasoningEffort: string;
   supportedReasoningEfforts: CodexReasoningOption[];
+  additionalSpeedTiers?: string[];
+  serviceTiers?: CodexServiceTierOption[];
+  defaultServiceTier?: string | null;
 };
 
 export type CodexModelCatalog = {
@@ -123,7 +133,24 @@ export function normalizeCodexCatalogModel(value: unknown): CodexModelOption {
     throw invalidCatalog("Codex returned invalid reasoning effort options.");
   }
 
-  return { id, model, displayName, description, isDefault: source.isDefault, defaultReasoningEffort, supportedReasoningEfforts };
+  const additionalSpeedTiers = normalizeAdditionalSpeedTiers(source.additionalSpeedTiers);
+  const serviceTiers = normalizeServiceTiers(source.serviceTiers);
+  const defaultServiceTier = source.defaultServiceTier === undefined || source.defaultServiceTier === null
+    ? null
+    : boundedIdentifier(source.defaultServiceTier, "default service tier");
+
+  return {
+    id,
+    model,
+    displayName,
+    description,
+    isDefault: source.isDefault,
+    defaultReasoningEffort,
+    supportedReasoningEfforts,
+    additionalSpeedTiers,
+    serviceTiers,
+    defaultServiceTier,
+  };
 }
 
 export function validateCodexModelSelection(catalog: CodexModelCatalog | undefined, selection: CodexModelSelection): void {
@@ -176,6 +203,34 @@ function normalizeReasoningOption(value: unknown): CodexReasoningOption {
     reasoningEffort: boundedIdentifier(source.reasoningEffort, "reasoning effort"),
     description: boundedText(source.description, MAX_DESCRIPTION_LENGTH, true, "reasoning effort description"),
   };
+}
+
+function normalizeServiceTiers(value: unknown): CodexServiceTierOption[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > MAX_SERVICE_TIERS_PER_MODEL) {
+    throw invalidCatalog("Codex returned invalid service tier options.");
+  }
+  const tiers = value.map((candidate) => {
+    const source = requireRecord(candidate, "Codex returned invalid service tier options.");
+    return {
+      id: boundedIdentifier(source.id, "service tier id"),
+      name: boundedText(source.name, MAX_LABEL_LENGTH, false, "service tier name"),
+      description: boundedText(source.description, MAX_DESCRIPTION_LENGTH, true, "service tier description"),
+    };
+  });
+  const ids = tiers.map((tier) => tier.id);
+  if (new Set(ids).size !== ids.length) throw invalidCatalog("Codex returned duplicate service tier ids.");
+  return tiers;
+}
+
+function normalizeAdditionalSpeedTiers(value: unknown): string[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > MAX_SERVICE_TIERS_PER_MODEL) {
+    throw invalidCatalog("Codex returned invalid additional speed tier options.");
+  }
+  const tiers = value.map((candidate) => boundedIdentifier(candidate, "additional speed tier id"));
+  if (new Set(tiers).size !== tiers.length) throw invalidCatalog("Codex returned duplicate additional speed tier ids.");
+  return tiers;
 }
 
 function boundedIdentifier(value: unknown, label: string): string {

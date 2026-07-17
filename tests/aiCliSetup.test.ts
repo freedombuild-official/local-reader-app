@@ -148,6 +148,11 @@ function catalog(entry: AICliEntryKind, revision = `${entry}-r1`): AICliModelCat
         { id: "max", label: "Max", description: null, isDefault: true },
         { id: "future-depth", label: "Future Depth", description: null, isDefault: false },
       ],
+      defaultSpeedMode: "standard",
+      speedModes: [
+        { id: "standard", label: "Standard", description: null, isDefault: true },
+        { id: "fast", label: "Fast", description: null, isDefault: false },
+      ],
     }],
   };
 }
@@ -282,18 +287,35 @@ describe("AiCliSetupService", () => {
     expect(service.validateSelection("codexCli", {
       model: "gpt-future",
       effort: "future-depth",
+      speedMode: "standard",
       catalogRevision: "codexCli-r1",
       setupGeneration: 1,
-    })).toEqual({ model: "gpt-future", effort: "future-depth", catalogRevision: "codexCli-r1", setupGeneration: 1 });
+    })).toEqual({ model: "gpt-future", effort: "future-depth", speedMode: "standard", catalogRevision: "codexCli-r1", setupGeneration: 1 });
     expect(() => service.validateSelection("codexCli", {
       model: "gpt-future",
       effort: "future-depth",
+      speedMode: "standard",
       catalogRevision: "stale",
       setupGeneration: 1,
     })).toThrowError(expect.objectContaining({ code: "invalidSelection" }));
     expect(() => service.validateSelection("codexCli", {
       model: "unknown",
       effort: "max",
+      speedMode: "standard",
+      catalogRevision: "codexCli-r1",
+      setupGeneration: 1,
+    })).toThrowError(expect.objectContaining({ code: "invalidSelection" }));
+    expect(() => service.validateSelection("codexCli", {
+      model: "gpt-future",
+      effort: "max",
+      speedMode: "fast",
+      catalogRevision: "codexCli-r1",
+      setupGeneration: 1,
+    })).not.toThrow();
+    expect(() => service.validateSelection("codexCli", {
+      model: "gpt-future",
+      effort: "max",
+      speedMode: "turbo" as never,
       catalogRevision: "codexCli-r1",
       setupGeneration: 1,
     })).toThrowError(expect.objectContaining({ code: "invalidSelection" }));
@@ -303,6 +325,7 @@ describe("AiCliSetupService", () => {
     expect(() => service.validateSelection("codexCli", {
       model: "gpt-future",
       effort: "future-depth",
+      speedMode: "standard",
       catalogRevision: "codexCli-r1",
       setupGeneration: 1,
     })).toThrowError(expect.objectContaining({ code: "invalidSelection" }));
@@ -317,6 +340,7 @@ describe("AiCliSetupService", () => {
     await expect(service.assertCurrentVersion("codexCli", {
       model: "gpt-future",
       effort: "max",
+      speedMode: "standard",
       catalogRevision: "codexCli-r1",
       setupGeneration: 1,
     }, new AbortController().signal)).rejects.toMatchObject({ code: "invalidSelection" });
@@ -371,6 +395,7 @@ describe("AiCliSetupService", () => {
     expect(() => service.validateSelection("codexCli", {
       model: "gpt-future",
       effort: "max",
+      speedMode: "standard",
       catalogRevision: "codexCli-r1",
       setupGeneration: prepared.setupGeneration,
     })).toThrowError(expect.objectContaining({ code: "invalidSelection" }));
@@ -763,6 +788,7 @@ describe("AiCliSetupService", () => {
     await expect(service.assertCurrentVersion("codexCli", {
       model: "gpt-future",
       effort: "max",
+      speedMode: "standard",
       catalogRevision: "codexCli-r1",
       setupGeneration: 1,
     }, new AbortController().signal)).rejects.toBe(failure);
@@ -945,6 +971,7 @@ describe("CLI provider normalization and lazy defaults", () => {
     await expect(service.assertCurrentExecution("claudeCli", {
       model: "claude-future",
       effort: "max",
+      speedMode: "standard",
       catalogRevision: "claudeCli-r1",
       setupGeneration: 1,
     }, new AbortController().signal)).rejects.toMatchObject({ code: "invalidSelection" });

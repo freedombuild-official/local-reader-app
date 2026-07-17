@@ -622,7 +622,7 @@ function buildRepoWritePrompt(context: AIChatContext, messages: AIChatMessage[],
   ].filter(Boolean).join("\n\n");
 }
 
-function claudeNonInteractiveBaseArgs(): string[] {
+function claudeNonInteractiveBaseArgs(fastMode: boolean): string[] {
   return [
     "-p",
     "--output-format",
@@ -637,13 +637,13 @@ function claudeNonInteractiveBaseArgs(): string[] {
     "--setting-sources",
     "",
     "--settings",
-    claudeCurrentRepoSettings(),
+    claudeCurrentRepoSettings(fastMode),
   ];
 }
 
 export function claudeAuthenticationProbeArgs(): string[] {
   return [
-    ...claudeNonInteractiveBaseArgs(),
+    ...claudeNonInteractiveBaseArgs(false),
     "--tools",
     "",
     "--permission-mode",
@@ -660,6 +660,7 @@ async function runCodexChat(
   beforeMainSpawn?: () => Promise<AICommandLaunch>,
 ): Promise<string> {
   if (!beforeMainSpawn) throw new HttpError(500, "CLI execution is missing its server-owned executable lease.");
+  const speedArgs = codexSpeedModeArgs(selection.speedMode);
   const discoveryLaunch = await beforeMainSpawn();
   const disabledMcpServers = await probeCodexProjectMcpServers(runner, cwd, signal, discoveryLaunch);
   const modelLaunch = await beforeMainSpawn();
@@ -671,6 +672,7 @@ async function runCodexChat(
     selection.model,
     "--config",
     `model_reasoning_effort=${JSON.stringify(selection.effort)}`,
+    ...speedArgs,
     "--ephemeral",
     "--skip-git-repo-check",
     "--json",
@@ -697,10 +699,11 @@ async function runClaudeChat(
   beforeMainSpawn?: () => Promise<AICommandLaunch>,
 ): Promise<string> {
   if (!beforeMainSpawn) throw new HttpError(500, "CLI execution is missing its server-owned executable lease.");
+  const fastMode = claudeFastMode(selection.speedMode);
   const modelLaunch = await beforeMainSpawn();
   const result = await runner(modelLaunch.binary, [
     ...modelLaunch.args,
-    ...claudeNonInteractiveBaseArgs(),
+    ...claudeNonInteractiveBaseArgs(fastMode),
     "--model",
     selection.model,
     ...(selection.effort === "default" ? [] : ["--effort", selection.effort]),
@@ -723,8 +726,9 @@ export function claudeCurrentRepoSandboxSupported(platform: NodeJS.Platform = pr
   return platform !== "win32";
 }
 
-export function claudeCurrentRepoSettings(): string {
+export function claudeCurrentRepoSettings(fastMode = false): string {
   return JSON.stringify({
+    fastMode,
     permissions: {
       additionalDirectories: [],
       disableBypassPermissionsMode: "disable",
@@ -740,6 +744,28 @@ export function claudeCurrentRepoSettings(): string {
       },
     },
   });
+}
+
+function codexSpeedModeArgs(speedMode: AICliModelSelection["speedMode"]): string[] {
+  switch (speedMode) {
+    case "standard":
+      return ["--config", 'service_tier="flex"'];
+    case "fast":
+      return ["--config", 'service_tier="fast"', "--enable", "fast_mode"];
+    default:
+      throw new HttpError(400, "The selected Codex speed mode is not available.");
+  }
+}
+
+function claudeFastMode(speedMode: AICliModelSelection["speedMode"]): boolean {
+  switch (speedMode) {
+    case "standard":
+      return false;
+    case "fast":
+      return true;
+    default:
+      throw new HttpError(400, "The selected Claude speed mode is not available.");
+  }
 }
 
 function parseCodexJsonl(stdout: string): string {
