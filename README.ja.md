@@ -6,6 +6,8 @@
 
 Local Reader App は、Mac または Windows PC 上のフォルダを、ブラウザで読むための個人用閲覧領域に変えるアプリです。文書、ソースコード、テキスト、画像、PDF、ローカルの Git 変更を、別サービスへ移さずに閲覧できます。
 
+製品紹介サイト: [Local Reader App](https://local-reader-app.freedom-build.com)
+
 通常の閲覧では、登録したフォルダ内のファイルを編集しません。Local Reader App は自分のコンピュータ上の `http://127.0.0.1:5173/` で動作します。AI Chat を有効にしない限り、リポジトリの内容を AI サービスへ送信しません。AIへの送信前にはCurrent repoから選んだcontextを取り外せるchipで表示し、Current repo rootのrule fileを自動提案する場合もあります。
 
 現在の Local Reader App は、GitHub からソースファイルを入手して動かします。`.dmg`、`.exe`、App Store 用パッケージ、オンラインアカウント、ワンクリックのインストーラーはありません。以下の手順に沿って、ソースファイルのダウンロードから最初のフォルダを開くところまで進められます。
@@ -20,7 +22,6 @@ Ryusei Komada および各 contributor は、それぞれの成果物につい�
 
 - [プロジェクトと作者](#プロジェクトと作者)
 - [できること](#できること)
-- [OpenAI Build Week 2026](#openai-build-week-2026)
 - [macOSへのインストールと起動](#macosへのインストールと起動)
 - [Windowsへのインストールと起動](#windowsへのインストールと起動)
 - [閲覧するフォルダを設定する](#閲覧するフォルダを設定する)
@@ -50,29 +51,6 @@ Ryusei Komada および各 contributor は、それぞれの成果物につい�
 - 任意で、明示的に選んだファイルやフォルダについて AI サービスへ質問する。
 
 Local Reader App は閲覧を主目的とするアプリであり、汎用のファイル編集ソフト、ターミナル、Git クライアント、遠隔ファイルサーバーではありません。通常閲覧は登録したフォルダへ書き込みません。対応する任意のAI Chat **Current repo write**だけが明示的な例外で、準備確認の成功後に、そのrunで選択したCurrent repoだけを編集できます。Repository Settings の保存で更新するのは Local Reader App 自身の設定だけで、Memo のダウンロードは利用者が明示的に指示したブラウザからの保存です。一覧から項目を削除しても、登録したフォルダは削除しません。
-
-## OpenAI Build Week 2026
-
-Local Reader Appは、**OpenAI Build Week 2026**の**Developer Tools** trackへ提出するプロジェクトです。これは既存プロジェクトであり、Submission Periodが2026年7月13日09:00 PDTに始まった後、意味のある拡張を行いました。
-
-| 証拠 | 値 |
-| --- | --- |
-| event前baseline | Submission Period開始前の最後のproject commit `5273915` |
-| Build Week core delta | commit `423368f`、`005f426`、`0cea07d`、`4e71660`、`7ec6be6` |
-| core delta規模 | 32 files changed、12,493 insertions、241 deletions |
-| primary Codex session | `019f696e-2220-7fc1-bd3d-7bdd8a9c03de` |
-| primary sessionで使用したmodel | Codex App経由のGPT-5.6 Sol（`gpt-5.6-sol`） |
-
-event期間中、CodexとGPT-5.6は、CLI-owned認証、動的なmodel/reasoning catalog、明示的なStandard/Fast inference選択、安全なsetup/update、repository単位のconversation persistence、Windows process boundaryの実装と検証を支援しました。人間のmaintainerは、product scope、read/write境界、fail-closed behavior、supported platformの主張、公開可能範囲を決定しました。
-
-審査用の導線は次のとおりです。
-
-- [Build Week実装証拠](docs/openai-build-week-2026.md)
-- [再build不要の審査手順](docs/JUDGING.md)
-- [event-specific judge package](https://github.com/freedombuild-official/local-reader-app/releases/tag/build-week-2026-judge)
-- [公開sourceとcommit history](https://github.com/freedombuild-official/local-reader-app)
-
-judge packageはBuild Week向けprereleaseで、build済みweb assetsと匿名sample workspaceを含みます。一般向けdesktop installerではなく、通常のsource-first distributionを変更するものでもありません。
 
 ## インストール前の準備
 

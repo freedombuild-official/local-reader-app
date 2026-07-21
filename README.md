@@ -6,6 +6,8 @@ This README documents the current default-branch source at package version `0.1.
 
 Local Reader App turns folders on your Mac or Windows PC into a private reading workspace in your browser. Use it to browse documentation, source code, text, images, PDFs, and local Git changes without moving those files into another service.
 
+Product website: [Local Reader App](https://local-reader-app.freedom-build.com)
+
 The normal viewer does not edit files in the folders you register. Local Reader App runs on your own computer at `http://127.0.0.1:5173/`. No repository content is sent to an AI service unless you enable AI Chat. Before an AI request, context selected from the Current repo is shown in removable chips; a rule file from the Current repo root may be suggested automatically.
 
 Local Reader App currently runs from the source files on GitHub. There is no `.dmg`, `.exe`, app-store package, hosted account, or one-click installer. The setup below takes you from downloading the source to opening your first folder.
@@ -20,7 +22,6 @@ Copyright remains with Ryusei Komada and other contributors for their respective
 
 - [Project and Authorship](#project-and-authorship)
 - [What You Can Do](#what-you-can-do)
-- [OpenAI Build Week 2026](#openai-build-week-2026)
 - [Install and Start on macOS](#install-and-start-on-macos)
 - [Install and Start on Windows](#install-and-start-on-windows)
 - [Configure the Folders You Read](#configure-the-folders-you-read)
@@ -50,29 +51,6 @@ Copyright remains with Ryusei Komada and other contributors for their respective
 - Optionally ask an AI service about files or folders that you select explicitly.
 
 Local Reader App is primarily a reader, not a general file editor, terminal, Git client, or remote file server. Normal viewing does not write to registered folders. A supported optional AI Chat **Current repo write** entry is the explicit exception and can edit only the Current repo selected for that run after readiness succeeds. Saving Repository Settings updates only Local Reader App's own configuration, while downloading a Memo creates a browser download that you requested. Removing an entry from the repository list never deletes the registered folder.
-
-## OpenAI Build Week 2026
-
-Local Reader App is being submitted to **OpenAI Build Week 2026** in the **Developer Tools** track. This is a pre-existing project that was meaningfully extended after the Submission Period opened on July 13, 2026 at 09:00 PDT.
-
-| Evidence | Value |
-| --- | --- |
-| Pre-event baseline | Commit `5273915`, the last project commit before the Submission Period |
-| Build Week core delta | Commits `423368f`, `005f426`, `0cea07d`, `4e71660`, and `7ec6be6` |
-| Core delta size | 32 files changed, 12,493 insertions, and 241 deletions |
-| Primary Codex session | `019f696e-2220-7fc1-bd3d-7bdd8a9c03de` |
-| Model used for the primary session | GPT-5.6 Sol (`gpt-5.6-sol`) through Codex App |
-
-During the event window, Codex and GPT-5.6 helped implement and verify CLI-owned authentication, dynamic model and reasoning catalogs, explicit Standard/Fast inference selection, guarded setup and update flows, repository-scoped conversation persistence, and Windows process-boundary checks. The human maintainer chose the product scope, read/write boundaries, fail-closed behavior, supported-platform claims, and what could be published.
-
-Judges can use these paths:
-
-- [Build Week implementation evidence](docs/openai-build-week-2026.md)
-- [No-rebuild judging guide](docs/JUDGING.md)
-- [Event-specific judge package](https://github.com/freedombuild-official/local-reader-app/releases/tag/build-week-2026-judge)
-- [Public source and commit history](https://github.com/freedombuild-official/local-reader-app)
-
-The judge package is a Build Week prerelease containing prebuilt web assets and an anonymous sample workspace. It is not a general desktop installer or a change to the normal source-first distribution model.
 
 ## Before You Install
 
