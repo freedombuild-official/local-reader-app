@@ -418,13 +418,18 @@ For Markdown, **Table of Contents** lists H1 through H6 headings and their sourc
 
 **Memo** is one temporary Markdown scratchpad for the current browser page:
 
-- **Raw** edits Markdown text.
-- **Render** previews it with tables, task lists, and code-block controls.
+- Write plain text or Markdown in one always-editable surface. Supported Markdown is styled immediately as you type; there is no separate Raw / Render mode.
+- YAML-style frontmatter stays visible as literal, editable source text. Memo does not interpret or render it as metadata.
+- Headings, emphasis, code, quotes, lists, tasks, links, horizontal rules, and tables receive live editing support. Raw HTML is not executed, remote images are not loaded, and unsafe links stay inert.
 - The copy button copies the whole memo.
 - The download button saves `local-reader-app-memo.md` through your browser.
 - The delete button clears it immediately.
 
-Memo does not create or edit a repository file. Download anything you want to keep before reloading or closing the page.
+The editor code loads the first time you open Memo. Moving between the right-panel tabs keeps that editor mounted for the current page, including its source and edit history.
+
+The production build keeps every JavaScript chunk at or below 500,000 bytes and all JavaScript chunks at or below 900,000 bytes. The current live-editor build measures about 842 kB in total, including a separate Memo chunk of about 348 kB.
+
+Memo does not create or edit a repository file and is not saved to browser storage. Download anything you want to keep before reloading or closing the page.
 
 ## Use HTTP Delivery
 

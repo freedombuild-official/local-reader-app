@@ -418,13 +418,18 @@ Markdown では、**Table of Contents** に H1 から H6 までの見出しと�
 
 **Memo** は、現在のブラウザページで1つ使える一時的な Markdown メモ帳です。
 
-- **Raw** で Markdown テキストを編集する。
-- **Render** で表、タスクリスト、コードブロック操作付きのプレビューを表示する。
+- plain textとMarkdownを、常に編集できる1つの面へ入力します。対応するMarkdownは入力中に即時整形され、Raw / Renderの切り替えはありません。
+- YAML風frontmatterはmetadataとして解釈・描画せず、literalかつ編集可能なsource textのまま表示します。
+- 見出し、強調、code、引用、list、task、link、horizontal rule、tableをlive編集できます。raw HTMLは実行せず、remote imageは読み込まず、安全でないlinkは開きません。
 - コピーボタンでメモ全体をコピーする。
 - ダウンロードボタンで、ブラウザから `local-reader-app-memo.md` を明示的に保存する。
 - 削除ボタンで直ちに消去する。
 
-Memo はリポジトリ内のファイルを作成・編集しません。ページを再読み込みまたは閉じる前に、残したい内容をダウンロードしてください。
+editor codeはMemoを初めて開いたときに読み込みます。右パネル内を切り替えても、現在のページではeditor、source、編集履歴を維持します。
+
+production buildでは、JavaScriptを1 chunkあたり500,000 bytes以下、全chunk合計900,000 bytes以下に制限します。現在のlive editor build実測は合計約842 kBで、うちMemo専用の遅延chunkは約348 kBです。
+
+Memo はリポジトリ内のファイルを作成・編集せず、browser storageにも保存しません。ページを再読み込みまたは閉じる前に、残したい内容をダウンロードしてください。
 
 ## HTTP Deliveryを使う
 

@@ -2,7 +2,7 @@ import { readdir, stat } from "node:fs/promises";
 import path from "node:path";
 
 const chunkBudgetBytes = 500_000;
-const totalBudgetBytes = 750_000;
+const totalBudgetBytes = 900_000;
 const assetsDirectory = path.resolve("dist/assets");
 const files = await readdir(assetsDirectory);
 const javaScriptFiles = files.filter((file) => file.endsWith(".js"));

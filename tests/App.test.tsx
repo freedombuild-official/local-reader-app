@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
+import { EditorView } from "@codemirror/view";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import axe from "axe-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -56,6 +57,24 @@ function cssRule(selector: string): string {
   const escapedSelector = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const match = stylesCss.match(new RegExp(`${escapedSelector}\\s*\\{([^}]*)\\}`));
   return match ? match[1] : "";
+}
+
+function memoEditorView(): EditorView {
+  const textbox = screen.getByRole("textbox", { name: "Session memo" });
+  const editorElement = textbox.closest<HTMLElement>(".cm-editor");
+  const view = editorElement === null ? null : EditorView.findFromDOM(editorElement);
+  if (view === null) throw new Error("Memo EditorView was not created");
+  return view;
+}
+
+function setMemoMarkdown(markdown: string): void {
+  const view = memoEditorView();
+  act(() => {
+    view.dispatch({
+      changes: { from: 0, to: view.state.doc.length, insert: markdown },
+      userEvent: "input",
+    });
+  });
 }
 
 function fetchCallsTo(pathname: string) {
@@ -522,7 +541,8 @@ describe("App", () => {
     expect(fileTabTitles()).toEqual(["README.md", "guide.md"]);
 
     fireEvent.click(screen.getByRole("tab", { name: "Memo" }));
-    fireEvent.change(screen.getByLabelText("Session memo"), { target: { value: "reload memo" } });
+    await screen.findByRole("textbox", { name: "Session memo" });
+    setMemoMarkdown("reload memo");
 
     fireEvent.click(openSettingsButton());
     expect(await screen.findByRole("heading", { name: "Settings" })).toBeTruthy();
@@ -565,7 +585,7 @@ describe("App", () => {
     expect((screen.getByLabelText("AI Chat message") as HTMLTextAreaElement).value).toBe("reload draft");
 
     fireEvent.click(screen.getByRole("tab", { name: "Memo" }));
-    expect((screen.getByLabelText("Session memo") as HTMLTextAreaElement).value).toBe("reload memo");
+    expect(memoEditorView().state.doc.toString()).toBe("reload memo");
   });
 
   it("drops stale repository reload tree responses after switching repositories", async () => {
@@ -766,8 +786,14 @@ describe("App", () => {
     fireEvent.keyDown(outlineTab, { key: "ArrowRight" });
     expect(document.activeElement).toBe(memoTab);
     expect(memoTab.getAttribute("aria-selected")).toBe("true");
-    expect(screen.getByRole("tabpanel", { name: "Memo" }).getAttribute("aria-labelledby")).toBe(memoTab.id);
-    expect(cssRule(".memo-textarea:focus-visible")).toContain("outline: 2px solid #287888;");
+    const memoPanel = screen.getByRole("tabpanel", { name: "Memo" });
+    expect(memoPanel.getAttribute("aria-labelledby")).toBe(memoTab.id);
+    expect(within(memoPanel).queryByRole("heading", { name: "Memo" })).toBeNull();
+    expect(within(memoPanel).getByRole("toolbar", { name: "Memo actions" }).querySelectorAll("button")).toHaveLength(3);
+    expect(within(memoPanel).queryByRole("button", { name: "Raw" })).toBeNull();
+    expect(within(memoPanel).queryByRole("button", { name: "Render" })).toBeNull();
+    await screen.findByRole("textbox", { name: "Session memo" });
+    expect(cssRule(".memo-live-editor .cm-editor.cm-focused")).toContain("outline: 0;");
   });
 
   it("fixes with active double click and pins only through the file tab context menu", async () => {
@@ -1045,7 +1071,7 @@ describe("App", () => {
     expect(document.querySelector(".markdown-code-block")?.classList.contains("wrapped")).toBe(true);
   });
 
-  it("provides item memo render, icon actions, copy, download, and delete while keeping AI Chat separate", async () => {
+  it("keeps memo markdown editable in one live-rendered surface with three icon actions", async () => {
     const clipboardWrite = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, "clipboard", { value: { writeText: clipboardWrite }, configurable: true });
     const createObjectURL = vi.fn(() => "blob:reader-wiki-memo");
@@ -1058,7 +1084,7 @@ describe("App", () => {
     expect(await screen.findByRole("heading", { name: "Hello" })).toBeTruthy();
     expect(screen.getByRole("tab", { name: "AI Chat" })).toBeTruthy();
     fireEvent.click(screen.getByRole("tab", { name: "Memo" }));
-    const memo = screen.getByLabelText("Session memo") as HTMLTextAreaElement;
+    await screen.findByRole("textbox", { name: "Session memo" });
     const memoContent = [
       "---",
       "title: Scratch source",
@@ -1078,27 +1104,36 @@ describe("App", () => {
       "console.log('a very long memo code line that should wrap inside the preview instead of forcing horizontal movement');",
       "```",
     ].join("\n");
-    fireEvent.change(memo, { target: { value: memoContent } });
-    expect(memo.value).toBe(memoContent);
+    setMemoMarkdown(memoContent);
+    const editorView = memoEditorView();
+    const memoPanel = screen.getByRole("tabpanel", { name: "Memo" });
+    expect(editorView.state.doc.toString()).toBe(memoContent);
+    expect(memoPanel.textContent?.match(/---/g)).toHaveLength(2);
+    expect(memoPanel.textContent).toContain("title: Scratch source");
+    expect(memoPanel.textContent).toContain("status: draft");
+    expect(memoPanel.querySelector(".memo-live-markdown-heading-1")?.textContent).toContain("Scratch");
+    expect(memoPanel.querySelector(".memo-live-markdown-task-item")?.textContent).toContain("Review this section");
+    expect(within(memoPanel).getByRole("checkbox", { name: "Mark task incomplete" })).toBeTruthy();
+    expect(within(memoPanel).getByRole("table")).toBeTruthy();
+    expect(
+      Array.from(memoPanel.querySelectorAll(".memo-live-markdown-code-block"))
+        .map((line) => line.textContent)
+        .join("\n"),
+    ).toContain("console.log");
+    expect(within(memoPanel).queryByRole("heading", { name: "Memo" })).toBeNull();
+    expect(within(memoPanel).queryByRole("button", { name: "Raw" })).toBeNull();
+    expect(within(memoPanel).queryByRole("button", { name: "Render" })).toBeNull();
+    expect(within(memoPanel).getByRole("toolbar", { name: "Memo actions" }).querySelectorAll("button")).toHaveLength(3);
+    expect(cssRule(".memo-live-editor .cm-content")).toContain("white-space: pre-wrap;");
+    expect(cssRule(".memo-live-markdown-table-scroll")).toContain("overflow-x: auto;");
 
-    fireEvent.click(screen.getByRole("button", { name: "Render" }));
-    expect(screen.getByRole("heading", { name: "Scratch" })).toBeTruthy();
-    expect(screen.getByText("Review this section")).toBeTruthy();
-    const memoPreview = screen.getByLabelText("Memo preview");
-    expect(within(memoPreview).queryByText("title: Scratch source")).toBeNull();
-    expect(within(memoPreview).queryByText("status: draft")).toBeNull();
-    expect(within(memoPreview).getByRole("checkbox", { name: "completed task" })).toBeTruthy();
-    expect(memoPreview.querySelector(".markdown-table-scroll")).toBeTruthy();
-    expect(cssRule(".memo-preview")).toContain("overflow-x: hidden;");
-    expect(cssRule(".memo-preview .markdown-table-scroll")).toContain("overflow-x: hidden;");
-    expect(cssRule(".memo-preview pre")).toContain("white-space: pre-wrap;");
-    expect(cssRule(".memo-preview pre code")).toContain("min-width: 0;");
-    expect(within(memoPreview).getByRole("button", { name: "Copy code block" })).toBeTruthy();
-    expect(within(memoPreview).getByRole("button", { name: "Wrap code block" })).toBeTruthy();
-
-    fireEvent.click(screen.getByRole("button", { name: "Raw" }));
-    expect((screen.getByLabelText("Session memo") as HTMLTextAreaElement).value).toBe(memoContent);
-    fireEvent.click(screen.getByRole("button", { name: "Render" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Outline" }));
+    const memoFace = document.querySelector(".right-panel-face[data-active=\"false\"]") as HTMLElement | null;
+    expect(memoFace?.getAttribute("aria-hidden")).toBe("true");
+    expect(memoFace?.hasAttribute("inert")).toBe(true);
+    fireEvent.click(screen.getByRole("tab", { name: "Memo" }));
+    expect(memoEditorView()).toBe(editorView);
+    expect(memoEditorView().state.doc.toString()).toBe(memoContent);
 
     fireEvent.click(screen.getByRole("button", { name: "Copy memo" }));
     await waitFor(() => expect(clipboardWrite).toHaveBeenCalledWith(memoContent));
@@ -1108,9 +1143,7 @@ describe("App", () => {
     expect(anchorClick).toHaveBeenCalledTimes(1);
 
     fireEvent.click(screen.getByRole("button", { name: "Delete memo" }));
-    expect(screen.getByText("No memo yet.")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Raw" }));
-    expect((screen.getByLabelText("Session memo") as HTMLTextAreaElement).value).toBe("");
+    expect(memoEditorView().state.doc.toString()).toBe("");
     expect(Array.from(document.querySelectorAll(".memo-icon-button")).every((button) => button.textContent === "")).toBe(true);
   });
 
@@ -1118,7 +1151,8 @@ describe("App", () => {
     render(<App />);
     expect(await screen.findByRole("heading", { name: "Hello" })).toBeTruthy();
     fireEvent.click(screen.getByRole("tab", { name: "Memo" }));
-    fireEvent.change(screen.getByLabelText("Session memo"), { target: { value: "keep this memo" } });
+    await screen.findByRole("textbox", { name: "Session memo" });
+    setMemoMarkdown("keep this memo");
 
     fireEvent.click(openSettingsButton());
     expect(await screen.findByRole("heading", { name: "Settings" })).toBeTruthy();
@@ -1197,7 +1231,7 @@ describe("App", () => {
     const storedFocusedSettings = JSON.parse(window.localStorage.getItem("readerWiki.basicSettings.v1") || "{}") as Record<string, unknown>;
     expect(storedFocusedSettings.layout).toBe("focused");
     fireEvent.click(screen.getByRole("tab", { name: "Memo" }));
-    expect((screen.getByLabelText("Session memo") as HTMLTextAreaElement).value).toBe("keep this memo");
+    expect(memoEditorView().state.doc.toString()).toBe("keep this memo");
   });
 
   it("injects reader font scale and color mode into sandboxed HTML file view documents", () => {

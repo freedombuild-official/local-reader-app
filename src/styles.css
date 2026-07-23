@@ -812,6 +812,26 @@ main:is(.app-shell, .settings-shell) {
 .right-panel-tabs button { border: 0; border-left: 1px solid #c8d4d8; background: #fff; color: #405058; cursor: pointer; padding: 8px 10px; font-size: 12px; }
 .right-panel-tabs button:first-child { border-left: 0; }
 .right-panel-tabs button.active { background: #123e45; color: #fff; }
+.right-panel-content {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+.right-panel-face {
+  position: absolute;
+  inset: 0;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: #fbfcfd;
+}
+.right-panel-face[data-active="false"] {
+  visibility: hidden;
+  pointer-events: none;
+}
 .ai-chat-session-header {
   display: flex;
   flex: 0 0 auto;
@@ -910,48 +930,38 @@ main:is(.app-shell, .settings-shell) {
   }
 }
 .memo-panel {
+  --text: #172026;
+  --muted: #6a7a82;
+  --line: #d7e0e8;
+  --line-soft: #e1e8eb;
+  --accent: #287888;
+  --accent-soft: #e7f1f4;
+  --surface: #ffffff;
+  --surface-subtle: #f7f9fb;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
-  flex: 1;
+  width: 100%;
+  height: 100%;
   min-height: 0;
   background: #fbfcfd;
 }
 .memo-panel-header {
-  display: grid;
-  gap: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
   border-bottom: 1px solid #e1e8eb;
-  padding: 14px 16px;
+  padding: 10px 16px 12px;
 }
-.memo-panel-header h2 { margin: 0; font-size: 16px; letter-spacing: 0; }
 .memo-panel-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
   align-items: center;
+  justify-content: flex-start;
+  width: 100%;
 }
-.memo-mode-toggle {
-  display: grid;
-  grid-template-columns: minmax(44px, 1fr) minmax(58px, 1fr);
-  width: 112px;
-  height: 30px;
-  overflow: hidden;
-  border: 1px solid #d7e0e8;
-  border-radius: 7px;
-  background: #f7f9fb;
-}
-.memo-mode-toggle button {
-  min-width: 0;
-  border: 0;
-  border-right: 1px solid #d7e0e8;
-  background: transparent;
-  color: #667780;
-  cursor: pointer;
-  font-size: 11px;
-  line-height: 1;
-  padding: 0 7px;
-}
-.memo-mode-toggle button:last-child { border-right: 0; }
-.memo-mode-toggle button:hover, .memo-mode-toggle button.active { background: #e7f1f4; color: #123e45; }
 .memo-icon-button {
   display: inline-grid;
   place-items: center;
@@ -977,69 +987,376 @@ main:is(.app-shell, .settings-shell) {
 .memo-icon-button.copied { border-color: #8ec7a6; background: #edf8f1; color: #23693d; }
 .memo-icon-button.error, .memo-icon-button.danger:hover { border-color: #e2aaa4; background: #fff5f4; color: #9d2f2f; }
 .memo-icon-button:disabled { cursor: default; opacity: 0.45; }
-.memo-panel-space {
+.memo-panel-body {
   min-height: 0;
-  overflow: auto;
+  overflow: hidden;
   padding: 16px;
 }
-.memo-textarea {
+
+.memo-live-editor-loading {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.memo-live-editor {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
   width: 100%;
   height: 100%;
-  min-height: 320px;
-  resize: none;
-  border: 0;
-  border-radius: 0;
-  padding: 0;
+  min-height: 300px;
+  overflow: hidden;
   background: transparent;
-  color: #172026;
-  font: 13px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.memo-live-markdown-fallback-notice {
+  margin: 0 0 12px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--accent-soft);
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.memo-live-markdown-fallback-notice[hidden] {
+  display: none;
+}
+
+.memo-live-editor .cm-editor {
+  height: 100%;
+  min-height: 300px;
+  background: transparent;
+  color: var(--text);
+  caret-color: var(--accent);
+}
+
+.memo-live-editor .cm-editor.cm-focused {
+  outline: 0;
+}
+
+.memo-live-editor .cm-scroller {
+  overflow: auto;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 13px;
+  line-height: 1.65;
+}
+
+.memo-live-editor .cm-content {
+  min-height: 100%;
+  padding: 0 0 22px;
+  white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
-.memo-textarea:focus { outline: 0; }
-.memo-textarea:focus-visible {
-  border-radius: 4px;
-  outline: 2px solid #287888;
-  outline-offset: 3px;
+
+.memo-live-editor .cm-line {
+  padding: 0;
 }
-.memo-preview {
-  max-width: none;
+
+.memo-live-editor .cm-line.memo-live-markdown-source-line-hidden {
+  display: none;
+}
+
+.memo-live-editor .cm-placeholder {
+  color: #9aa5b1;
+  font-style: normal;
+}
+
+.memo-live-editor .cm-cursor {
+  border-left-color: var(--accent);
+}
+
+.memo-live-editor .cm-selectionBackground,
+.memo-live-editor .cm-content ::selection {
+  background: var(--accent-soft);
+}
+
+.cm-line.memo-live-markdown-heading {
+  padding-top: 0.58em;
+  padding-bottom: 0.16em;
+  color: var(--text);
+  font-weight: 700;
+  line-height: 1.35;
+  letter-spacing: -0.01em;
+}
+
+.cm-line.memo-live-markdown-heading-1 {
+  font-size: 140%;
+}
+
+.cm-line.memo-live-markdown-heading-2 {
+  font-size: 128%;
+}
+
+.cm-line.memo-live-markdown-heading-3 {
+  font-size: 119%;
+}
+
+.cm-line.memo-live-markdown-heading-4 {
+  font-size: 113%;
+}
+
+.cm-line.memo-live-markdown-heading-5 {
+  font-size: 108%;
+}
+
+.cm-line.memo-live-markdown-heading-6 {
+  font-size: 104%;
+}
+
+.memo-live-markdown-emphasis {
+  font-style: italic;
+}
+
+.memo-live-markdown-strong {
+  font-weight: 700;
+}
+
+.memo-live-markdown-strikethrough {
+  color: var(--muted);
+  text-decoration: line-through;
+  text-decoration-thickness: 1.5px;
+}
+
+.memo-live-markdown-inline-code,
+.cm-line.memo-live-markdown-code-block {
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+.memo-live-markdown-inline-code {
+  padding: 0.1em 0.3em;
+  border: 1px solid var(--line-soft);
+  border-radius: 4px;
+  background: var(--surface-subtle);
+}
+
+.cm-line.memo-live-markdown-code-block {
+  padding: 0.16em 0.7em;
+  background: var(--surface-subtle);
+  white-space: pre-wrap;
+}
+
+.memo-live-markdown-code-language {
+  margin-right: 0.5em;
+  color: var(--muted);
+  font-size: 0.78em;
+  font-weight: 700;
+  letter-spacing: 0.035em;
+  text-transform: uppercase;
+}
+
+.cm-line.memo-live-markdown-blockquote {
+  padding-left: 0.75em;
+  border-left: 2px solid var(--accent);
+  color: var(--muted);
+  font-style: italic;
+}
+
+.cm-line.memo-live-markdown-list-item {
+  padding-left: 0.1em;
+}
+
+.memo-live-markdown-list-marker {
+  display: inline-block;
+  min-width: 1.35em;
+  margin-right: 0.38em;
+  color: var(--accent);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 0.9em;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.memo-live-markdown-list-marker-nested-ordered {
+  margin-left: 0.45em;
+}
+
+.memo-live-markdown-list-marker-task {
   min-width: 0;
   margin: 0;
-  overflow-x: hidden;
-  overflow-wrap: anywhere;
 }
-.memo-preview p,
-.memo-preview li,
-.memo-preview blockquote,
-.memo-preview a {
-  overflow-wrap: anywhere;
-  word-break: break-word;
+
+.memo-live-markdown-task {
+  display: inline-flex;
+  align-items: center;
+  margin: 0 0.42em 0 0.04em;
+  vertical-align: -0.08em;
 }
-.memo-preview .markdown-table-scroll {
-  overflow-x: hidden;
+
+.memo-live-markdown-task-checkbox {
+  width: 1em;
+  height: 1em;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
 }
-.memo-preview table {
+
+.memo-live-markdown-task-checkbox:disabled {
+  cursor: default;
+}
+
+.cm-line.memo-live-markdown-task-item:has(.memo-live-markdown-task-checkbox:checked) {
+  color: var(--muted);
+}
+
+.memo-live-markdown-link {
+  color: var(--accent);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--accent) 55%, transparent);
+  text-underline-offset: 0.14em;
+}
+
+a.memo-live-markdown-link {
+  cursor: pointer;
+}
+
+a.memo-live-markdown-link:focus-visible {
+  border-radius: 3px;
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.memo-live-markdown-link-disabled {
+  cursor: text;
+  text-decoration-style: dotted;
+  text-decoration-color: var(--muted);
+}
+
+.memo-live-markdown-horizontal-rule {
+  display: block;
+  width: 100%;
+  padding: 0.9em 0;
+}
+
+.memo-live-markdown-horizontal-rule hr {
+  margin: 0;
+  border: 0;
+  border-top: 1px solid var(--line);
+}
+
+.memo-live-markdown-table-scroll {
+  box-sizing: border-box;
+  contain: inline-size;
   width: 100%;
   min-width: 0;
-  table-layout: fixed;
+  max-width: 100%;
+  margin: 0.9em 0;
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  scrollbar-gutter: stable;
 }
-.memo-preview th,
-.memo-preview td {
-  white-space: normal;
-  overflow-wrap: anywhere;
-  word-break: break-word;
+
+.memo-live-markdown-table {
+  width: max-content;
+  min-width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  line-height: 1.5;
 }
-.memo-preview pre {
-  overflow-x: hidden;
-  white-space: pre-wrap;
+
+.memo-live-markdown-table th,
+.memo-live-markdown-table td {
+  padding: 0.55em 0.65em;
+  border-right: 1px solid var(--line-soft);
+  border-bottom: 1px solid var(--line-soft);
+  text-align: left;
+  vertical-align: top;
 }
-.memo-preview pre code {
-  min-width: 0;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  word-break: break-word;
+
+.memo-live-markdown-table th {
+  background: var(--surface-subtle);
+  font-weight: 700;
 }
-.memo-empty { margin: 0; color: #6a7a82; font-size: 13px; }
+
+.memo-live-markdown-table tr:last-child td,
+.memo-live-markdown-table thead:last-child th {
+  border-bottom: 0;
+}
+
+.memo-live-markdown-table th:last-child,
+.memo-live-markdown-table td:last-child {
+  border-right: 0;
+}
+
+.memo-live-markdown-table th[tabindex="0"],
+.memo-live-markdown-table td[tabindex="0"] {
+  cursor: text;
+}
+
+.memo-live-markdown-table th[tabindex="0"]:focus-visible,
+.memo-live-markdown-table td[tabindex="0"]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -3px;
+}
+
+.memo-live-markdown-table-cell-rendered {
+  display: block;
+  min-height: 1.5em;
+}
+
+.memo-live-markdown-table-cell-rendered[hidden],
+.memo-live-markdown-table-cell-input[hidden] {
+  display: none;
+}
+
+.memo-live-markdown-table-cell-input {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 5ch;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  line-height: inherit;
+}
+
+.memo-live-markdown-table-cell-editing {
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
+.memo-live-markdown-image-placeholder {
+  display: inline-flex;
+  max-width: 100%;
+  align-items: baseline;
+  gap: 0.38em;
+  padding: 0.22em 0.45em;
+  border: 1px solid var(--line-soft);
+  border-radius: 6px;
+  background: var(--surface-subtle);
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+  vertical-align: 0.06em;
+}
+
+.memo-live-markdown-image-icon {
+  color: var(--accent);
+}
+
+.memo-live-markdown-image-alt {
+  color: var(--text);
+  font-weight: 700;
+}
+
+.memo-live-markdown-image-target {
+  max-width: 18em;
+  overflow: hidden;
+  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.memo-live-markdown-escaped,
+.memo-live-markdown-entity {
+  color: inherit;
+}
 
 .settings-shell {
   display: grid;
@@ -2444,12 +2761,24 @@ main:is(.app-shell, .settings-shell) {
 }
 
 .app-shell[data-color-mode="dark"] .right-panel,
+.app-shell[data-color-mode="dark"] .right-panel-face,
 .app-shell[data-color-mode="dark"] .file-tab-bar-wrap,
 .app-shell[data-color-mode="dark"] .memo-panel,
 .settings-shell[data-color-mode="dark"] {
   border-color: var(--rw-dark-border);
   background: var(--rw-dark-panel-muted);
   color: var(--rw-dark-text);
+}
+
+.app-shell[data-color-mode="dark"] .memo-panel {
+  --text: var(--rw-dark-text);
+  --muted: var(--rw-dark-muted);
+  --line: var(--rw-dark-border);
+  --line-soft: var(--rw-dark-border-soft);
+  --accent: var(--rw-dark-accent);
+  --accent-soft: var(--rw-dark-accent-bg);
+  --surface: var(--rw-dark-panel);
+  --surface-subtle: var(--rw-dark-panel-soft);
 }
 
 .app-shell[data-color-mode="dark"] .settings-header,
@@ -2510,8 +2839,6 @@ main:is(.app-shell, .settings-shell) {
 .app-shell[data-color-mode="dark"] .right-panel-tabs,
 .app-shell[data-color-mode="dark"] .right-panel-tabs button,
 .app-shell[data-color-mode="dark"] .ai-chat-new-button,
-.app-shell[data-color-mode="dark"] .memo-mode-toggle,
-.app-shell[data-color-mode="dark"] .memo-mode-toggle button,
 .app-shell[data-color-mode="dark"] .viewer-copy-button,
 .app-shell[data-color-mode="dark"] .http-delivery-stop-button,
 .app-shell[data-color-mode="dark"] .memo-icon-button,
@@ -2534,7 +2861,6 @@ main:is(.app-shell, .settings-shell) {
 
 .app-shell[data-color-mode="dark"] .segmented button.active,
 .app-shell[data-color-mode="dark"] .right-panel-tabs button.active,
-.app-shell[data-color-mode="dark"] .memo-mode-toggle button.active,
 .app-shell[data-color-mode="dark"] .repo-http-delivery-button.active,
 .app-shell[data-color-mode="dark"] .viewer-copy-button.http-delivery-open-button.active,
 .settings-shell[data-color-mode="dark"] .primary-button,
@@ -2661,7 +2987,6 @@ main:is(.app-shell, .settings-shell) {
 .app-shell[data-color-mode="dark"] .file-tab-menu button:focus-visible,
 .app-shell[data-color-mode="dark"] .outline-link:hover,
 .app-shell[data-color-mode="dark"] .outline-link:focus-visible,
-.app-shell[data-color-mode="dark"] .memo-mode-toggle button:hover,
 .settings-shell[data-color-mode="dark"] .settings-back-button:hover,
 .settings-shell[data-color-mode="dark"] .secondary-button:hover,
 .settings-shell[data-color-mode="dark"] .settings-segmented button:hover,
@@ -2692,7 +3017,6 @@ main:is(.app-shell, .settings-shell) {
 .app-shell[data-color-mode="dark"] .binary-state p,
 .app-shell[data-color-mode="dark"] .file-info-list dt,
 .app-shell[data-color-mode="dark"] .outline-link small,
-.app-shell[data-color-mode="dark"] .memo-empty,
 .app-shell[data-color-mode="dark"] .ai-chat-empty small,
 .app-shell[data-color-mode="dark"] .ai-message-role-chip,
 .app-shell[data-color-mode="dark"] .ai-message-streaming,
@@ -2789,7 +3113,6 @@ main:is(.app-shell, .settings-shell) {
   background: var(--rw-dark-panel-muted);
 }
 
-.app-shell[data-color-mode="dark"] .memo-textarea,
 .app-shell[data-color-mode="dark"] .file-info-list dd,
 .settings-shell[data-color-mode="dark"] .yaml-preview,
 .settings-shell[data-color-mode="dark"] .repo-list-main strong,

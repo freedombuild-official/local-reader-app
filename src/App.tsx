@@ -1,5 +1,4 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type MutableRefObject } from "react";
-import MarkdownIt from "markdown-it";
 import {
   BookOpen,
   Braces,
@@ -32,16 +31,12 @@ import { fetchAICliSetups, fetchFile, fetchHttpDeliveryStatus, fetchRepos, fetch
 import type { AIChatContextChip, AIChatSessionState, AIEntryKind, DiffStatus, FileResponse, HttpDeliveryItemStatus, HttpDeliveryStatus, RepoListItem, RepoSyncStatus, TreeNode, TreeSnapshot } from "./types";
 import { activeAIChatTarget, activeAIModelBehavior, applyCliSetupSnapshot, defaultBasicSettings, invalidateCliReadinessForRepositoryChange, isCliEntryKind, loadBasicSettings, normalizeReaderFontScale, persistBasicSettings, updateAIEntryStatus, type AISettingsState, type BasicSettings, type ReaderFontScale } from "./settingsState";
 import { createAISettingsFromWorkspaceSession, createAIWorkspaceSessionState, createDefaultAIChatSession, loadAIWorkspaceSession, persistAIWorkspaceSession, restoreAIWorkspaceCliState } from "./appSessionState";
-import { injectMarkdownCodeToolbarButtons, installCodeBlockRule } from "../shared/markdownCodeBlocks";
-import { installTableScrollRule } from "../shared/markdownTableScroll";
-import { installTaskListRule } from "../shared/markdownTaskLists";
 
 type TreeCache = TreeSnapshot;
 type ViewMode = "rendered" | "source" | "raw";
 type AppView = "viewer" | "settings";
 type SettingsCategory = "basic" | "repositories" | "aiChat";
 type RightPanelMode = "outline" | "memo" | "aiChat";
-type MemoMode = "raw" | "render";
 type CopyState = "idle" | "copied" | "error";
 type RepoSyncViewStatus = RepoSyncStatus | { state: "syncing"; message: string; fetched: false };
 
@@ -90,10 +85,6 @@ const RIGHT_PANEL_TABS = [
   { mode: "aiChat", label: "AI Chat" },
 ] as const satisfies ReadonlyArray<{ mode: RightPanelMode; label: string }>;
 const defaultAIChatSession = createDefaultAIChatSession();
-const memoMarkdown = new MarkdownIt({ html: false, linkify: true });
-installTableScrollRule(memoMarkdown);
-installCodeBlockRule(memoMarkdown);
-installTaskListRule(memoMarkdown);
 
 function retainRegisteredAIChatSessions(
   sessions: Record<string, AIChatSessionState>,
@@ -105,6 +96,7 @@ function retainRegisteredAIChatSessions(
 }
 
 const LazyAIChatPanel = lazy(() => import("./AIChatPanel").then((module) => ({ default: module.AIChatPanel })));
+const LazyMemoLiveEditor = lazy(() => import("./MemoLiveEditor").then((module) => ({ default: module.MemoLiveEditor })));
 const LazySettingsView = lazy(() => import("./SettingsView").then((module) => ({ default: module.SettingsView })));
 
 export function App() {
@@ -128,7 +120,6 @@ export function App() {
   const [aiChatSessionKey, setAIChatSessionKey] = useState(0);
   const [aiChatSessionsByRepo, setAIChatSessionsByRepo] = useState<Record<string, AIChatSessionState>>(persistedAIWorkspace.aiChatSessionsByRepo);
   const [memoText, setMemoText] = useState("");
-  const [memoMode, setMemoMode] = useState<MemoMode>("raw");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [tabNotice, setTabNotice] = useState("");
@@ -1125,9 +1116,7 @@ export function App() {
         outline={outline}
         onHeadingSelect={scrollToHeading}
         memoText={memoText}
-        memoMode={memoMode}
         onMemoTextChange={setMemoText}
-        onMemoModeChange={setMemoMode}
         aiSettings={aiSettings}
         aiChatSession={aiChatSession}
         aiChatSessionKey={aiChatSessionKey}
@@ -1827,16 +1816,14 @@ function HttpDeliveryPanel({ status, stoppingItemIds, error, onStop }: {
   );
 }
 
-function RightPanel({ mode, onModeChange, file, outline, onHeadingSelect, memoText, memoMode, onMemoTextChange, onMemoModeChange, aiSettings, aiChatSession, aiChatSessionKey, onAIChatSessionChange, onNewAIChat, onAIReadinessFailure, onRepositoryChanged, aiModelBehavior, activeRepoId, activeRepoRevision, rootTreeNodes, onOpenSettings }: {
+function RightPanel({ mode, onModeChange, file, outline, onHeadingSelect, memoText, onMemoTextChange, aiSettings, aiChatSession, aiChatSessionKey, onAIChatSessionChange, onNewAIChat, onAIReadinessFailure, onRepositoryChanged, aiModelBehavior, activeRepoId, activeRepoRevision, rootTreeNodes, onOpenSettings }: {
   mode: RightPanelMode;
   onModeChange: (mode: RightPanelMode) => void;
   file: FileResponse | null;
   outline: OutlineItem[];
   onHeadingSelect: (headingId: string) => void;
   memoText: string;
-  memoMode: MemoMode;
   onMemoTextChange: (value: string) => void;
-  onMemoModeChange: (mode: MemoMode) => void;
   aiSettings: AISettingsState;
   aiChatSession: AIChatSessionState;
   aiChatSessionKey: number;
@@ -1851,6 +1838,11 @@ function RightPanel({ mode, onModeChange, file, outline, onHeadingSelect, memoTe
   onOpenSettings: () => void;
 }) {
   const tabRefs = useRef(new Map<RightPanelMode, HTMLButtonElement>());
+  const [memoOpened, setMemoOpened] = useState(mode === "memo");
+
+  useEffect(() => {
+    if (mode === "memo") setMemoOpened(true);
+  }, [mode]);
 
   function moveRightPanelTabFocus(currentIndex: number, key: string) {
     let nextIndex = currentIndex;
@@ -1902,37 +1894,48 @@ function RightPanel({ mode, onModeChange, file, outline, onHeadingSelect, memoTe
           </button>
         </div>
       ) : null}
-      {mode === "outline" ? (
-        <OutlinePanel file={file} outline={outline} onHeadingSelect={onHeadingSelect} />
-      ) : mode === "memo" ? (
-        <MemoPanel memoText={memoText} memoMode={memoMode} onMemoTextChange={onMemoTextChange} onMemoModeChange={onMemoModeChange} />
-      ) : (
-        <section
-          id={rightPanelDomId("aiChat")}
-          className="side-panel-body ai-chat-side-panel"
-          role="tabpanel"
-          aria-labelledby={rightPanelTabDomId("aiChat")}
-          tabIndex={0}
-        >
-          <Suspense fallback={<p className="state-text">Loading AI Chat...</p>}>
-            <LazyAIChatPanel
-              key={`${activeRepoId}:${aiChatSessionKey}`}
-              aiSettings={aiSettings}
-              session={aiChatSession}
-              onSessionChange={onAIChatSessionChange}
-              onReadinessFailure={onAIReadinessFailure}
-              onRepositoryChanged={onRepositoryChanged}
-              modelBehavior={aiModelBehavior}
-              activeRepoId={activeRepoId}
-              activeRepoRevision={activeRepoRevision}
-              activeFile={file}
-              rootTreeNodes={rootTreeNodes}
-              onOpenSettings={onOpenSettings}
-              onMarkdownClick={handleMarkdownClick}
-            />
-          </Suspense>
-        </section>
-      )}
+      <div className="right-panel-content">
+        {mode === "outline" ? (
+          <OutlinePanel file={file} outline={outline} onHeadingSelect={onHeadingSelect} />
+        ) : null}
+        {memoOpened || mode === "memo" ? (
+          <div
+            className="right-panel-face"
+            data-active={mode === "memo" ? "true" : "false"}
+            aria-hidden={mode === "memo" ? undefined : true}
+            inert={mode !== "memo"}
+          >
+            <MemoPanel memoText={memoText} active={mode === "memo"} onMemoTextChange={onMemoTextChange} />
+          </div>
+        ) : null}
+        {mode === "aiChat" ? (
+          <section
+            id={rightPanelDomId("aiChat")}
+            className="side-panel-body ai-chat-side-panel"
+            role="tabpanel"
+            aria-labelledby={rightPanelTabDomId("aiChat")}
+            tabIndex={0}
+          >
+            <Suspense fallback={<p className="state-text">Loading AI Chat...</p>}>
+              <LazyAIChatPanel
+                key={`${activeRepoId}:${aiChatSessionKey}`}
+                aiSettings={aiSettings}
+                session={aiChatSession}
+                onSessionChange={onAIChatSessionChange}
+                onReadinessFailure={onAIReadinessFailure}
+                onRepositoryChanged={onRepositoryChanged}
+                modelBehavior={aiModelBehavior}
+                activeRepoId={activeRepoId}
+                activeRepoRevision={activeRepoRevision}
+                activeFile={file}
+                rootTreeNodes={rootTreeNodes}
+                onOpenSettings={onOpenSettings}
+                onMarkdownClick={handleMarkdownClick}
+              />
+            </Suspense>
+          </section>
+        ) : null}
+      </div>
     </aside>
   );
 }
@@ -2054,15 +2057,12 @@ function formatDate(value: string | null): string {
   return new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeStyle: "short" }).format(date);
 }
 
-function MemoPanel({ memoText, memoMode, onMemoTextChange, onMemoModeChange }: {
+function MemoPanel({ memoText, active, onMemoTextChange }: {
   memoText: string;
-  memoMode: MemoMode;
+  active: boolean;
   onMemoTextChange: (value: string) => void;
-  onMemoModeChange: (mode: MemoMode) => void;
 }) {
   const [copyState, setCopyState] = useState<CopyState>("idle");
-  const renderedMemoHtml = useMemo(() => renderMemoMarkdown(stripYamlFrontmatterForRender(memoText)), [memoText]);
-  const hasMemo = memoText.trim().length > 0;
   const copyLabel = copyState === "copied" ? "Memo copied" : copyState === "error" ? "Memo copy failed" : "Copy memo";
 
   useEffect(() => {
@@ -2093,16 +2093,7 @@ function MemoPanel({ memoText, memoMode, onMemoTextChange, onMemoModeChange }: {
       tabIndex={0}
     >
       <header className="memo-panel-header">
-        <h2>Memo</h2>
-        <div className="memo-panel-actions" aria-label="Memo actions">
-          <div className="memo-mode-toggle" role="group" aria-label="Memo display mode">
-            <button type="button" className={memoMode === "raw" ? "active" : ""} aria-pressed={memoMode === "raw"} onClick={() => onMemoModeChange("raw")}>
-              Raw
-            </button>
-            <button type="button" className={memoMode === "render" ? "active" : ""} aria-pressed={memoMode === "render"} onClick={() => onMemoModeChange("render")}>
-              Render
-            </button>
-          </div>
+        <div className="memo-panel-actions" role="toolbar" aria-label="Memo actions">
           <button type="button" className={`memo-icon-button ${copyState}`} aria-label={copyLabel} title={copyLabel} onClick={() => void handleCopyMemo()}>
             {copyState === "copied" ? <CheckIcon /> : <CopyIcon />}
           </button>
@@ -2114,21 +2105,10 @@ function MemoPanel({ memoText, memoMode, onMemoTextChange, onMemoModeChange }: {
           </button>
         </div>
       </header>
-      <div className="memo-panel-space">
-        {memoMode === "raw" ? (
-          <textarea
-            className="memo-textarea"
-            aria-label="Session memo"
-            value={memoText}
-            onChange={(event) => onMemoTextChange(event.target.value)}
-            placeholder="Session-only Markdown notes"
-            spellCheck={false}
-          />
-        ) : hasMemo ? (
-          <article className="memo-preview markdown-body" aria-label="Memo preview" onClick={handleMarkdownClick} dangerouslySetInnerHTML={{ __html: renderedMemoHtml }} />
-        ) : (
-          <p className="memo-empty">No memo yet.</p>
-        )}
+      <div className="memo-panel-body">
+        <Suspense fallback={<p className="memo-live-editor-loading" role="status">Loading memo editor...</p>}>
+          <LazyMemoLiveEditor value={memoText} active={active} onChange={onMemoTextChange} />
+        </Suspense>
       </div>
     </section>
   );
@@ -2328,23 +2308,6 @@ function withOutlineHeadingIds(html: string, outline: OutlineItem[]): string {
     heading.setAttribute("data-outline-id", item.id);
   });
   return document.body.innerHTML;
-}
-
-function stripYamlFrontmatterForRender(content: string): string {
-  const normalized = content.replace(/\r\n?/g, "\n");
-  if (!normalized.startsWith("---\n")) return content;
-  const lines = normalized.split("\n");
-  for (let index = 1; index < lines.length; index += 1) {
-    const marker = lines[index].trim();
-    if (marker === "---" || marker === "...") {
-      return lines.slice(index + 1).join("\n");
-    }
-  }
-  return content;
-}
-
-function renderMemoMarkdown(content: string): string {
-  return injectMarkdownCodeToolbarButtons(memoMarkdown.render(content));
 }
 
 function handleMarkdownClick(event: ReactMouseEvent<HTMLElement>) {
