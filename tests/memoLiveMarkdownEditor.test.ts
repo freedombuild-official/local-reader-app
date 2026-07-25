@@ -147,6 +147,14 @@ function renderedListMarkerElements(host: HTMLElement): HTMLElement[] {
   ];
 }
 
+function renderedListMarkerLines(host: HTMLElement): HTMLElement[] {
+  return [
+    ...host.querySelectorAll<HTMLElement>(
+      ".cm-line.memo-live-markdown-list-marker-line",
+    ),
+  ];
+}
+
 function beginTableCellEdit(
   host: HTMLElement,
   inputIndex: number,
@@ -712,6 +720,81 @@ describe("createMemoLiveMarkdownEditor", () => {
     ).toContain("margin-left: 0.45em;");
   });
 
+  it.each([
+    ["root unordered", "- root", ["2"]],
+    ["nested unordered", "- parent\n  - child", ["2", "4"]],
+    ["root ordered", "1. root", ["3"]],
+    ["nested ordered", "1. parent\n   1. child", ["3", "6"]],
+    ["blockquote unordered", "> - quoted", ["4"]],
+    ["task item", "- [ ] task", ["6"]],
+  ])(
+    "marks each %s marker line with its source content offset",
+    (_name, markdown, expectedOffsets) => {
+      const { host, editor } = fixture(markdown as string);
+
+      expect(
+        renderedListMarkerLines(host).map((line) =>
+          line.getAttribute("data-memo-list-content-offset"),
+        ),
+      ).toEqual(expectedOffsets);
+      expect(editor.getMarkdown()).toBe(markdown);
+    },
+  );
+
+  it("tracks the wider source prefix for a two-digit ordered marker", () => {
+    const markdown = Array.from(
+      { length: 10 },
+      (_, index) => `${index + 1}. item ${index + 1}`,
+    ).join("\n");
+    const { host, editor } = fixture(markdown);
+
+    expect(
+      renderedListMarkerLines(host).map((line) =>
+        line.getAttribute("data-memo-list-content-offset"),
+      ),
+    ).toEqual([...Array.from({ length: 9 }, () => "3"), "4"]);
+    expect(editor.getMarkdown()).toBe(markdown);
+  });
+
+  it("does not add marker-line hanging indent to a continuation source line", () => {
+    const markdown = "- first line\n  continuation";
+    const { host, editor } = fixture(markdown);
+
+    expect(
+      host.querySelectorAll(".cm-line.memo-live-markdown-list-item"),
+    ).toHaveLength(2);
+    expect(renderedListMarkerLines(host)).toHaveLength(1);
+    expect(editor.getMarkdown()).toBe(markdown);
+  });
+
+  it("keeps list source and selection unchanged when hanging indent is remeasured", () => {
+    const markdown = "- parent text that can wrap\n  1. nested child text";
+    const { editor, view } = fixture(markdown);
+    const anchor = markdown.indexOf("nested") + 3;
+    view.dispatch({ selection: { anchor } });
+
+    editor.requestMeasure();
+
+    expect(editor.getMarkdown()).toBe(markdown);
+    expect(view.state.selection.main.anchor).toBe(anchor);
+  });
+
+  it("keeps the list hanging-indent stylesheet contract", () => {
+    const rule = cssRule(".cm-line.memo-live-markdown-list-marker-line");
+
+    expect(rule).toContain(
+      "--memo-live-markdown-list-hanging-indent: 0px;",
+    );
+    expect(rule).toContain("padding-inline-start: calc(");
+    expect(rule).toContain(
+      "0.1em + var(--memo-live-markdown-list-hanging-indent)",
+    );
+    expect(rule).toContain("text-indent: calc(");
+    expect(rule).toContain(
+      "0px - var(--memo-live-markdown-list-hanging-indent)",
+    );
+  });
+
   it("renders a setext-like unordered child as soon as its trailing space arrives", () => {
     const { editor, host, view } = fixture("1. parent");
     view.dispatch({
@@ -893,6 +976,7 @@ describe("createMemoLiveMarkdownEditor", () => {
       host.querySelector(".memo-live-markdown-setext-heading"),
     ).not.toBeNull();
     expect(renderedListMarkers(host)).toEqual([]);
+    expect(renderedListMarkerLines(host)).toEqual([]);
     expect(editor.getMarkdown()).toBe("Heading\n- ");
   });
 

@@ -1158,6 +1158,16 @@ main:is(.app-shell, .settings-shell) {
   padding-left: 0.1em;
 }
 
+.cm-line.memo-live-markdown-list-marker-line {
+  --memo-live-markdown-list-hanging-indent: 0px;
+  padding-inline-start: calc(
+    0.1em + var(--memo-live-markdown-list-hanging-indent)
+  );
+  text-indent: calc(
+    0px - var(--memo-live-markdown-list-hanging-indent)
+  );
+}
+
 .memo-live-markdown-list-marker {
   display: inline-block;
   min-width: 1.35em;

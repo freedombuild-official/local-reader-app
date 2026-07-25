@@ -63,6 +63,11 @@ interface SourceRange {
   to: number;
 }
 
+interface ListHangingIndentMeasurement {
+  line: HTMLElement;
+  indent: number;
+}
+
 interface TableCellModel {
   from: number;
   to: number;
@@ -105,6 +110,11 @@ interface ReferenceDefinition {
 
 type ReferenceDefinitions = ReadonlyMap<string, ReferenceDefinition>;
 const emptyReferenceDefinitions: ReferenceDefinitions = new Map();
+const listMarkerLineClassName = "memo-live-markdown-list-marker-line";
+const listLineFromAttribute = "data-memo-list-line-from";
+const listContentOffsetAttribute = "data-memo-list-content-offset";
+const listHangingIndentProperty =
+  "--memo-live-markdown-list-hanging-indent";
 
 interface TableDOMState {
   referenceSignature: string;
@@ -2959,6 +2969,7 @@ function buildLiveDecorations(
   const pendingChildListMarkerStarts = new Set(
     pendingChildListMarkers.map((marker) => marker.from),
   );
+  const listMarkerLines = new Set<number>();
 
   const addAtomicRange = (from: number, to: number): void => {
     if (from < to) {
@@ -2982,10 +2993,32 @@ function buildLiveDecorations(
     }
   };
 
+  const addListMarkerLine = (position: number): void => {
+    const line = state.doc.lineAt(position);
+    if (listMarkerLines.has(line.from)) {
+      return;
+    }
+    const prefix = matchMarkdownListPrefix(line.text);
+    if (prefix === null) {
+      return;
+    }
+    listMarkerLines.add(line.from);
+    ranges.push(
+      Decoration.line({
+        attributes: {
+          class: listMarkerLineClassName,
+          [listLineFromAttribute]: String(line.from),
+          [listContentOffsetAttribute]: String(prefix.source.length),
+        },
+      }).range(line.from),
+    );
+  };
+
   for (const marker of pendingChildListMarkers) {
     if (isInside(frontmatter, marker.from, marker.to)) {
       continue;
     }
+    addListMarkerLine(marker.from);
     replaceDisplay(marker.from, marker.to, {
       widget: new TextWidget(
         marker.displayMarker,
@@ -3357,6 +3390,7 @@ function buildLiveDecorations(
         if (pendingChildListMarkerStarts.has(from)) {
           return;
         }
+        addListMarkerLine(from);
         const source = state.doc.sliceString(from, to);
         const restOfLine = state.doc
           .lineAt(to)
@@ -3392,6 +3426,114 @@ function buildLiveDecorations(
     atomicRanges: Decoration.set(atomicRanges, true),
   };
 }
+
+class ListHangingIndentMonitor {
+  private destroyed = false;
+  private styledLines = new Set<HTMLElement>();
+
+  constructor(view: EditorView) {
+    this.requestMeasurement(view);
+  }
+
+  update(update: ViewUpdate): void {
+    if (
+      update.docChanged ||
+      update.viewportChanged ||
+      update.geometryChanged
+    ) {
+      this.requestMeasurement(update.view);
+    }
+  }
+
+  docViewUpdate(view: EditorView): void {
+    this.requestMeasurement(view);
+  }
+
+  requestMeasurement(view: EditorView): void {
+    if (this.destroyed) {
+      return;
+    }
+    view.requestMeasure({
+      key: this,
+      read: (currentView): readonly ListHangingIndentMeasurement[] => {
+        const measurements: ListHangingIndentMeasurement[] = [];
+        const probeRange = currentView.dom.ownerDocument.createRange();
+        if (typeof probeRange.getClientRects !== "function") {
+          return measurements;
+        }
+        const lines = currentView.contentDOM.querySelectorAll<HTMLElement>(
+          `.cm-line.${listMarkerLineClassName}[${listLineFromAttribute}][${listContentOffsetAttribute}]`,
+        );
+        for (const line of lines) {
+          const lineFrom = Number(line.getAttribute(listLineFromAttribute));
+          const contentOffset = Number(
+            line.getAttribute(listContentOffsetAttribute),
+          );
+          if (
+            !Number.isSafeInteger(lineFrom) ||
+            !Number.isSafeInteger(contentOffset) ||
+            lineFrom < 0 ||
+            contentOffset < 1 ||
+            lineFrom > currentView.state.doc.length
+          ) {
+            continue;
+          }
+          const stateLine = currentView.state.doc.lineAt(lineFrom);
+          if (
+            stateLine.from !== lineFrom ||
+            contentOffset > stateLine.length
+          ) {
+            continue;
+          }
+          const contentFrom = lineFrom + contentOffset;
+          const lineCoordinates = currentView.coordsAtPos(lineFrom, -1);
+          const contentCoordinates = currentView.coordsAtPos(contentFrom, 1);
+          if (lineCoordinates === null || contentCoordinates === null) {
+            continue;
+          }
+          const indent = contentCoordinates.left - lineCoordinates.left;
+          if (!Number.isFinite(indent) || indent < 0) {
+            continue;
+          }
+          measurements.push({ line, indent });
+        }
+        return measurements;
+      },
+      write: (measurements) => {
+        if (this.destroyed) {
+          return;
+        }
+        const nextStyledLines = new Set(
+          measurements.map((measurement) => measurement.line),
+        );
+        for (const line of this.styledLines) {
+          if (!nextStyledLines.has(line)) {
+            line.style.removeProperty(listHangingIndentProperty);
+          }
+        }
+        for (const { line, indent } of measurements) {
+          const value = `${Math.round(indent * 1_000) / 1_000}px`;
+          if (line.style.getPropertyValue(listHangingIndentProperty) !== value) {
+            line.style.setProperty(listHangingIndentProperty, value);
+          }
+        }
+        this.styledLines = nextStyledLines;
+      },
+    });
+  }
+
+  destroy(): void {
+    this.destroyed = true;
+    for (const line of this.styledLines) {
+      line.style.removeProperty(listHangingIndentProperty);
+    }
+    this.styledLines.clear();
+  }
+}
+
+const listHangingIndentPlugin = ViewPlugin.fromClass(
+  ListHangingIndentMonitor,
+);
 
 function emptyDecorationBuild(): DecorationBuild {
   return {
@@ -3550,7 +3692,11 @@ function createLiveDecorationExtension(
     }
   }
 
-  return [decorationField, ViewPlugin.fromClass(LiveDecorationMonitor)];
+  return [
+    decorationField,
+    ViewPlugin.fromClass(LiveDecorationMonitor),
+    listHangingIndentPlugin,
+  ];
 }
 
 function nonceFromDocument(): string | undefined {
@@ -4077,6 +4223,9 @@ export function createMemoLiveMarkdownEditor(
       view.focus();
     },
     requestMeasure() {
+      view
+        .plugin(listHangingIndentPlugin)
+        ?.requestMeasurement(view);
       view.requestMeasure();
     },
     destroy() {
