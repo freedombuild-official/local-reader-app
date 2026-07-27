@@ -2729,6 +2729,13 @@ function hasAsciiSpaceAfter(
   return state.doc.sliceString(marker.to, marker.to + 1) === " ";
 }
 
+function quoteStartTokenEnd(
+  state: EditorState,
+  marker: MarkdownSyntaxNode,
+): number {
+  return hasAsciiSpaceAfter(state, marker) ? marker.to + 1 : marker.to;
+}
+
 function liveBlockIsActivated(
   state: EditorState,
   node: MarkdownSyntaxNode,
@@ -3323,10 +3330,11 @@ function buildLiveDecorations(
       } else if (
         name === "EmphasisMark" ||
         name === "StrikethroughMark" ||
-        name === "QuoteMark" ||
         name === "LinkMark"
       ) {
         replaceDisplay(from, to);
+      } else if (name === "QuoteMark") {
+        replaceDisplay(from, quoteStartTokenEnd(state, node.node));
       } else if (name === "CodeMark") {
         const line = state.doc.lineAt(from);
         const source = state.doc.sliceString(from, to);

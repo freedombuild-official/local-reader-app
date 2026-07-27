@@ -203,12 +203,57 @@ describe("createMemoLiveMarkdownEditor", () => {
     expect(host.querySelector(".memo-live-markdown-emphasis")?.textContent).toBe("emphasis");
     expect(host.querySelector(".memo-live-markdown-strikethrough")?.textContent).toBe("removed");
     expect(host.querySelector(".memo-live-markdown-inline-code")?.textContent).toBe("code");
-    expect(host.querySelector(".memo-live-markdown-blockquote")?.textContent).toContain("quote");
+    expect(host.querySelector(".memo-live-markdown-blockquote")?.textContent).toBe("quote");
     expect(host.textContent).not.toContain("**bold**");
     expect(editor.getMarkdown()).toBe(markdown);
     expect(editor).not.toHaveProperty("setMode");
     expect(editor).not.toHaveProperty("getMode");
     expect(host.querySelector("[data-markdown-mode]")).toBeNull();
+  });
+
+  it.each([
+    ["a root quote", "> quote", "quote"],
+    ["one additional content space", ">  quote", " quote"],
+    ["a nested quote", "> > quote", "quote"],
+  ])(
+    "hides each completed blockquote start token while preserving %s",
+    (_name, markdown, visibleText) => {
+      const { host, editor, view } = fixture(markdown);
+      view.dispatch({ selection: { anchor: markdown.length } });
+
+      expect(
+        host.querySelector(".memo-live-markdown-blockquote")?.textContent,
+      ).toBe(visibleText);
+      expect(editor.getMarkdown()).toBe(markdown);
+      expect(view.state.selection.main.head).toBe(markdown.length);
+    },
+  );
+
+  it("keeps a bare quote marker literal and deactivates when its start space is removed", async () => {
+    const { host, editor, view } = fixture(">");
+    view.dispatch({ selection: { anchor: 1 } });
+
+    expect(host.querySelector(".memo-live-markdown-blockquote")).toBeNull();
+    expect(host.querySelector(".cm-content")?.textContent).toContain(">");
+
+    insertAtSelection(view, " ");
+    await flushMicrotasks();
+    expect(editor.getMarkdown()).toBe("> ");
+    expect(
+      host.querySelector(".memo-live-markdown-blockquote")?.textContent,
+    ).toBe("");
+    expect(view.state.selection.main.head).toBe(2);
+
+    view.dispatch({
+      changes: { from: 1, to: 2 },
+      selection: { anchor: 1 },
+      userEvent: "delete.backward",
+    });
+    await flushMicrotasks();
+    expect(editor.getMarkdown()).toBe(">");
+    expect(host.querySelector(".memo-live-markdown-blockquote")).toBeNull();
+    expect(host.querySelector(".cm-content")?.textContent).toContain(">");
+    expect(view.state.selection.main.head).toBe(1);
   });
 
   it("updates source and decorations through one normal document transaction", async () => {
