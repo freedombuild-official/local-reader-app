@@ -118,6 +118,16 @@ export type HttpDeliveryStatus = {
   error?: string;
 };
 
+export type HtmlPreviewSessionStatus = {
+  id: string;
+  repoId: string;
+  path: string;
+  origin: string;
+  url: string;
+  startedAt: string;
+  expiresAt: string;
+};
+
 export type RepositoryConfigSourceMode = "default" | "env";
 
 export type RepositoryConfigEntryDraft = {

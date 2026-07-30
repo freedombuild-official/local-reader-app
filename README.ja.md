@@ -8,7 +8,7 @@ Local Reader App は、Mac または Windows PC 上のフォルダを、ブラ�
 
 製品紹介サイト: [Local Reader App](https://local-reader-app.freedom-build.com)
 
-通常の閲覧では、登録したフォルダ内のファイルを編集しません。Local Reader App は自分のコンピュータ上の `http://127.0.0.1:5173/` で動作します。AI Chat を有効にしない限り、リポジトリの内容を AI サービスへ送信しません。AIへの送信前にはCurrent repoから選んだcontextを取り外せるchipで表示し、Current repo rootのrule fileを自動提案する場合もあります。
+ほとんどの表示方法は、登録したフォルダ内のファイルを編集しません。HTML自身が保存を実装している場合、HTML **Run**は同じリポジトリ内の既存UTF-8 text fileだけを置換でき、対応するAI Chatの**Current repo write**は選択したCurrent repoを編集できます。Local Reader App は自分のコンピュータ上の `http://127.0.0.1:5173/` で動作します。AI Chat を有効にしない限り、リポジトリの内容を AI サービスへ送信しません。AIへの送信前にはCurrent repoから選んだcontextを取り外せるchipで表示し、Current repo rootのrule fileを自動提案する場合もあります。
 
 現在の Local Reader App は、GitHub からソースファイルを入手して動かします。`.dmg`、`.exe`、App Store 用パッケージ、オンラインアカウント、ワンクリックのインストーラーはありません。以下の手順に沿って、ソースファイルのダウンロードから最初のフォルダを開くところまで進められます。
 
@@ -42,7 +42,7 @@ Ryusei Komada および各 contributor は、それぞれの成果物につい�
 - 1つ以上のローカルフォルダを登録し、切り替える。
 - ローカルの Git 状態を示す印と安全なパス制御を備えたファイルツリーを閲覧する。
 - 登録フォルダごとに、Preview、Fixed、Pinned のファイルタブを最大5つ保持する。
-- Markdown と安全な領域に隔離した HTML を表示し、ソースやコードを行番号付きで確認し、画像、PDF、対応する Markdown-in-DOCX ファイルをプレビューする。
+- Markdownを表示し、同じリポジトリ内のCSSとJavaScriptを使うHTMLを隔離領域で実行し、ソースやコードを行番号付きで確認し、画像、PDF、対応するMarkdown-in-DOCXファイルをプレビューする。
 - ファイル本文、パス、メッセージ、個別の Markdown コードブロックをコピーする。
 - ファイル情報、Git 状態、クリックできる Markdown の見出し一覧を確認する。
 - 一時的な Markdown メモを書き、必要ならダウンロードする。
@@ -50,7 +50,7 @@ Ryusei Komada および各 contributor は、それぞれの成果物につい�
 - 文字サイズ、Light/Dark 表示、作業領域の幅を調整する。
 - 任意で、明示的に選んだファイルやフォルダについて AI サービスへ質問する。
 
-Local Reader App は閲覧を主目的とするアプリであり、汎用のファイル編集ソフト、ターミナル、Git クライアント、遠隔ファイルサーバーではありません。通常閲覧は登録したフォルダへ書き込みません。対応する任意のAI Chat **Current repo write**だけが明示的な例外で、準備確認の成功後に、そのrunで選択したCurrent repoだけを編集できます。Repository Settings の保存で更新するのは Local Reader App 自身の設定だけで、Memo のダウンロードは利用者が明示的に指示したブラウザからの保存です。一覧から項目を削除しても、登録したフォルダは削除しません。
+Local Reader App は閲覧を主目的とするアプリであり、汎用のファイル編集ソフト、ターミナル、Git クライアント、遠隔ファイルサーバーではありません。HTML **Run**はread-only表示の明示的な例外であり、HTML自身が保存を実装している場合は、同じ登録リポジトリ内にある既存の許可済みUTF-8 text fileを置換できます。対応する任意のAI Chat **Current repo write**は、もう1つのrepository write例外であり、準備確認の成功後に、そのrunで選択したCurrent repoだけを編集できます。Repository Settings の保存で更新するのは Local Reader App 自身の設定だけで、Memo のダウンロードは利用者が明示的に指示したブラウザからの保存です。一覧から項目を削除しても、登録したフォルダは削除しません。
 
 ## インストール前の準備
 
@@ -292,9 +292,9 @@ Local Reader App では登録した各フォルダを「リポジトリ」と呼
 
 **Remove from list** は設定項目だけを削除します。フォルダや中のファイルは削除しません。変更したリポジトリ一覧を保存すると、以前のリポジトリ範囲は現行ではなくなるため、使用中の HTTP Delivery セッションは停止します。
 
-Settings を読み込んだ後に別のプログラムが設定を変更した場合、Local Reader App は新しいファイルの上書きを拒否します。閲覧画面へ戻り、Settings を開き直してからやり直してください。
+Settingsを開くと、現在のHTML Run sessionは停止します。別のbrowserがHTML Run sessionを保持している間は、repository設定を保存できません。Settings を読み込んだ後に別のプログラムが設定を変更した場合、Local Reader App は新しいファイルの上書きを拒否します。閲覧画面へ戻り、Settings を開き直してからやり直してください。
 
-Repository SettingsのsaveとAI runは同時に実行できません。AI Chat実行中のためsaveが拒否された場合は、runの完了を待つかcancelしてから、もう一度validateしてsaveします。config save中にAI requestが拒否された場合は、save完了後にrequestを再試行します。
+Repository Settingsのsave、HTML Run session、AI runは同時に実行できません。別のbrowserにHTMLが残っている場合やAI Chat実行中のためsaveが拒否された場合は、そのRun sessionを閉じるかAI runの完了を待つ、またはcancelしてから、もう一度validateしてsaveします。config save中にHTML Run開始またはAI requestが拒否された場合は、save完了後に再試行します。
 
 ### 別の場所にある設定ファイルを使う
 
@@ -372,7 +372,7 @@ Local Reader App は、ファイル名、内容、サイズから安全な表示
 | ファイル | 利用できる表示方法 |
 | --- | --- |
 | Markdown | **Rendered** または **Source**。Rendered では YAML フロントマターを隠し、表、読み取り専用のタスクリスト、コードブロックのコピーと折り返しに対応する。 |
-| HTML | スクリプトを無効にした隔離領域内の **Rendered**、または **Source**。 |
+| HTML | **Run**または**Source**。ファイルを開くとRunを開始し、inlineまたは同じリポジトリ内のCSSとJavaScriptを実行する。 |
 | ソースコード、JSON、YAML、設定ファイル、テキスト | 行番号、横スクロール、ローカル Git の変更を示す印が付いた **Raw**。 |
 | PNG、JPEG、GIF、WebP、SVG | 画像のプレビュー。 |
 | PDF | ブラウザ内の PDF プレビュー。 |
@@ -383,7 +383,28 @@ Local Reader App は、ファイル名、内容、サイズから安全な表示
 
 **Source** は長い行を折り返して読みやすく表示します。**Raw** は行の構造を維持し、横スクロールを使います。
 
-Rendered Markdownとsandboxed HTMLは、inline CSSの画像URLを含め、文書内で明示的に参照されたHTTPS画像resourceを読み込むことがあります。Content Security Policyはそのほかのremote subresourceを制限し、HTML sandboxはscriptを無効にしますが、許可されたHTTPS画像requestは配信元へ接続します。新しく開いたMarkdownまたはHTMLは最初に**Rendered**で表示されるため、外部requestを避ける必要がある場合は、Local Reader Appで開く前に別のplain-text editorで信頼できない文書を確認してください。
+Rendered Markdownは、文書内で明示的に参照されたHTTPS画像resourceを読み込むことがあります。HTML Runはpreview用Content Security Policyにより、同一origin以外のscript、style、image、font、media、frame、Worker、cross-originの`fetch`/WebSocket/form送信先を拒否し、同じリポジトリ内のresourceと同一originのsave requestを利用できます。
+
+### HTMLをRunする
+
+HTMLファイルを選ぶと、直ちに**Run**を開始します。**Run**から**Source**へ切り替えても同じiframeを非表示にするだけで、停止や再読込は行いません。**Run**へ戻ると同じiframeを再表示し、未保存のform入力、DOM、timer、JavaScript stateを維持します。Sourceの表示中も、Run buttonには稼働中の印が残ります。sourceを再取得した場合はSource表示を更新しますが、実行中のHTML documentは再読込しません。
+
+Runごとに、serverが所有する非永続sessionと専用のloopback origin / portを使います。repository rootをそのoriginのURL rootとして扱うため、`../styles/app.css`のようなrelative参照と`/data/state.yaml`のようなroot-relative参照は、どちらも同じ登録repository内で解決します。許可されたHTML、CSS、JavaScript、ES Modules、JSON、YAML、text、image、font、media、WebAssembly、iframe、Worker assetを読み取れます。exclude path、symlink component、directory、未対応asset、登録root外のpathは拒否します。したがってHTMLは、entry documentの隣だけでなく、その登録repository内にある除外されていない許可済みassetを読み取れます。自分で作成していないHTMLをRunする前に、`excludes`を設定してください。
+
+tabを閉じる、別fileまたは別repositoryを選ぶ、Settingsを開く、pageから移動またはreloadする、serverを停止する、heartbeat leaseが切れる、のいずれかでRunは終了します。page終了通知を受信できない場合もserver leaseで回収します。browser client全体で最大5sessionを利用できます。
+
+HTMLから保存するには、同じoriginへ`PUT`を送り、既存の許可済みUTF-8 text fileを指定します。requestには次を含めます。
+
+- `X-Local-Reader-Preview-Write: replace`
+- 対象を読み取ったときの現在のETagを指定する`If-Match`
+- UTF-8 textの`Content-Type`
+- 5 MiB以下のbody
+
+同一originの`fetch()`でHTML targetを読み取ると、保存済みsourceとETagを返します。navigation gateを追加するのはdocumentまたはiframeのresponseだけなので、自己保存HTMLが注入gateを自分のfileへ書き戻すことはありません。
+
+既存targetも5 MiB以下である必要があります。Local Reader AppはpathとETagを再検証し、同じdirectoryのtemporary fileへ書き、file modeを維持してtargetを原子的に置換します。新規file作成、削除、rename、directory、binaryまたは未知のtarget、古いETag、exclude path、symlink、repository外への移動は拒否します。app独自のsave buttonや承認dialogは追加しません。この性質を持つHTMLを使うかどうかは利用者が判断し、form、確認、成功、errorのUIはHTML自身が所有します。そのHTMLが置換できるfileは事前にbackupしてください。
+
+Runは任意JavaScript、form、modal、same-originのHTML popupを許可します。別windowを作るprogrammatic popup、link、form targetは、same-originの`.html`または`.htm`文書だけに限定し、`about:blank`、`blob:`、非HTML、外部originのpopup targetは注入gateで拒否します。専用preview originにより、そのdocumentはLocal Reader App本体のDOM、storage、保護APIへのaccessとoriginを共有しません。CSP、iframe sandbox、注入するnavigation gateは、外部subresourceを拒否し、一般的な外部link、form、refresh、popup openを抑止します。ただし通常のbrowserは、悪意あるdocumentまたはsame-origin popupが後から行うすべての`location`変更を確実にinterceptできないため、不正または欠陥のあるHTMLが外部へのnavigation requestを発生させる可能性は残ります。**RunはHTML sanitizerでも、敵対的なactive contentを安全に調べる方法でもありません。** HTMLを選んだ時点でRunが始まるため、Sourceは実行前の安全確認gateではありません。信頼できないHTMLは、ここで選ぶ前に別のplain-text editorで確認してください。
 
 ### 表示できるファイルサイズの上限
 
@@ -456,7 +477,7 @@ HTTP Delivery は、選択したファイルに同じローカル Local Reader A
 
 ### Basic
 
-- **Reader text scale**: Markdown、HTML、テキスト、コード、文書の閲覧領域を `×1`、`×1.5`、`×2` から選ぶ。
+- **Reader text scale**: Markdown、テキスト、コード、文書の閲覧領域を `×1`、`×1.5`、`×2` から選ぶ。HTML RunはHTML document自身のstyleを使う。
 - **Appearance**: LightまたはDark。
 - **Workspace density**: Compact、Comfortable、Focused。
 
@@ -484,9 +505,10 @@ HTTP Delivery は、選択したファイルに同じローカル Local Reader A
 | Codex CLIまたはClaude Code CLIのpersistent sign-in | 各CLIが外部で管理するstorage | Local Reader Appでは消えない |
 | 音声入力のaudioとtranscript | browserまたはOSのspeech recognition。外部speech serviceがaudioを処理する場合があり、Local Reader Appはtranscriptを受け取る | browser/providerによる |
 | HTTP Delivery セッション | 現在の Local Reader App サーバープロセス | サーバー停止時に消える |
-| 登録リポジトリ内のファイル | 閲覧機能は読み取るだけで、対応CLIへのAI Chat依頼はCurrent repoを編集できる | CLI編集依頼後に変更される場合がある |
+| HTML Run session | 現在のpageとLocal Reader App server process | file、repository、pageの変更、server停止、lease切れで消える |
+| 登録リポジトリ内のファイル | ほとんどのviewerは読み取るだけ。HTML Runは既存の許可済みUTF-8 text fileを置換でき、対応CLIへのAI Chat依頼はCurrent repoを編集できる | HTML自身のsaveまたはCLI編集依頼後に変更される場合がある |
 
-Local Reader Appにはrepositoryの組み込みbackup/restore機能がありません。CLI writeの前に、通常利用しているGitまたはfile copyの手順で検証済みbackupを作ります。Local Reader Appのrepository一覧をbackupする場合は、**Settings** > **Repositories** > **Config details**に表示される実際のYAML fileをcopyします。server停止中にそのfileを戻してからappを起動するとrestoreできます。browser appearance設定にexportはなく、site dataを消去した場合は設定し直します。
+Local Reader Appにはrepositoryの組み込みbackup/restore機能がありません。HTML RunのsaveまたはCLI writeの前に、通常利用しているGitまたはfile copyの手順で検証済みbackupを作ります。Local Reader Appのrepository一覧をbackupする場合は、**Settings** > **Repositories** > **Config details**に表示される実際のYAML fileをcopyします。server停止中にそのfileを戻してからappを起動するとrestoreできます。browser appearance設定にexportはなく、site dataを消去した場合は設定し直します。
 
 ## 任意のAI Chatを設定する
 
@@ -564,9 +586,10 @@ AI ChatにはAI Entryが返した利用者向けの自然言語応答だけを�
 - server起動ごとに新しいserver-side session tokenを作ります。そのserverが表示した正確なURLを開くかreloadして、新しいbrowser sessionを受け取ります。古いtabのAPI callは、server restart後にreloadするまで失敗します。このtokenをtab単位のAI workspace stateへserializeしません。設定保存などのwrite操作には、正確なlocal originとrequest形式も必要です。
 - 要求するパスは登録したルート内に留まる必要があります。絶対パスの入力、`..` による上位移動、除外パスを拒否します。ファイル本文の読み取りと HTTP Delivery では、パス途中のシンボリックリンクもすべて拒否します。ツリー表示では、ルート外へ解決されるリンクを拒否します。
 - `.git` はファイル閲覧から常に除外します。Git コマンドはローカルの状態と差分情報だけに使い、Local Reader App は Git のリモートリポジトリへ接続しません。
-- Rendered Markdownとsandboxed HTMLは、明示的に参照されたHTTPS画像hostへ接続する場合があります。そのほかのremote subresourceはContent Security Policyで制限され、HTML scriptは無効ですが、network requestを一切許容できない場合は、信頼できない文書を別のplain-text editorで確認してから開いてください。
+- Rendered Markdownは、明示的に参照されたHTTPS画像hostへ接続する場合があります。HTML Runは専用loopback originを使い、外部subresourceを拒否しますが、任意HTML JavaScriptとsame-origin popupを許可するため、悪意ある後続navigationをbrowserがすべてinterceptできるとは保証できません。HTMLは選択時にRunを開始するため、信頼できないHTMLは別のplain-text editorで確認してください。
 - 音声入力はbrowserのspeech-recognition機能を使います。browserとOSによっては音声を外部speech serviceで処理する場合があり、Local Reader Appはそのserviceの選択、確認、保存を制御できません。許容できない場合は文字入力を使ってください。
-- 通常閲覧はリポジトリ内のファイルを編集しません。Repository Settings が書き込むのは、選択された Local Reader App の設定ファイルだけです。
+- HTML Runは、通常viewerのうち登録repositoryへ書き込める唯一の表示方法です。同一originとETagで保護された、既存の許可済みUTF-8 text fileの置換だけを受け付け、5 MiBを超えるtargetは扱いません。fileの作成、削除、renameはできません。
+- そのほかの通常表示はリポジトリ内のファイルを編集しません。Repository Settings が書き込むのは、選択された Local Reader App の設定ファイルだけです。
 - AI APIとLocal AIは通常UIでdisabledな**Coming soon**項目であり、通常UIからrepository contextや編集依頼を送信できません。将来用のinternal loopback API実装は、supported interfaceまたはaccess-controlの保証ではありません。
 - Codex CLIとClaude Code CLIは、CLIを利用できるruntimeでAI Chatによる明示的なwriteを行う項目です。会話と画面上のcontextを受け取り、native toolでCurrent repo内の追加fileを確認し、Local Reader Appのprovider編集上限を受けずに複数fileやnested directoryを作成・更新・rename・削除できます。Local Reader Appは追加workspace rootを渡しません。完全なprocess-tree ownershipをまだ強制・検証できないため、このMVPではnative Windows上でどちらのCLI entryも起動しません。
 - HTTP Delivery は一時的で制限されたローカル URL を使い、Local Reader App を公開サーバーにはしません。
@@ -583,7 +606,7 @@ AI ChatにはAI Entryが返した利用者向けの自然言語応答だけを�
 
 Local Reader App は Apache License 2.0 のもとで無償公開される OSS です。有償製品または有償サポート契約に相当する個別の導入、設定、操作、トラブル対応サポートは含まれません。
 
-Local Reader App を使うかどうか、どの環境でどう運用するかは、利用者自身の裁量と責任で判断してください。重要なrepositoryを扱う場合は、tool、設定、依存関係を変えたりCLI Entryを有効にしたりする前にbackupを用意してください。実行するcommand、登録するfolder、HTTP Deliveryで開くfile、AIへ送る情報、Codex CLIまたはClaude Code CLIが行ったすべてのfile変更を確認する責任は利用者にあります。
+Local Reader App を使うかどうか、どの環境でどう運用するかは、利用者自身の裁量と責任で判断してください。重要なrepositoryを扱う場合は、tool、設定、依存関係を変えたりactive HTMLをRunしたりCLI Entryを有効にしたりする前にbackupを用意してください。実行するcommand、登録するfolder、RunするHTML、そのHTML自身のsaveが置換できるfile、HTTP Deliveryで開くfile、AIへ送る情報、HTML Run、Codex CLI、Claude Code CLIが行ったすべてのfile変更を確認する責任は利用者にあります。
 
 repository公開後は、再現できるbugと範囲を絞ったfeature proposalを[GitHub Issues](https://github.com/freedombuild-official/local-reader-app/issues)へ投稿します。source versionまたはrevision、OS、手順、期待した挙動、実際の挙動、機密情報を除いた正確なerrorを含めてください。issueは個別返信、修正、公開時期、SLAを約束するものではありません。セキュリティ報告は別です。[SECURITY.md](SECURITY.md)に従い、未修正の脆弱性の詳細をissue、discussion、AIへの相談、スクリーンショット、ログへ投稿しないでください。
 
@@ -713,6 +736,12 @@ CLI process treeがまだ実行中の可能性があるため、serverはそのC
 ### 音声入力が利用できない
 
 マイクボタンは、ブラウザが対応する音声認識 API を提供する場合だけ有効になります。文字入力による AI Chat は利用できます。
+
+### HTML Runでfileを読み込めない、または保存できない
+
+HTML entryと参照する全assetが、同じ登録repository内にある既存regular fileであり、exclude対象ではなく、symlinkを経由していないことを確認します。外部subresourceは意図的に拒否します。保存では、対象を最初に読み取り、現在のETagを`If-Match`へ指定し、`X-Local-Reader-Preview-Write: replace`を含め、UTF-8 textのcontent typeを使い、既存targetとrequest bodyをそれぞれ5 MiB以下にします。新規作成、削除、rename、directoryへのwrite、binary targetは扱いません。
+
+pageのsleepやserver restartでRun sessionが失効した場合は、**Run**をもう一度選んで新しいsessionを作成します。別fileを選んでからHTML fileを開き直しても新しいsessionを作成できます。Sourceの変更だけでは、実行中documentを意図的に再読込しません。
 
 ### HTTP Deliveryがファイルを拒否する
 

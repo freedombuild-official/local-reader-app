@@ -81,6 +81,16 @@ export type HttpDeliveryStatus = {
   error?: string;
 };
 
+export type HtmlPreviewSessionStatus = {
+  id: string;
+  repoId: string;
+  path: string;
+  origin: string;
+  url: string;
+  startedAt: string;
+  expiresAt: string;
+};
+
 export type RepoSyncStatus = {
   state: "disabled" | "synced" | "skipped" | "warning";
   message: string;

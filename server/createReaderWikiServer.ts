@@ -6,6 +6,7 @@ import { createApiRouter } from "./api.js";
 import type { AICommandRunner } from "./aiCliAdapters.js";
 import { createDefaultAiCliSetupService, type AiCliSetupService } from "./aiCliSetup.js";
 import { createHttpDeliveryService } from "./httpDelivery.js";
+import { createHtmlPreviewService } from "./htmlPreviewServer.js";
 import { createRepositoryRegistry, type RepositoryRegistry } from "./repositoryRegistry.js";
 import { createReaderWikiSecurity, formatUrlHost, isLoopbackHost } from "./security.js";
 
@@ -44,6 +45,7 @@ export async function startReaderWikiServer(options: ReaderWikiServerOptions = {
   }
   const repositoryRegistry = options.repositoryRegistry || createRepositoryRegistry({ configPath });
   const httpDelivery = createHttpDeliveryService(repositoryRegistry);
+  const htmlPreview = createHtmlPreviewService({ repositoryRegistry, bindHost: host });
   const aiCliSetupService = options.aiCliSetupService || createDefaultAiCliSetupService(packageRoot);
   const aiRequestShutdownController = new AbortController();
   const security = createReaderWikiSecurity({ bindHost: host, token: options.sessionToken, dev: options.dev });
@@ -58,6 +60,7 @@ export async function startReaderWikiServer(options: ReaderWikiServerOptions = {
     aiCliSetupService,
     aiCommandRunner: options.aiCommandRunner,
     shutdownSignal: aiRequestShutdownController.signal,
+    htmlPreview,
   }));
   app.use("/delivery", httpDelivery.router);
 
@@ -87,6 +90,7 @@ export async function startReaderWikiServer(options: ReaderWikiServerOptions = {
         aiRequestShutdownController.abort();
         const results = await Promise.allSettled([
           closeServer(server),
+          htmlPreview.dispose(),
           aiCliSetupService.shutdown(),
           ...(vite ? [vite.close()] : []),
         ]);

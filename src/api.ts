@@ -12,6 +12,7 @@ import type {
   AIChatRunSummary,
   CliAIEntryReadiness,
   FileResponse,
+  HtmlPreviewSessionStatus,
   HttpDeliveryStatus,
   RepoListItem,
   RepoOpenResponse,
@@ -79,6 +80,37 @@ export async function stopHttpDelivery(deliveryId: string): Promise<HttpDelivery
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ deliveryId }),
+  });
+}
+
+export async function startHtmlPreview(
+  repoId: string,
+  path: string,
+  expectedRevision: string,
+  signal?: AbortSignal,
+): Promise<HtmlPreviewSessionStatus> {
+  return requestJson<HtmlPreviewSessionStatus>("/api/html-preview/start", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ repoId, path, expectedRevision }),
+    signal,
+  });
+}
+
+export async function heartbeatHtmlPreview(sessionId: string): Promise<HtmlPreviewSessionStatus> {
+  return requestJson<HtmlPreviewSessionStatus>("/api/html-preview/heartbeat", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sessionId }),
+  });
+}
+
+export async function stopHtmlPreview(sessionId: string, keepalive = false): Promise<void> {
+  await requestJson<{ stopped: true }>("/api/html-preview/stop", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sessionId }),
+    keepalive,
   });
 }
 

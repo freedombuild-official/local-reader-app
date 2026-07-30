@@ -50,7 +50,7 @@ export function createReaderWikiSecurity(options: { bindHost?: string; token?: s
           "img-src 'self' data: blob: https:",
           `connect-src ${connectSources}`,
           "font-src 'self' data:",
-          "frame-src 'self' data: blob:",
+          "frame-src 'self' data: blob: http://127.0.0.1:* http://localhost:* http://[::1]:*",
           "object-src 'none'",
           "base-uri 'none'",
           "form-action 'none'",

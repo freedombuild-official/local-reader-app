@@ -11,6 +11,7 @@ import { aiChatSystemPromptPath } from "./aiPromptPolicy.js";
 import { assertGuardedRepoContextPaths, buildGuardedRepoPathPolicy, requestGuardedRepoWriteAIChatCompletion, sanitizeGuardedAIChatContext, type GuardedProviderRequester } from "./guardedRepoEdits.js";
 import { providerReadiness, requestAIChatCompletion, requestAIChatCompletionStream, testAIConnection } from "./aiProviders.js";
 import type { HttpDeliveryService } from "./httpDelivery.js";
+import type { HtmlPreviewService } from "./htmlPreviewServer.js";
 import { createRepositoryRegistry, type RepositoryRegistry } from "./repositoryRegistry.js";
 import { loadRepositoryConfigState, previewRepositoryConfig, saveRepositoryConfigDraft, validateRepositoryConfigDraft } from "./repositoryConfig.js";
 import { assertRepositoryRevision, repositoryRevision } from "./repositoryRevision.js";
@@ -33,6 +34,7 @@ type ApiRouterOptions = {
   aiCliSetupService?: AiCliSetupService;
   shutdownSignal?: AbortSignal;
   repositoryConfigSaver?: typeof saveRepositoryConfigDraft;
+  htmlPreview?: HtmlPreviewService;
 };
 
 export function createApiRouter(registryOrConfigPath: RepositoryRegistry | string, httpDelivery?: HttpDeliveryService, options: ApiRouterOptions = {}): Router {
@@ -250,6 +252,7 @@ export function createApiRouter(registryOrConfigPath: RepositoryRegistry | strin
   }
 
   router.use("/http-delivery", expressJson({ limit: "20kb" }));
+  router.use("/html-preview", expressJson({ limit: "20kb" }));
   router.use("/repo-open", expressJson({ limit: "20kb" }));
   router.use("/repository-config", expressJson({ limit: "100kb" }));
   router.use("/ai", expressJson({ limit: "140kb" }));
@@ -324,8 +327,15 @@ export function createApiRouter(registryOrConfigPath: RepositoryRegistry | strin
   });
 
   router.post("/repository-config/save", async (request, response, next) => {
-    if (configSaveActive || activeAIRequests > 0 || activeAIRepos.size > 0 || activeAIRuns.size > 0 || aiCliSetupService?.isBusy()) {
-      next(new HttpError(409, "Repository config cannot be changed while AI or CLI setup activity is active."));
+    if (
+      configSaveActive ||
+      activeAIRequests > 0 ||
+      activeAIRepos.size > 0 ||
+      activeAIRuns.size > 0 ||
+      aiCliSetupService?.isBusy() ||
+      options.htmlPreview?.activeCount()
+    ) {
+      next(new HttpError(409, "Repository config cannot be changed while HTML Run, AI, or CLI setup activity is active."));
       return;
     }
     configSaveActive = true;
@@ -333,6 +343,7 @@ export function createApiRouter(registryOrConfigPath: RepositoryRegistry | strin
       setNoStore(response);
       const state = await repositoryConfigSaver(request.body as RepositoryConfigDraft, configPath);
       httpDelivery?.stopAll();
+      await options.htmlPreview?.stopAll();
       response.json(state);
     } catch (error) {
       next(error);
@@ -658,6 +669,58 @@ export function createApiRouter(registryOrConfigPath: RepositoryRegistry | strin
       if (!httpDelivery) throw new HttpError(503, "HTTP Delivery is not available.");
       setNoStore(response);
       response.json(httpDelivery.stop(String(request.body?.deliveryId || "")));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post("/html-preview/start", async (request, response, next) => {
+    let startedSessionId = "";
+    const stopAbandonedSession = () => {
+      if (!response.writableFinished && startedSessionId) {
+        void options.htmlPreview?.stop(startedSessionId).catch(() => undefined);
+      }
+    };
+    response.once("close", stopAbandonedSession);
+    try {
+      if (!options.htmlPreview) throw new HttpError(503, "HTML Run is not available.");
+      if (configSaveActive) {
+        throw new HttpError(409, "HTML Run cannot start while repository configuration is being saved.");
+      }
+      setNoStore(response);
+      const session = await options.htmlPreview.start({
+        repoId: String(request.body?.repoId || ""),
+        path: String(request.body?.path || ""),
+        expectedRevision: String(request.body?.expectedRevision || ""),
+        appOrigin: requestBaseUrl(request),
+      });
+      startedSessionId = session.id;
+      if (response.destroyed) {
+        await options.htmlPreview.stop(session.id);
+        return;
+      }
+      response.json(session);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post("/html-preview/heartbeat", async (request, response, next) => {
+    try {
+      if (!options.htmlPreview) throw new HttpError(503, "HTML Run is not available.");
+      setNoStore(response);
+      response.json(await options.htmlPreview.heartbeat(String(request.body?.sessionId || "")));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post("/html-preview/stop", async (request, response, next) => {
+    try {
+      if (!options.htmlPreview) throw new HttpError(503, "HTML Run is not available.");
+      setNoStore(response);
+      await options.htmlPreview.stop(String(request.body?.sessionId || ""));
+      response.json({ stopped: true });
     } catch (error) {
       next(error);
     }

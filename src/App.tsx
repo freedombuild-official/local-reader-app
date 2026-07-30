@@ -27,17 +27,19 @@ import {
   Trash2,
   type LucideIcon,
 } from "lucide-react";
-import { fetchAICliSetups, fetchFile, fetchHttpDeliveryStatus, fetchRepos, fetchTree, imageFileUrl, openRepository, pdfFileUrl, startHttpDelivery, stopHttpDelivery } from "./api";
-import type { AIChatContextChip, AIChatSessionState, AIEntryKind, DiffStatus, FileResponse, HttpDeliveryItemStatus, HttpDeliveryStatus, RepoListItem, RepoSyncStatus, TreeNode, TreeSnapshot } from "./types";
+import { fetchAICliSetups, fetchFile, fetchHttpDeliveryStatus, fetchRepos, fetchTree, heartbeatHtmlPreview, imageFileUrl, openRepository, pdfFileUrl, startHtmlPreview, startHttpDelivery, stopHtmlPreview, stopHttpDelivery } from "./api";
+import { HTML_PREVIEW_HEARTBEAT_INTERVAL_MS, HTML_PREVIEW_IFRAME_SANDBOX, validateHtmlPreviewSession } from "./htmlPreview";
+import type { AIChatContextChip, AIChatSessionState, AIEntryKind, DiffStatus, FileResponse, HtmlPreviewSessionStatus, HttpDeliveryItemStatus, HttpDeliveryStatus, RepoListItem, RepoSyncStatus, TreeNode, TreeSnapshot } from "./types";
 import { activeAIChatTarget, activeAIModelBehavior, applyCliSetupSnapshot, defaultBasicSettings, invalidateCliReadinessForRepositoryChange, isCliEntryKind, loadBasicSettings, normalizeReaderFontScale, persistBasicSettings, updateAIEntryStatus, type AISettingsState, type BasicSettings, type ReaderFontScale } from "./settingsState";
 import { createAISettingsFromWorkspaceSession, createAIWorkspaceSessionState, createDefaultAIChatSession, loadAIWorkspaceSession, persistAIWorkspaceSession, restoreAIWorkspaceCliState } from "./appSessionState";
 
 type TreeCache = TreeSnapshot;
-type ViewMode = "rendered" | "source" | "raw";
+type ViewMode = "rendered" | "run" | "source" | "raw";
 type AppView = "viewer" | "settings";
 type SettingsCategory = "basic" | "repositories" | "aiChat";
 type RightPanelMode = "outline" | "memo" | "aiChat";
 type CopyState = "idle" | "copied" | "error";
+type HtmlRunState = "starting" | "running" | "error";
 type RepoSyncViewStatus = RepoSyncStatus | { state: "syncing"; message: string; fetched: false };
 
 type FileTab = {
@@ -77,7 +79,6 @@ type FileTreeStickyItem = {
 const MAX_FILE_TABS = 5;
 const HTTP_DELIVERY_MAX_SESSIONS = 5;
 const TREE_ROW_HEIGHT_PX = 31;
-const HTML_VIEWER_BASE_FONT_SIZE_PX = 16;
 const FILE_TAB_PANEL_ID = "reader-file-tabpanel";
 const RIGHT_PANEL_TABS = [
   { mode: "outline", label: "Outline" },
@@ -130,6 +131,8 @@ export function App() {
   const [httpDeliveryPendingPath, setHttpDeliveryPendingPath] = useState("");
   const [httpDeliveryStoppingIds, setHttpDeliveryStoppingIds] = useState<Set<string>>(() => new Set());
   const [httpDeliveryPopoverOpen, setHttpDeliveryPopoverOpen] = useState(false);
+  const [htmlRunStateByTab, setHtmlRunStateByTab] = useState<Record<string, HtmlRunState>>({});
+  const [htmlRunRetryByTab, setHtmlRunRetryByTab] = useState<Record<string, number>>({});
   const [repositoryReloadingRepoId, setRepositoryReloadingRepoId] = useState("");
   const [treeScrollTop, setTreeScrollTop] = useState(0);
   const aiWorkspacePersistenceError = persistedAIWorkspaceLoad.error || aiWorkspaceWriteError;
@@ -260,6 +263,8 @@ export function App() {
   const activeFile = activeTab?.file || null;
   const selectedPath = activeTab?.path || "";
   const outline = useMemo(() => extractOutline(activeFile), [activeFile]);
+  const activeHtmlRunState = activeTab ? htmlRunStateByTab[activeTab.id] : undefined;
+  const activeHtmlRunRetryKey = activeTab ? htmlRunRetryByTab[activeTab.id] || 0 : 0;
   const canCopyActiveFile = Boolean(activeFile && isCopyableFileKind(activeFile.kind));
   const fileCopyLabel =
     fileCopyState === "copied" ? "File content copied" : fileCopyState === "error" ? "File content copy failed" : "Copy file content";
@@ -285,6 +290,19 @@ export function App() {
   const updateBasicSettings = useCallback((settings: BasicSettings) => {
     setBasicSettings(settings);
     setBasicSaveError(persistBasicSettings(settings));
+  }, []);
+
+  const updateHtmlRunState = useCallback((tabId: string, state: HtmlRunState | "stopped") => {
+    setHtmlRunStateByTab((current) => {
+      if (state === "stopped") {
+        if (!(tabId in current)) return current;
+        const next = { ...current };
+        delete next[tabId];
+        return next;
+      }
+      if (current[tabId] === state) return current;
+      return { ...current, [tabId]: state };
+    });
   }, []);
 
   const updateAIChatSession = useCallback((updater: (session: AIChatSessionState) => AIChatSessionState) => {
@@ -730,6 +748,17 @@ export function App() {
 
   function changeViewMode(mode: ViewMode) {
     if (!activeRepoId || !activeTab) return;
+    if (
+      mode === "run"
+      && activeTab.file?.kind === "html"
+      && activeHtmlRunState !== "starting"
+      && activeHtmlRunState !== "running"
+    ) {
+      setHtmlRunRetryByTab((current) => ({
+        ...current,
+        [activeTab.id]: (current[activeTab.id] || 0) + 1,
+      }));
+    }
     setTabsByRepo((current) => ({
       ...current,
       [activeRepoId]: (current[activeRepoId] || []).map((tab) => (tab.id === activeTab.id ? { ...tab, viewMode: mode } : tab)),
@@ -1078,7 +1107,7 @@ export function App() {
                 <ExternalLink aria-hidden="true" focusable="false" strokeWidth={1.9} />
               </button>
             ) : null}
-            <ViewModeControl file={activeFile} mode={activeTab?.viewMode || "rendered"} onChange={changeViewMode} />
+            <ViewModeControl file={activeFile} mode={activeTab?.viewMode || "rendered"} htmlRunState={activeHtmlRunState} onChange={changeViewMode} />
           </div>
         </header>
         <FileTabBar
@@ -1105,7 +1134,7 @@ export function App() {
           tabIndex={activeTab ? 0 : undefined}
           style={readerTypographyStyle}
         >
-          <FileViewer tab={activeTab} outline={outline} readerFontScale={basicSettings.readerFontScale} colorMode={basicSettings.colorMode} />
+          <FileViewer tab={activeTab} outline={outline} htmlRunRetryKey={activeHtmlRunRetryKey} onHtmlRunStateChange={updateHtmlRunState} />
         </div>
       </section>
 
@@ -1650,17 +1679,31 @@ function restoreMenuTriggerFocus(trigger: HTMLElement | null, fallback?: () => H
   });
 }
 
-function ViewModeControl({ file, mode, onChange }: { file: FileResponse | null; mode: ViewMode; onChange: (mode: ViewMode) => void }) {
+function ViewModeControl({ file, mode, htmlRunState, onChange }: {
+  file: FileResponse | null;
+  mode: ViewMode;
+  htmlRunState?: HtmlRunState;
+  onChange: (mode: ViewMode) => void;
+}) {
   const modes = getViewModes(file);
   if (!file || modes.length === 0) return null;
   if (modes.length === 1) {
     return <div className="mode-label" aria-label="View mode">{modes[0].label}</div>;
   }
   return (
-    <div className="segmented" aria-label="View mode">
+    <div className="segmented" aria-label="View mode" data-html-run-state={file.kind === "html" ? htmlRunState : undefined}>
       {modes.map((item) => (
-        <button key={item.mode} type="button" className={mode === item.mode ? "active" : ""} onClick={() => onChange(item.mode)}>
+        <button
+          key={item.mode}
+          type="button"
+          className={mode === item.mode ? "active" : ""}
+          title={item.mode === "run" && htmlRunState ? `HTML Run is ${htmlRunState}.` : undefined}
+          onClick={() => onChange(item.mode)}
+        >
           {item.label}
+          {item.mode === "run" && (htmlRunState === "starting" || htmlRunState === "running") ? (
+            <span className={`html-run-indicator ${htmlRunState}`} aria-hidden="true" />
+          ) : null}
         </button>
       ))}
     </div>
@@ -1678,7 +1721,6 @@ export function buildReaderTypographyStyle(scale: ReaderFontScale): CSSPropertie
     "--reader-small-font-size": scaledPx(13, normalizedScale),
     "--reader-meta-font-size": scaledPx(12, normalizedScale),
     "--reader-code-font-size": scaledPx(13, normalizedScale),
-    "--reader-html-root-font-size": scaledPx(HTML_VIEWER_BASE_FONT_SIZE_PX, normalizedScale),
   } as CSSProperties;
 }
 
@@ -1686,42 +1728,154 @@ function scaledPx(baseSize: number, scale: ReaderFontScale): string {
   return `${Number((baseSize * normalizeReaderFontScale(scale)).toFixed(2))}px`;
 }
 
-function FileViewer({ tab, outline, readerFontScale, colorMode }: { tab: FileTab | null; outline: OutlineItem[]; readerFontScale: ReaderFontScale; colorMode: BasicSettings["colorMode"] }) {
+function FileViewer({ tab, outline, htmlRunRetryKey, onHtmlRunStateChange }: {
+  tab: FileTab | null;
+  outline: OutlineItem[];
+  htmlRunRetryKey: number;
+  onHtmlRunStateChange: (tabId: string, state: HtmlRunState | "stopped") => void;
+}) {
   if (!tab) return <div className="empty-state">Choose a file from the tree to preview it.</div>;
-  if (tab.loading) return <div className="empty-state">Loading {tab.title}...</div>;
+  if (tab.loading && !tab.file) return <div className="empty-state">Loading {tab.title}...</div>;
   if (tab.error) return <p className="state-text error">{tab.error}</p>;
   const file = tab.file;
   if (!file) return <div className="empty-state">No file is loaded.</div>;
   if (!isDisplayableFile(file)) return <MetadataFileState file={file} />;
-  if ((file.kind === "markdown" || file.kind === "html") && tab.viewMode === "source") return <CodeBlock content={file.content} label="Source" gitDiff={file.gitDiff} wrap />;
+  if (file.kind === "markdown" && tab.viewMode === "source") return <CodeBlock content={file.content} label="Source" gitDiff={file.gitDiff} wrap />;
   if ((file.kind === "code" || file.kind === "text") && tab.viewMode === "raw") return <CodeBlock content={file.content} label="Raw" gitDiff={file.gitDiff} />;
   if (file.kind === "markdown") {
     return <article className="markdown-body" onClick={handleMarkdownClick} dangerouslySetInnerHTML={{ __html: withOutlineHeadingIds(file.markdown?.html || "", outline) }} />;
   }
-  if (file.kind === "html") return <iframe className="html-frame" title={file.name} sandbox="" srcDoc={buildSandboxedHtmlSrcDoc(file.content, readerFontScale, colorMode)} />;
+  if (file.kind === "html") {
+    return <HtmlRunViewer tabId={tab.id} file={file} viewMode={tab.viewMode === "source" ? "source" : "run"} retryKey={htmlRunRetryKey} onStateChange={onHtmlRunStateChange} />;
+  }
   if (file.kind === "image") return <img className="image-viewer" alt={file.name} src={imageFileUrl(file.repoId, file.path, file.revision, file.assetVersion)} />;
   if (file.kind === "pdf") return <iframe className="pdf-frame" title={file.name} src={pdfFileUrl(file.repoId, file.path, file.revision, file.assetVersion)} />;
   if (file.kind === "binary") return <BinaryFileState file={file} />;
   return <CodeBlock content={file.content} label="Raw" gitDiff={file.gitDiff} />;
 }
 
-export function buildSandboxedHtmlSrcDoc(content: string, readerFontScale: ReaderFontScale = 1, colorMode: BasicSettings["colorMode"] = "light"): string {
-  const headInjection = buildHtmlViewerBaseStyle(readerFontScale, colorMode);
-  if (/<head[\s>]/i.test(content)) {
-    return content.replace(/<head([^>]*)>/i, `<head$1>${headInjection}`);
-  }
-  if (/<html[\s>]/i.test(content)) {
-    return content.replace(/<html([^>]*)>/i, `<html$1><head>${headInjection}</head>`);
-  }
-  return `<!doctype html><html><head>${headInjection}</head><body>${content}</body></html>`;
-}
+function HtmlRunViewer({ tabId, file, viewMode, retryKey, onStateChange }: {
+  tabId: string;
+  file: FileResponse;
+  viewMode: "run" | "source";
+  retryKey: number;
+  onStateChange: (tabId: string, state: HtmlRunState | "stopped") => void;
+}) {
+  const [session, setSession] = useState<HtmlPreviewSessionStatus | null>(null);
+  const [error, setError] = useState("");
+  const sessionRef = useRef<HtmlPreviewSessionStatus | null>(null);
+  const startAbortRef = useRef<AbortController | null>(null);
+  const stopRequestedRef = useRef(false);
 
-function buildHtmlViewerBaseStyle(readerFontScale: ReaderFontScale, colorMode: BasicSettings["colorMode"]): string {
-  const rootFontSize = scaledPx(HTML_VIEWER_BASE_FONT_SIZE_PX, readerFontScale);
-  if (colorMode === "dark") {
-    return `<style>:root { color-scheme: dark; font-size: ${rootFontSize}; color: #e6edf0; background: #10181c; } body { background: #10181c; color: #e6edf0; font-size: 1rem; } a { color: #8fd3dc; } code, pre { background: #17262c; color: #eef6f8; }</style>`;
-  }
-  return `<style>:root { color-scheme: light; font-size: ${rootFontSize}; color: #172026; background: #ffffff; } body { background: #ffffff; color: #172026; font-size: 1rem; }</style>`;
+  const stopCurrentSession = useCallback((state: "stopped" | "error") => {
+    const pendingStart = startAbortRef.current;
+    startAbortRef.current = null;
+    pendingStart?.abort();
+    stopRequestedRef.current = true;
+    const currentSession = sessionRef.current;
+    sessionRef.current = null;
+    setSession(null);
+    if (currentSession) void stopHtmlPreview(currentSession.id, true).catch(() => undefined);
+    if (state === "stopped") onStateChange(tabId, "stopped");
+  }, [onStateChange, tabId]);
+
+  useEffect(() => {
+    let active = true;
+    const startAbortController = new AbortController();
+    stopRequestedRef.current = false;
+    startAbortRef.current = startAbortController;
+    setSession(null);
+    setError("");
+    onStateChange(tabId, "starting");
+    void startHtmlPreview(file.repoId, file.path, file.revision, startAbortController.signal)
+      .then((value) => validateHtmlPreviewSession(value, { repoId: file.repoId, path: file.path }))
+      .then((nextSession) => {
+        if (startAbortRef.current === startAbortController) {
+          startAbortRef.current = null;
+        }
+        if (!active || stopRequestedRef.current || startAbortController.signal.aborted) {
+          void stopHtmlPreview(nextSession.id, true).catch(() => undefined);
+          return;
+        }
+        sessionRef.current = nextSession;
+        setSession(nextSession);
+      })
+      .catch((nextError) => {
+        if (startAbortRef.current === startAbortController) {
+          startAbortRef.current = null;
+        }
+        if (!active || stopRequestedRef.current || startAbortController.signal.aborted) return;
+        setError(nextError instanceof Error ? nextError.message : String(nextError));
+        onStateChange(tabId, "error");
+      });
+
+    return () => {
+      active = false;
+      stopCurrentSession("stopped");
+    };
+    // The active document is intentionally keyed only by repository and path.
+    // Source refreshes update the Source pane without restarting the running page.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [file.repoId, file.path, onStateChange, retryKey, tabId, stopCurrentSession]);
+
+  useEffect(() => {
+    if (!session) return undefined;
+    const intervalId = window.setInterval(() => {
+      const currentSession = sessionRef.current;
+      if (!currentSession) return;
+      void heartbeatHtmlPreview(currentSession.id)
+        .then((value) => validateHtmlPreviewSession(value, { repoId: file.repoId, path: file.path }))
+        .then((nextSession) => {
+          if (sessionRef.current?.id !== nextSession.id) return;
+          sessionRef.current = nextSession;
+        })
+        .catch((nextError) => {
+          if (sessionRef.current?.id !== currentSession.id) return;
+          sessionRef.current = null;
+          setSession(null);
+          setError(nextError instanceof Error ? nextError.message : String(nextError));
+          onStateChange(tabId, "error");
+          void stopHtmlPreview(currentSession.id, true).catch(() => undefined);
+        });
+    }, HTML_PREVIEW_HEARTBEAT_INTERVAL_MS);
+    return () => window.clearInterval(intervalId);
+  }, [file.path, file.repoId, onStateChange, session, tabId]);
+
+  useEffect(() => {
+    const stopForPageExit = () => {
+      stopCurrentSession("stopped");
+    };
+    window.addEventListener("pagehide", stopForPageExit);
+    return () => window.removeEventListener("pagehide", stopForPageExit);
+  }, [stopCurrentSession]);
+
+  return (
+    <div className="html-run-viewer" data-view-mode={viewMode}>
+      {session ? (
+        <iframe
+          className={`html-frame html-run-pane${viewMode === "source" ? " is-hidden" : ""}`}
+          title={file.name}
+          src={session.url}
+          sandbox={HTML_PREVIEW_IFRAME_SANDBOX}
+          allow="camera 'none'; microphone 'none'; geolocation 'none'; payment 'none'; usb 'none'; fullscreen 'none'"
+          referrerPolicy="no-referrer"
+          aria-hidden={viewMode === "source" ? "true" : undefined}
+          onLoad={() => onStateChange(tabId, "running")}
+          onError={() => {
+            stopCurrentSession("error");
+            setError("HTML Run document could not be loaded.");
+            onStateChange(tabId, "error");
+          }}
+        />
+      ) : viewMode === "run" && !error ? (
+        <p className="html-run-status" role="status">Starting HTML Run...</p>
+      ) : null}
+      <div className={`html-run-pane html-source-pane${viewMode === "run" ? " is-hidden" : ""}`} aria-hidden={viewMode === "run" ? "true" : undefined}>
+        <CodeBlock content={file.content} label="Source" gitDiff={file.gitDiff} wrap />
+      </div>
+      {error && viewMode === "run" ? <p className="html-run-status error" role="alert">{error}</p> : null}
+    </div>
+  );
 }
 
 function CodeBlock({ content, label, gitDiff, wrap = false }: { content: string; label: string; gitDiff?: FileResponse["gitDiff"]; wrap?: boolean }) {
@@ -2154,7 +2308,8 @@ function shouldShowRepoSyncStatus(status: RepoSyncViewStatus): boolean {
 function getViewModes(file: FileResponse | null): Array<{ mode: ViewMode; label: string }> {
   if (!file) return [];
   if (!isDisplayableFile(file)) return [{ mode: "rendered", label: "Metadata" }];
-  if (file.kind === "markdown" || file.kind === "html") return [{ mode: "rendered", label: "Rendered" }, { mode: "source", label: "Source" }];
+  if (file.kind === "html") return [{ mode: "run", label: "Run" }, { mode: "source", label: "Source" }];
+  if (file.kind === "markdown") return [{ mode: "rendered", label: "Rendered" }, { mode: "source", label: "Source" }];
   if (file.kind === "code" || file.kind === "text") return [{ mode: "raw", label: "Raw" }];
   return [{ mode: "rendered", label: "Preview" }];
 }

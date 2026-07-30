@@ -8,7 +8,7 @@ Local Reader App turns folders on your Mac or Windows PC into a private reading 
 
 Product website: [Local Reader App](https://local-reader-app.freedom-build.com)
 
-The normal viewer does not edit files in the folders you register. Local Reader App runs on your own computer at `http://127.0.0.1:5173/`. No repository content is sent to an AI service unless you enable AI Chat. Before an AI request, context selected from the Current repo is shown in removable chips; a rule file from the Current repo root may be suggested automatically.
+Most viewing modes do not edit files in the folders you register. HTML **Run** may replace an existing same-repository UTF-8 text file only when the HTML itself implements that save, and a supported AI Chat **Current repo write** entry may edit the selected Current repo. Local Reader App runs on your own computer at `http://127.0.0.1:5173/`. No repository content is sent to an AI service unless you enable AI Chat. Before an AI request, context selected from the Current repo is shown in removable chips; a rule file from the Current repo root may be suggested automatically.
 
 Local Reader App currently runs from the source files on GitHub. There is no `.dmg`, `.exe`, app-store package, hosted account, or one-click installer. The setup below takes you from downloading the source to opening your first folder.
 
@@ -42,7 +42,7 @@ Copyright remains with Ryusei Komada and other contributors for their respective
 - Register one or more local folders and switch between them.
 - Browse a file tree with local Git status markers and safe path controls.
 - Keep up to five Preview, Fixed, or Pinned file tabs per registered folder.
-- Render Markdown and sandboxed HTML, inspect source and code with line numbers, and preview images, PDFs, and supported Markdown-in-DOCX files.
+- Render Markdown, run isolated same-repository HTML with its CSS and JavaScript, inspect source and code with line numbers, and preview images, PDFs, and supported Markdown-in-DOCX files.
 - Copy file contents, paths, messages, and individual Markdown code blocks.
 - Inspect file metadata, Git state, and a clickable Markdown outline.
 - Keep a temporary Markdown memo and download it when needed.
@@ -50,7 +50,7 @@ Copyright remains with Ryusei Komada and other contributors for their respective
 - Adjust text size, light or dark appearance, and workspace width.
 - Optionally ask an AI service about files or folders that you select explicitly.
 
-Local Reader App is primarily a reader, not a general file editor, terminal, Git client, or remote file server. Normal viewing does not write to registered folders. A supported optional AI Chat **Current repo write** entry is the explicit exception and can edit only the Current repo selected for that run after readiness succeeds. Saving Repository Settings updates only Local Reader App's own configuration, while downloading a Memo creates a browser download that you requested. Removing an entry from the repository list never deletes the registered folder.
+Local Reader App is primarily a reader, not a general file editor, terminal, Git client, or remote file server. HTML **Run** is an explicit exception to read-only viewing: HTML that implements its own save can replace an existing allowed UTF-8 text file in the same registered repository. A supported optional AI Chat **Current repo write** entry is the other repository-write exception and can edit only the Current repo selected for that run after readiness succeeds. Saving Repository Settings updates only Local Reader App's own configuration, while downloading a Memo creates a browser download that you requested. Removing an entry from the repository list never deletes the registered folder.
 
 ## Before You Install
 
@@ -292,9 +292,9 @@ After the first valid repository is configured, you can manage the list in the b
 
 **Remove from list** removes only the configuration entry. It never deletes the folder or any file inside it. Saving a changed repository list stops active HTTP Delivery sessions because their old repository boundaries are no longer current.
 
-If another program changes the configuration after Settings loads it, Local Reader App refuses to overwrite the newer file. Return to the viewer, reopen Settings, and try again.
+Opening Settings stops the current HTML Run session. Repository configuration cannot be saved while another browser still owns an HTML Run session. If another program changes the configuration after Settings loads it, Local Reader App refuses to overwrite the newer file. Return to the viewer, reopen Settings, and try again.
 
-Repository Settings saves and AI runs are mutually exclusive. If a save is rejected because AI Chat is active, wait for that run to finish or cancel it, then validate and save again. If an AI request is rejected while a configuration save is active, wait for the save to finish and retry the request.
+Repository Settings saves, HTML Run sessions, and AI runs are mutually exclusive. If a save is rejected because another browser still has HTML running or AI Chat is active, close that Run session or finish or cancel the AI run, then validate and save again. If an HTML Run start or AI request is rejected while a configuration save is active, wait for the save to finish and retry.
 
 ### Use a configuration file in another location
 
@@ -372,7 +372,7 @@ Local Reader App chooses a safe viewer from the file name, content, and size.
 | File | Available view |
 | --- | --- |
 | Markdown | **Rendered** or **Source**. Rendered Markdown hides YAML frontmatter and supports tables, read-only task lists, and code-block copy and wrapping. |
-| HTML | **Rendered** in a script-disabled sandbox or **Source**. |
+| HTML | **Run** or **Source**. Run starts when the file opens and executes inline or same-repository CSS and JavaScript. |
 | Source code, JSON, YAML, configuration, and text | **Raw** with line numbers, horizontal scrolling, and local Git change markers. |
 | PNG, JPEG, GIF, WebP, and SVG | Image preview. |
 | PDF | Embedded browser PDF preview. |
@@ -383,7 +383,28 @@ The header can copy the full contents of a text-based file. Rendered Markdown co
 
 **Source** wraps long lines for reading. **Raw** keeps line structure and uses horizontal scrolling.
 
-Rendered Markdown and sandboxed HTML can load HTTPS image resources that the document explicitly references, including image URLs in inline CSS. The Content Security Policy blocks other remote subresource types and the HTML sandbox disables scripts, but permitted HTTPS image requests still contact the image host. A newly opened Markdown or HTML file starts in **Rendered** mode, so inspect an untrusted document in a separate plain-text editor before opening it in Local Reader App if you must avoid external requests.
+Rendered Markdown can load HTTPS image resources that the document explicitly references. HTML Run blocks cross-origin scripts, styles, images, fonts, media, frames, workers, and cross-origin `fetch`/WebSocket/form destinations with its preview Content Security Policy; same-repository resources and same-origin save requests remain available.
+
+### Run HTML
+
+Selecting an HTML file starts **Run** immediately. Switching from **Run** to **Source** hides the same iframe without stopping or reloading it. Switching back shows that iframe again, preserving unsaved form input, the DOM, timers, and JavaScript state. The Run button keeps a running marker while Source is visible. A source refresh updates the Source pane but does not reload the active HTML document.
+
+Each Run uses a server-owned, non-persistent session on its own loopback origin and port. The repository root is that origin's URL root, so both relative references such as `../styles/app.css` and root-relative references such as `/data/state.yaml` resolve inside the same registered repository. Allowed HTML, CSS, JavaScript, ES modules, JSON, YAML, text, image, font, media, WebAssembly, iframe, and Worker assets can be read. Excluded paths, symbolic-link components, directories, unsupported assets, and paths outside the registered root are rejected. HTML can therefore read any allowed non-excluded asset in that registered repository, not only files beside the entry document; configure `excludes` before running HTML that you did not author.
+
+Run ends when you close its tab, select another file or repository, open Settings, leave or reload the page, stop the server, or let its heartbeat lease expire. A lost page-exit notification is recovered by the server lease. Up to five sessions can exist across browser clients.
+
+HTML may save only by sending a same-origin `PUT` to an existing allowed UTF-8 text file. The request must include:
+
+- `X-Local-Reader-Preview-Write: replace`;
+- `If-Match` with the current ETag obtained by reading that exact target;
+- a UTF-8 text `Content-Type`; and
+- a body no larger than 5 MiB.
+
+A same-origin `fetch()` of an HTML target returns the stored source and its ETag. The navigation gate is added only to document or iframe responses, so self-saving HTML does not write the injected gate back into its own file.
+
+The existing target must also be no larger than 5 MiB. Local Reader App revalidates the path and ETag, writes a same-directory temporary file, preserves the file mode, and atomically replaces the target. It rejects new-file creation, deletion, rename, directories, binary or unknown targets, stale ETags, excluded paths, symbolic links, and repository escapes. The app does not add a separate save button or approval dialog: choosing to use HTML with this behavior is the user's decision, and the HTML owns its own form, confirmation, success, and error UI. Keep a backup of files that such HTML can replace.
+
+Run permits arbitrary JavaScript, forms, modals, and same-origin HTML popups. Programmatic popup opens, links, and form targets that create another window are limited to same-origin `.html` or `.htm` documents; `about:blank`, `blob:`, non-HTML, and external popup targets are rejected by the injected gate. The dedicated preview origin prevents the document from sharing the Local Reader App DOM, storage, or protected API access. CSP, iframe sandboxing, and the injected navigation gate block external subresources and suppress common external links, forms, refreshes, and popup opens. A normal browser cannot guarantee interception of every later `location` change in a hostile document or its same-origin popup, so a malicious or defective HTML file may still cause an outbound navigation request. **Run is not an HTML sanitizer or a safe way to inspect hostile active content.** Because Run starts as soon as the file is selected, Source is not a pre-execution safety gate; inspect untrusted HTML in a separate plain-text editor before selecting it here.
 
 ### Viewer size limits
 
@@ -456,7 +477,7 @@ Select the gear button to open Settings. Returning to the viewer without reloadi
 
 ### Basic
 
-- **Reader text scale**: `×1`, `×1.5`, or `×2` for Markdown, HTML, text, code, and document reading surfaces.
+- **Reader text scale**: `×1`, `×1.5`, or `×2` for Markdown, text, code, and document reading surfaces. HTML Run uses the HTML document's own styles.
 - **Appearance**: Light or Dark.
 - **Workspace density**: Compact, Comfortable, or Focused.
 
@@ -484,9 +505,10 @@ Choose one AI entry, enter only the connection details it needs, and run its rea
 | Codex CLI or Claude Code CLI persistent sign-in | Storage managed externally by that CLI | Not cleared by Local Reader App |
 | Voice input audio and transcript | Browser or operating-system speech recognition; an external speech service may process audio, while Local Reader App receives the transcript | Browser/provider-dependent |
 | HTTP Delivery sessions | Current Local Reader App server process | Cleared when the server stops |
-| Files in registered repositories | Read by the viewer; a supported CLI AI Chat request may edit the Current repo | May change after a CLI edit request |
+| HTML Run sessions | Current page plus the Local Reader App server process | Cleared when the file, repository, or page changes, or when the server stops or the lease expires |
+| Files in registered repositories | Read by most viewers; HTML Run may replace an existing allowed UTF-8 text file, and a supported CLI AI Chat request may edit the Current repo | May change after an HTML-owned save or CLI edit request |
 
-Local Reader App has no built-in repository backup or restore. Before a CLI write, make a verified backup with your normal Git or file-copy workflow. To back up Local Reader App's repository list, copy the actual YAML file shown in **Settings** > **Repositories** > **Config details**; restore it while the server is stopped and start the app again. Browser appearance settings have no export and must be set again if site data is cleared.
+Local Reader App has no built-in repository backup or restore. Before an HTML Run save or CLI write, make a verified backup with your normal Git or file-copy workflow. To back up Local Reader App's repository list, copy the actual YAML file shown in **Settings** > **Repositories** > **Config details**; restore it while the server is stopped and start the app again. Browser appearance settings have no export and must be set again if site data is cleared.
 
 ## Set Up Optional AI Chat
 
@@ -564,9 +586,10 @@ AI Chat displays only the AI Entry's user-facing natural-language response. Loca
 - Each server start creates a new server-side session token. Open or reload the exact URL printed by that server to receive the new browser session; an old tab's API calls fail after restart until it is reloaded. The token is not serialized into the tab-scoped AI workspace state. Write-like configuration actions also require the exact local origin and request format.
 - Requested paths must stay inside a registered root. Absolute input paths, `..` traversal, and excluded paths are rejected. File-body reads and HTTP Delivery also reject every symbolic-link path component, while tree navigation refuses links that resolve outside the root.
 - `.git` is always excluded from file viewing. Git commands are used only for local status and diff information; Local Reader App does not contact Git remotes.
-- Rendered Markdown and sandboxed HTML may contact explicitly referenced HTTPS image hosts. Other remote subresource types are restricted by Content Security Policy and HTML scripts are disabled, but inspect untrusted documents as plain text elsewhere before opening them when any network request is unacceptable.
+- Rendered Markdown may contact explicitly referenced HTTPS image hosts. HTML Run uses a separate loopback origin and blocks external subresources, but arbitrary HTML JavaScript and same-origin popups mean the browser cannot guarantee interception of every hostile later navigation. Inspect untrusted HTML as plain text elsewhere before selecting it because Run starts immediately.
 - Voice input uses the browser's speech-recognition feature. Depending on the browser and operating system, audio may be processed by an external speech service; Local Reader App cannot select, verify, or control that service's storage. Use typed input if this is unacceptable.
-- Normal viewing does not edit repository files. Repository Settings writes only the selected Local Reader App configuration file.
+- HTML Run is the only normal viewer that can write a registered repository file. It accepts only same-origin, ETag-guarded replacement of an existing allowed UTF-8 text file no larger than 5 MiB; it cannot create, delete, or rename a file.
+- Other normal viewing modes do not edit repository files. Repository Settings writes only the selected Local Reader App configuration file.
 - AI API and Local AI are disabled **Coming soon** entries in the normal UI, which cannot send repository context or edit requests through them. Their future internal loopback API implementation is not a supported interface or an access-control guarantee.
 - Codex CLI and Claude Code CLI are the explicit AI Chat write entries on supported CLI runtimes. They receive the conversation and visible context, may inspect additional Current repo files with their native tools, and can create, update, rename, or delete multiple files and nested directories without Local Reader App's provider edit limits. Local Reader App supplies no additional workspace root. Neither CLI entry starts on native Windows in this MVP because complete process-tree ownership cannot yet be enforced and verified there.
 - HTTP Delivery uses temporary, restricted local URLs and does not turn Local Reader App into a public server.
@@ -583,7 +606,7 @@ Include the affected revision, operating system, reproduction conditions, expect
 
 Local Reader App is provided as free, open-source software under the Apache License 2.0. It does not include individual installation, configuration, operation, or troubleshooting support comparable to a paid product or support contract.
 
-Decide whether and how to use Local Reader App at your own discretion and responsibility. Keep backups of important repositories before changing tools, settings, dependencies, or enabling a CLI entry. You are responsible for checking the effect of commands you run, folders you register, files you expose through HTTP Delivery, context you send to AI, and every file change produced by Codex CLI or Claude Code CLI.
+Decide whether and how to use Local Reader App at your own discretion and responsibility. Keep backups of important repositories before changing tools, settings, dependencies, running active HTML, or enabling a CLI entry. You are responsible for checking the effect of commands you run, folders you register, HTML you run, files an HTML-owned save can replace, files you expose through HTTP Delivery, context you send to AI, and every file change produced by HTML Run, Codex CLI, or Claude Code CLI.
 
 After the repository is public, use [GitHub Issues](https://github.com/freedombuild-official/local-reader-app/issues) for reproducible bugs and focused feature proposals. Include the source version or revision, operating system, steps, expected and actual behavior, and a sanitized exact error. An issue does not guarantee an individual reply, a fix, a release date, or a service-level agreement. Security reports are different: follow [SECURITY.md](SECURITY.md) and do not post unpatched vulnerability details in an issue, discussion, AI prompt, screenshot, or log.
 
@@ -713,6 +736,12 @@ The server deliberately keeps that Current repo locked because the CLI process t
 ### Voice input is unavailable
 
 The microphone button is enabled only when the browser provides a compatible speech-recognition API. Typed AI Chat remains available.
+
+### HTML Run cannot load or save a file
+
+Confirm that the HTML entry and every referenced asset are existing regular files inside the same registered repository, are not excluded, and are not reached through a symbolic link. External subresources are intentionally blocked. For a save, read the exact target first, send its current ETag in `If-Match`, include `X-Local-Reader-Preview-Write: replace`, use a UTF-8 text content type, and keep both the existing target and request body at or below 5 MiB. Creation, deletion, rename, directory writes, and binary targets are not supported.
+
+If Run expired after the page slept or the server restarted, select **Run** again to create a new session. Selecting another file and reopening the HTML also creates a new session. Source changes alone intentionally do not reload the running document.
 
 ### HTTP Delivery rejects a file
 

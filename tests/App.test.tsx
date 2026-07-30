@@ -4,7 +4,7 @@ import { EditorView } from "@codemirror/view";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import axe from "axe-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { App, buildSandboxedHtmlSrcDoc } from "../src/App";
+import { App } from "../src/App";
 import { AI_WORKSPACE_SESSION_STORAGE_KEY } from "../src/appSessionState";
 import type { AICliEntryKind, AICliSetupSnapshot } from "../src/types";
 
@@ -41,6 +41,9 @@ const altTreeSnapshot = {
   "": altTreeNodes,
 };
 let httpDeliverySessions: Array<{ id: string; repoId: string; path: string; url: string; startedAt: string }> = [];
+let htmlPreviewSessions: Array<{ id: string; repoId: string; path: string; origin: string; url: string; startedAt: string; expiresAt: string }> = [];
+let htmlPreviewSessionSequence = 0;
+let htmlPreviewStartFailures = 0;
 let windowOpenMock: ReturnType<typeof vi.fn>;
 let openedHttpDeliveryTabs: MockOpenedTab[] = [];
 let repoOpenHandler: (body: Record<string, unknown>) => Promise<Response> | Response;
@@ -131,6 +134,9 @@ beforeEach(() => {
   installLocalStorageMock();
   installSessionStorageMock();
   httpDeliverySessions = [];
+  htmlPreviewSessions = [];
+  htmlPreviewSessionSequence = 0;
+  htmlPreviewStartFailures = 0;
   openedHttpDeliveryTabs = [];
   cliSetups = createCliSetupCollection();
   windowOpenMock = vi.fn(() => createMockOpenedTab() as unknown as Window);
@@ -318,6 +324,37 @@ beforeEach(() => {
       httpDeliverySessions = httpDeliverySessions.filter((item) => item.id !== body.deliveryId);
       return json({ state: httpDeliverySessions.length ? "running" : "idle", items: httpDeliverySessions });
     }
+    if (url === "/api/html-preview/start") {
+      if (htmlPreviewStartFailures > 0) {
+        htmlPreviewStartFailures -= 1;
+        return json({ error: "HTML Run start failed for retry testing." }, 503);
+      }
+      const body = parseJsonBody(init?.body);
+      htmlPreviewSessionSequence += 1;
+      const id = `preview-session-${htmlPreviewSessionSequence}`;
+      const origin = `http://127.0.0.1:${49100 + htmlPreviewSessionSequence}`;
+      const item = {
+        id,
+        repoId: String(body.repoId || ""),
+        path: String(body.path || ""),
+        origin,
+        url: `${origin}/__reader_wiki_preview_bootstrap?token=test-${htmlPreviewSessionSequence}`,
+        startedAt: "2026-07-30T12:00:00.000Z",
+        expiresAt: "2026-07-30T12:01:00.000Z",
+      };
+      htmlPreviewSessions.push(item);
+      return json(item);
+    }
+    if (url === "/api/html-preview/heartbeat") {
+      const body = parseJsonBody(init?.body);
+      const item = htmlPreviewSessions.find((candidate) => candidate.id === body.sessionId);
+      return item ? json({ ...item, expiresAt: "2026-07-30T12:02:00.000Z" }) : json({ error: "HTML Run session was not found." }, 404);
+    }
+    if (url === "/api/html-preview/stop") {
+      const body = parseJsonBody(init?.body);
+      htmlPreviewSessions = htmlPreviewSessions.filter((item) => item.id !== body.sessionId);
+      return json({ stopped: true });
+    }
     return json({ error: "not found" }, 404);
   });
   vi.stubGlobal("fetch", fetchMock);
@@ -402,6 +439,149 @@ describe("App", () => {
     expect(rawViewer.textContent).toContain("export function read");
     expect(rawViewer.className).not.toContain("wrap");
     expect(screen.getByLabelText("View mode").textContent).toContain("Raw");
+  });
+
+  it("starts HTML in Run and preserves the same iframe across Run and Source", async () => {
+    render(<App />);
+    expect(await screen.findByRole("heading", { name: "Hello" })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "page.html" }));
+    await waitFor(() => expect(fetchCallsTo("/api/html-preview/start")).toHaveLength(1));
+    expect(screen.getByLabelText("View mode").textContent).toContain("Run");
+    expect(screen.getByLabelText("View mode").textContent).toContain("Source");
+    expect(screen.getByLabelText("View mode").textContent).not.toContain("Rendered");
+
+    const iframe = await waitFor(() => {
+      const element = document.querySelector<HTMLIFrameElement>(".html-frame");
+      expect(element).toBeTruthy();
+      return element as HTMLIFrameElement;
+    });
+    expect(iframe.src).toMatch(/^http:\/\/127\.0\.0\.1:49101\/__reader_wiki_preview_bootstrap/);
+    expect(iframe.getAttribute("sandbox")).toBe("allow-scripts allow-same-origin allow-forms allow-modals allow-popups");
+    expect(iframe.getAttribute("sandbox")).not.toContain("allow-top-navigation");
+    expect(iframe.getAttribute("sandbox")).not.toContain("allow-downloads");
+    fireEvent.load(iframe);
+    expect(screen.getByLabelText("View mode").getAttribute("data-html-run-state")).toBe("running");
+    expect(document.querySelector(".html-run-indicator.running")).toBeTruthy();
+
+    (iframe as HTMLIFrameElement & { preservedMarker?: string }).preservedMarker = "unsaved-dom-state";
+    fireEvent.click(screen.getByRole("button", { name: "Source" }));
+    expect(await screen.findByLabelText("Source")).toBeTruthy();
+    expect(iframe.className).toContain("is-hidden");
+    expect(document.querySelector(".html-frame")).toBe(iframe);
+    expect((iframe as HTMLIFrameElement & { preservedMarker?: string }).preservedMarker).toBe("unsaved-dom-state");
+    expect(document.querySelector(".html-run-indicator.running")).toBeTruthy();
+    expect(fetchCallsTo("/api/html-preview/stop")).toHaveLength(0);
+
+    fireEvent.click(screen.getByRole("button", { name: "Run" }));
+    expect(document.querySelector(".html-frame")).toBe(iframe);
+    expect(iframe.className).not.toContain("is-hidden");
+    expect(fetchCallsTo("/api/html-preview/start")).toHaveLength(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "page.html" }));
+    await waitFor(() => expect(fileFetchCallsFor("page.html")).toHaveLength(2));
+    expect(document.querySelector(".html-frame")).toBe(iframe);
+    expect(fetchCallsTo("/api/html-preview/start")).toHaveLength(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "guide.md" }));
+    expect(await screen.findByRole("heading", { name: "Guide" })).toBeTruthy();
+    await waitFor(() => expect(fetchCallsTo("/api/html-preview/stop")).toHaveLength(1));
+    expect(htmlPreviewSessions).toHaveLength(0);
+  });
+
+  it("retries a failed HTML Run when Run is selected again", async () => {
+    htmlPreviewStartFailures = 1;
+    render(<App />);
+    expect(await screen.findByRole("heading", { name: "Hello" })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "page.html" }));
+    await waitFor(() => expect(screen.getByLabelText("View mode").getAttribute("data-html-run-state")).toBe("error"));
+    expect(fetchCallsTo("/api/html-preview/start")).toHaveLength(1);
+    expect(document.querySelector(".html-frame")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Run" }));
+    await waitFor(() => expect(fetchCallsTo("/api/html-preview/start")).toHaveLength(2));
+    const iframe = await waitFor(() => {
+      const element = document.querySelector<HTMLIFrameElement>(".html-frame");
+      expect(element).toBeTruthy();
+      return element as HTMLIFrameElement;
+    });
+    fireEvent.load(iframe);
+    expect(screen.getByLabelText("View mode").getAttribute("data-html-run-state")).toBe("running");
+    expect(htmlPreviewSessions).toHaveLength(1);
+  });
+
+  it("stops an active HTML Run session when the page is hidden", async () => {
+    const { unmount } = render(<App />);
+    expect(await screen.findByRole("heading", { name: "Hello" })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "page.html" }));
+    const iframe = await waitFor(() => {
+      const element = document.querySelector<HTMLIFrameElement>(".html-frame");
+      expect(element).toBeTruthy();
+      return element as HTMLIFrameElement;
+    });
+    fireEvent.load(iframe);
+    expect(htmlPreviewSessions).toHaveLength(1);
+
+    act(() => {
+      window.dispatchEvent(new PageTransitionEvent("pagehide"));
+    });
+    await waitFor(() => expect(fetchCallsTo("/api/html-preview/stop")).toHaveLength(1));
+    expect(htmlPreviewSessions).toHaveLength(0);
+    unmount();
+    expect(fetchCallsTo("/api/html-preview/stop")).toHaveLength(1);
+  });
+
+  it("stops a pending HTML Run session when the page hides before start resolves", async () => {
+    const baseFetch = fetchMock.getMockImplementation();
+    let resolveStart!: (response: Response) => void;
+    let requestSignal: AbortSignal | undefined;
+    let pendingSession: { id: string; repoId: string; path: string; origin: string; url: string; startedAt: string; expiresAt: string } | null = null;
+    const pendingStart = new Promise<Response>((resolve) => {
+      resolveStart = resolve;
+    });
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input) === "/api/html-preview/start") {
+        requestSignal = init?.signal || undefined;
+        htmlPreviewSessionSequence += 1;
+        pendingSession = {
+          id: `preview-session-${htmlPreviewSessionSequence}`,
+          repoId: "docs",
+          path: "page.html",
+          origin: `http://127.0.0.1:${49100 + htmlPreviewSessionSequence}`,
+          url: `http://127.0.0.1:${49100 + htmlPreviewSessionSequence}/__reader_wiki_preview_bootstrap?token=test-${htmlPreviewSessionSequence}`,
+          startedAt: "2026-07-30T12:00:00.000Z",
+          expiresAt: "2026-07-30T12:01:00.000Z",
+        };
+        htmlPreviewSessions.push(pendingSession);
+        return pendingStart;
+      }
+      return baseFetch ? baseFetch(input, init) : json({ error: "missing fetch" }, 500);
+    });
+
+    render(<App />);
+    expect(await screen.findByRole("heading", { name: "Hello" })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "page.html" }));
+    await waitFor(() => expect(fetchCallsTo("/api/html-preview/start")).toHaveLength(1));
+    expect(htmlPreviewSessions).toHaveLength(1);
+
+    act(() => {
+      window.dispatchEvent(new PageTransitionEvent("pagehide"));
+    });
+    expect(requestSignal?.aborted).toBe(true);
+    expect(screen.getByLabelText("View mode").getAttribute("data-html-run-state")).toBeNull();
+    expect(document.querySelector(".html-run-indicator")).toBeNull();
+
+    await act(async () => {
+      if (!pendingSession) throw new Error("Pending HTML Run session was not created.");
+      resolveStart(json(pendingSession));
+      await Promise.resolve();
+    });
+
+    await waitFor(() => expect(fetchCallsTo("/api/html-preview/stop")).toHaveLength(1));
+    expect(htmlPreviewSessions).toHaveLength(0);
   });
 
   it("uses a light gray code viewer surface while keeping diff marker colors semantic", () => {
@@ -1232,15 +1412,6 @@ describe("App", () => {
     expect(storedFocusedSettings.layout).toBe("focused");
     fireEvent.click(screen.getByRole("tab", { name: "Memo" }));
     expect(memoEditorView().state.doc.toString()).toBe("keep this memo");
-  });
-
-  it("injects reader font scale and color mode into sandboxed HTML file view documents", () => {
-    expect(buildSandboxedHtmlSrcDoc("<html><head><title>Doc</title></head><body>Hi</body></html>", 1.5)).toContain(
-      ":root { color-scheme: light; font-size: 24px;",
-    );
-    expect(buildSandboxedHtmlSrcDoc("<h1>Hi</h1>", 2, "dark")).toContain(
-      '<head><style>:root { color-scheme: dark; font-size: 32px; color: #e6edf0; background: #10181c; } body { background: #10181c; color: #e6edf0; font-size: 1rem; }',
-    );
   });
 
   it("shows real repository config state, validates, previews YAML, and saves from Settings", async () => {

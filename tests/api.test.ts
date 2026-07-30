@@ -1159,8 +1159,30 @@ describe("api", () => {
       releaseSave = resolve;
       markSaveStarted();
     }));
+    const htmlPreview = {
+      start: vi.fn(async () => ({
+        id: "preview-session-test",
+        repoId: "docs",
+        path: "page.html",
+        origin: "http://127.0.0.1:49101",
+        url: "http://127.0.0.1:49101/__reader_wiki_preview_bootstrap?token=test",
+        startedAt: "2026-07-30T12:00:00.000Z",
+        expiresAt: "2026-07-30T12:01:00.000Z",
+      })),
+      heartbeat: vi.fn(async () => {
+        throw new HttpError(404, "not found");
+      }),
+      stop: vi.fn(async () => undefined),
+      stopAll: vi.fn(async () => undefined),
+      dispose: vi.fn(async () => undefined),
+      activeCount: vi.fn(() => 0),
+    };
     const app = express();
-    app.use("/api", createApiRouter(configPath, undefined, { aiCliSetupService, repositoryConfigSaver }));
+    app.use("/api", createApiRouter(configPath, undefined, {
+      aiCliSetupService,
+      repositoryConfigSaver,
+      htmlPreview,
+    }));
     const server = await listen(app);
     try {
       const pendingSave = fetch(`${server.url}/api/repository-config/save`, {
@@ -1169,6 +1191,12 @@ describe("api", () => {
         body: JSON.stringify({ entries: [] }),
       });
       await saveStarted;
+      expect((await postJson(`${server.url}/api/html-preview/start`, {
+        repoId: "docs",
+        path: "page.html",
+        expectedRevision: "revision-r1",
+      })).status).toBe(409);
+      expect(htmlPreview.start).not.toHaveBeenCalled();
       expect((await postJson(`${server.url}/api/ai/cli-setup/inspect`, { entry: "codexCli" })).status).toBe(409);
       releaseSave({
         configPath,
@@ -1180,6 +1208,15 @@ describe("api", () => {
         configRevision: "saved-r1",
       });
       expect((await pendingSave).status).toBe(200);
+
+      htmlPreview.activeCount.mockReturnValue(1);
+      const previewBlockedSave = await fetch(`${server.url}/api/repository-config/save`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ entries: [] }),
+      });
+      expect(previewBlockedSave.status).toBe(409);
+      htmlPreview.activeCount.mockReturnValue(0);
 
       expect((await postJson(`${server.url}/api/ai/cli-setup/inspect`, { entry: "codexCli" })).status).toBe(200);
       expect((await postJson(`${server.url}/api/ai/cli-setup/auth/start`, { entry: "codexCli" })).status).toBe(200);

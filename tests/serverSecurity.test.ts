@@ -18,6 +18,7 @@ async function fixture() {
   await mkdir(distPath);
   await writeFile(path.join(distPath, "index.html"), "<!doctype html><title>Local Reader App</title>");
   await writeFile(path.join(root, "README.md"), "# Test\n");
+  await writeFile(path.join(root, "page.html"), "<!doctype html><script>window.previewReady = true;</script><h1>Preview</h1>\n");
   await writeFile(configPath, `repositories:\n  - id: docs\n    label: Docs\n    root: ${root}\n    defaultPath: README.md\n`);
   return { root, distPath, configPath };
 }
@@ -65,6 +66,10 @@ describe("Local Reader App public server boundary", () => {
       expect(productionCsp).toContain("script-src 'self'");
       expect(productionCsp).not.toContain("script-src 'self' 'unsafe-inline'");
       expect(productionCsp).not.toContain("ws://");
+      expect(productionCsp).toContain("frame-src 'self' data: blob:");
+      expect(productionCsp).toContain("http://127.0.0.1:*");
+      expect(productionCsp).toContain("http://localhost:*");
+      expect(productionCsp).toContain("http://[::1]:*");
       expect(shell.headers.get("referrer-policy")).toBe("no-referrer");
 
       expect((await fetch(`${handle.url}/api/repos`)).status).toBe(401);
@@ -132,6 +137,50 @@ describe("Local Reader App public server boundary", () => {
         },
         body: JSON.stringify({ repoId: "docs" }),
       })).status).toBe(415);
+
+      expect((await fetch(`${handle.url}/api/html-preview/start`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Reader-Wiki-Request": "1",
+          Origin: handle.url,
+        },
+        body: JSON.stringify({ repoId: "docs", path: "page.html", expectedRevision: revision }),
+      })).status).toBe(401);
+      expect((await fetch(`${handle.url}/api/html-preview/start`, {
+        method: "POST",
+        headers: { ...mutationHeaders, Origin: "https://attacker.invalid" },
+        body: JSON.stringify({ repoId: "docs", path: "page.html", expectedRevision: revision }),
+      })).status).toBe(403);
+
+      const previewStart = await fetch(`${handle.url}/api/html-preview/start`, {
+        method: "POST",
+        headers: mutationHeaders,
+        body: JSON.stringify({ repoId: "docs", path: "page.html", expectedRevision: revision }),
+      });
+      const previewStartError = previewStart.ok
+        ? ""
+        : await previewStart.clone().text();
+      expect(previewStart.status, previewStartError).toBe(200);
+      const preview = await previewStart.json() as { id: string; origin: string; url: string };
+      expect(preview.origin).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
+      expect(preview.origin).not.toBe(handle.url);
+
+      const bootstrap = await fetch(preview.url, { redirect: "manual" });
+      expect(bootstrap.status).toBe(303);
+      const previewCookie = (bootstrap.headers.get("set-cookie") || "").split(";", 1)[0];
+      const previewUrl = new URL(bootstrap.headers.get("location") || "", preview.origin);
+      const previewDocument = await fetch(previewUrl, { headers: { Cookie: previewCookie } });
+      expect(previewDocument.status).toBe(200);
+      expect(await previewDocument.text()).toContain("data-reader-wiki-preview-guard");
+
+      const previewStop = await fetch(`${handle.url}/api/html-preview/stop`, {
+        method: "POST",
+        headers: mutationHeaders,
+        body: JSON.stringify({ sessionId: preview.id }),
+      });
+      expect(previewStop.status).toBe(200);
+      await expect(fetch(previewUrl, { headers: { Cookie: previewCookie } })).rejects.toThrow();
     } finally {
       await handle.close();
     }
