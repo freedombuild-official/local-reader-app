@@ -8,6 +8,8 @@ Local Reader App は、Mac または Windows PC 上のフォルダを、ブラ�
 
 製品紹介サイト: [Local Reader App](https://local-reader-app.freedom-build.com)
 
+最新版の入手と開始: [GitHub Releases](https://github.com/freedombuild-official/local-reader-app/releases/latest)
+
 ほとんどの表示方法は、登録したフォルダ内のファイルを編集しません。HTML自身が保存を実装している場合、HTML **Run**は同じリポジトリ内の既存UTF-8 text fileだけを置換でき、対応するAI Chatの**Current repo write**は選択したCurrent repoを編集できます。Local Reader App は自分のコンピュータ上の `http://127.0.0.1:5173/` で動作します。AI Chat を有効にしない限り、リポジトリの内容を AI サービスへ送信しません。AIへの送信前にはCurrent repoから選んだcontextを取り外せるchipで表示し、Current repo rootのrule fileを自動提案する場合もあります。
 
 現在の Local Reader App は、GitHub からソースファイルを入手して動かします。`.dmg`、`.exe`、App Store 用パッケージ、オンラインアカウント、ワンクリックのインストーラーはありません。以下の手順に沿って、ソースファイルのダウンロードから最初のフォルダを開くところまで進められます。
@@ -70,9 +72,9 @@ AI ソフトウェアと API キーは任意です。AI 以外の閲覧機能は
 
 ## GitHubからLocal Reader Appを入手する
 
-このリポジトリの GitHub ページで、どちらかを選びます。
+次のどちらかを選びます。
 
-1. 最も簡単な方法は、**Code** > **Download ZIP** を選び、ZIP を展開して、そのフォルダの場所を覚えておくことです。
+1. 最も簡単な方法は、[最新のGitHub Release](https://github.com/freedombuild-official/local-reader-app/releases/latest)を開き、**Assets**の**Source code (zip)**を選ぶ方法です。ZIPを展開し、そのフォルダの場所を覚えておきます。Release本文には、この版の概要、制限、macOSとWindowsの開始手順へのリンクがあります。
 2. Git をすでに使っている場合は、**Code** からこの GitHub ページに表示された HTTPS URL をコピーし、その URL からリポジトリを複製します。
 
 以下のコマンドでは、例として `/path/to/local-reader-app` または `C:\path\to\local-reader-app` を使います。ダウンロードまたは複製したフォルダの実際の場所に置き換えてください。

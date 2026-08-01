@@ -64,7 +64,7 @@ export async function buildJudgePackage({
     for (const relativePath of packagedFiles) {
       const content = await readFile(path.join(stagingRoot, relativePath));
       fileRecords.push({
-        path: relativePath,
+        path: toPosixPath(relativePath),
         bytes: content.byteLength,
         sha256: sha256(content),
       });

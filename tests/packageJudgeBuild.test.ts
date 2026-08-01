@@ -81,6 +81,7 @@ describe("judge package builder", () => {
       expect(manifest.files?.some((file) => file.path === "dist/index.html")).toBe(true);
       expect(manifest.files?.some((file) => file.path === "JUDGE_BUILD_MANIFEST.json")).toBe(false);
       for (const file of manifest.files || []) {
+        expect(file.path).not.toContain("\\");
         const content = entries.get(`${judgeArchiveRoot}/${file.path}`);
         expect(content, file.path).toBeDefined();
         expect(content?.byteLength).toBe(file.bytes);

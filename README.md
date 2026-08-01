@@ -8,6 +8,8 @@ Local Reader App turns folders on your Mac or Windows PC into a private reading 
 
 Product website: [Local Reader App](https://local-reader-app.freedom-build.com)
 
+Get the latest version and start here: [GitHub Releases](https://github.com/freedombuild-official/local-reader-app/releases/latest)
+
 Most viewing modes do not edit files in the folders you register. HTML **Run** may replace an existing same-repository UTF-8 text file only when the HTML itself implements that save, and a supported AI Chat **Current repo write** entry may edit the selected Current repo. Local Reader App runs on your own computer at `http://127.0.0.1:5173/`. No repository content is sent to an AI service unless you enable AI Chat. Before an AI request, context selected from the Current repo is shown in removable chips; a rule file from the Current repo root may be suggested automatically.
 
 Local Reader App currently runs from the source files on GitHub. There is no `.dmg`, `.exe`, app-store package, hosted account, or one-click installer. The setup below takes you from downloading the source to opening your first folder.
@@ -70,9 +72,9 @@ The supported end-user installation paths for `0.1.0` are macOS and native Windo
 
 ## Get Local Reader App from GitHub
 
-Choose one method on this repository's GitHub page:
+Choose one method:
 
-1. For the simplest method, select **Code** > **Download ZIP**, extract the ZIP, and remember the extracted folder.
+1. For the simplest method, open the [latest GitHub Release](https://github.com/freedombuild-official/local-reader-app/releases/latest) and select **Source code (zip)** under **Assets**. Extract the ZIP and remember the extracted folder. The release notes summarize that version, its limits, and the macOS and Windows setup links.
 2. If you already use Git, select **Code**, copy the HTTPS URL shown on this GitHub page, and clone that URL.
 
 The commands below use `/path/to/local-reader-app` or `C:\path\to\local-reader-app` as examples. Replace them with the folder you downloaded or cloned.
