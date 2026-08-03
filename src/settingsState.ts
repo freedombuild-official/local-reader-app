@@ -19,6 +19,7 @@ export type ReaderFontScale = (typeof READER_FONT_SCALE_OPTIONS)[number];
 
 export type BasicSettings = {
   readerFontScale: ReaderFontScale;
+  aiChatFontScale: ReaderFontScale;
   colorMode: "light" | "dark";
   layout: "compact" | "comfortable" | "focused";
 };
@@ -42,6 +43,7 @@ const BASIC_SETTINGS_KEY = "readerWiki.basicSettings.v1";
 
 export const defaultBasicSettings: BasicSettings = {
   readerFontScale: 1,
+  aiChatFontScale: 1,
   colorMode: "light",
   layout: "comfortable",
 };
@@ -674,6 +676,7 @@ function normalizeLegacyFontSize(value: unknown): ReaderFontScale {
 function normalizeBasicSettings(value: Partial<BasicSettings> & { fontSize?: unknown }): BasicSettings {
   return {
     readerFontScale: value.readerFontScale === undefined ? normalizeLegacyFontSize(value.fontSize) : normalizeReaderFontScale(value.readerFontScale),
+    aiChatFontScale: normalizeReaderFontScale(value.aiChatFontScale),
     colorMode: value.colorMode === "dark" ? "dark" : "light",
     layout: value.layout === "compact" || value.layout === "focused" ? value.layout : "comfortable",
   };

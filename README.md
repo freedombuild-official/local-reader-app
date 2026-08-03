@@ -480,10 +480,11 @@ Select the gear button to open Settings. Returning to the viewer without reloadi
 ### Basic
 
 - **Reader text scale**: `×1`, `×1.5`, or `×2` for Markdown, text, code, and document reading surfaces. HTML Run uses the HTML document's own styles.
+- **AI Chat text scale**: `×1`, `×1.5`, or `×2` for sent user and AI message text, Markdown headings, and code. It does not change the composer text or placeholder, role chips, message or code-copy controls, model selection, action buttons, or empty and error states.
 - **Appearance**: Light or Dark.
 - **Workspace density**: Compact, Comfortable, or Focused.
 
-These three choices are saved in this browser and survive a page reload.
+These four choices are saved in this browser and survive a page reload.
 
 ### Repositories
 
@@ -641,7 +642,7 @@ On PowerShell, use the same commands. If the execution policy blocks `pnpm.ps1`,
 1. Stop the server with `Control+C` or `Ctrl+C`.
 2. If you want to keep the repository list, save a copy of `repositories.yaml` elsewhere.
 3. Delete the Local Reader App project folder.
-4. Optionally clear site data for the local origin you used—`http://127.0.0.1:5173` by default—to remove the saved text scale, theme, and layout.
+4. Optionally clear site data for the local origin you used—`http://127.0.0.1:5173` by default—to remove the saved text scales, theme, and layout.
 
 Uninstalling Local Reader App does not delete any registered repository folder.
 

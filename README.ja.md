@@ -480,10 +480,11 @@ HTTP Delivery は、選択したファイルに同じローカル Local Reader A
 ### Basic
 
 - **Reader text scale**: Markdown、テキスト、コード、文書の閲覧領域を `×1`、`×1.5`、`×2` から選ぶ。HTML RunはHTML document自身のstyleを使う。
+- **AI Chat text scale**: 送信済みのユーザーメッセージとAI回答の本文、Markdown見出し、コードを `×1`、`×1.5`、`×2` から選ぶ。指示入力欄とプレースホルダー、役割チップ、メッセージとコードのコピー操作、モデル選択、操作ボタン、空表示、エラー表示には適用しない。
 - **Appearance**: LightまたはDark。
 - **Workspace density**: Compact、Comfortable、Focused。
 
-この3つはブラウザに保存され、ページを再読み込みした後も残ります。
+この4つはブラウザに保存され、ページを再読み込みした後も残ります。
 
 ### Repositories
 
@@ -641,7 +642,7 @@ PowerShell でも同じコマンドを使います。実行ポリシーが `pnpm
 1. サーバーを `Control+C` または `Ctrl+C` で停止します。
 2. リポジトリ一覧を残したい場合は、`repositories.yaml` を別の場所へコピーします。
 3. Local Reader App のフォルダを削除します。
-4. 保存された文字サイズ、テーマ、配置も削除したい場合は、実際に使ったlocal origin（既定は`http://127.0.0.1:5173`）のsite dataをbrowserで消去します。
+4. 保存された文字倍率、テーマ、配置も削除したい場合は、実際に使ったlocal origin（既定は`http://127.0.0.1:5173`）のsite dataをbrowserで消去します。
 
 Local Reader App をアンインストールしても、登録済みのリポジトリフォルダは削除しません。
 

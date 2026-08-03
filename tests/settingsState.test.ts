@@ -51,6 +51,27 @@ describe("settings state", () => {
     expect(stored.fontSize).toBeUndefined();
   });
 
+  it("persists an independent AI Chat text scale and normalizes missing or invalid values to ×1", () => {
+    installLocalStorageMock();
+    expect(loadBasicSettings().settings.aiChatFontScale).toBe(1);
+
+    window.localStorage.setItem("readerWiki.basicSettings.v1", JSON.stringify({ readerFontScale: 1.5 }));
+    expect(loadBasicSettings().settings).toMatchObject({ readerFontScale: 1.5, aiChatFontScale: 1 });
+
+    window.localStorage.setItem("readerWiki.basicSettings.v1", JSON.stringify({ readerFontScale: 2, aiChatFontScale: 3 }));
+    expect(loadBasicSettings().settings).toMatchObject({ readerFontScale: 2, aiChatFontScale: 1 });
+
+    window.localStorage.setItem("readerWiki.basicSettings.v1", JSON.stringify({ readerFontScale: 1, aiChatFontScale: 1.5 }));
+    expect(loadBasicSettings().settings).toMatchObject({ readerFontScale: 1, aiChatFontScale: 1.5 });
+
+    const error = persistBasicSettings({ ...loadBasicSettings().settings, readerFontScale: 2, aiChatFontScale: 2 });
+    expect(error).toBe("");
+    expect(JSON.parse(window.localStorage.getItem("readerWiki.basicSettings.v1") || "{}")).toMatchObject({
+      readerFontScale: 2,
+      aiChatFontScale: 2,
+    });
+  });
+
   it("uses Light as the default color mode and migrates legacy System values", () => {
     installLocalStorageMock();
     expect(loadBasicSettings().settings.colorMode).toBe("light");

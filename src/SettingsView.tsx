@@ -425,10 +425,20 @@ function BasicSettingsPanel({ settings, onChange }: { settings: BasicSettings; o
       <SettingsCard title="Reader text scale" eyebrow="Font size" status={formatReaderFontScaleLabel(settings.readerFontScale)}>
         <SettingRow title="Adjust reader text density" description="Applies to markdown, text, code, and document reading surfaces in this browser.">
           <SegmentedControl
-            label="Font size"
+            label="Reader text scale"
             value={String(settings.readerFontScale)}
             options={READER_FONT_SCALE_OPTIONS.map((scale): [string, string] => [String(scale), formatReaderFontScaleLabel(scale)])}
             onChange={(readerFontScale) => onChange({ ...settings, readerFontScale: normalizeReaderFontScale(readerFontScale) })}
+          />
+        </SettingRow>
+      </SettingsCard>
+      <SettingsCard title="AI Chat text scale" eyebrow="Font size" status={formatReaderFontScaleLabel(settings.aiChatFontScale)}>
+        <SettingRow title="Adjust conversation text density" description="Applies to sent user and AI messages only.">
+          <SegmentedControl
+            label="AI Chat text scale"
+            value={String(settings.aiChatFontScale)}
+            options={READER_FONT_SCALE_OPTIONS.map((scale): [string, string] => [String(scale), formatReaderFontScaleLabel(scale)])}
+            onChange={(aiChatFontScale) => onChange({ ...settings, aiChatFontScale: normalizeReaderFontScale(aiChatFontScale) })}
           />
         </SettingRow>
       </SettingsCard>

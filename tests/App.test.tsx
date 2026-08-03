@@ -620,16 +620,24 @@ describe("App", () => {
     expect(cssRule(".ai-message")).toContain("background: transparent;");
     expect(cssRule(".ai-message-role-chip")).toContain("border-radius: 999px;");
     expect(cssRule(".ai-message-role-chip")).toContain("font-size: 11px;");
+    expect(cssRule(".ai-message-role-chip")).not.toContain("var(--ai-chat-");
     expect(cssRule(".ai-message-body")).toContain("overflow-x: hidden;");
+    expect(cssRule(".ai-message-body")).toContain("font-size: var(--ai-chat-body-font-size, 16px);");
     expect(cssRule(".ai-message-footer")).toContain("justify-content: flex-start;");
     expect(stylesCss).toContain(".ai-message.user .ai-message-footer { justify-content: flex-end; }");
     expect(stylesCss).toContain(".markdown-body .markdown-code-block.wrapped pre,");
     expect(stylesCss).toContain("min-width: 0;");
-    expect(cssRule(".ai-message-body h1")).toContain("font-size: 20px;");
+    expect(cssRule(".ai-message-body h1")).toContain("font-size: var(--ai-chat-h1-font-size, 20px);");
+    expect(cssRule(".ai-message-body h2")).toContain("font-size: var(--ai-chat-h2-font-size, 17px);");
+    expect(cssRule(".ai-message-body h3")).toContain("font-size: var(--ai-chat-h3-font-size, 15px);");
+    expect(cssRule(".ai-message-body code")).toContain("font-size: var(--ai-chat-inline-code-font-size, 15.2px);");
+    expect(cssRule(".ai-message-body pre")).toContain("font-size: var(--ai-chat-pre-font-size, 13px);");
     expect(cssRule(".ai-message-body .markdown-code-action-button")).toContain("display: inline-grid;");
     expect(cssRule(".ai-message-body .markdown-code-action-button")).toContain("place-items: center;");
     expect(cssRule(".ai-message-body .markdown-code-action-button")).toContain("width: 28px;");
+    expect(cssRule(".ai-message-body .markdown-code-action-button")).toContain("font-size: 16px;");
     expect(cssRule(".ai-message-body .markdown-code-action-button")).toContain("overflow: hidden;");
+    expect(cssRule(".ai-message-body .markdown-code-action-button")).not.toContain("var(--ai-chat-");
     expect(cssRule(".ai-message-body .markdown-code-icon")).toContain("justify-content: center;");
     expect(cssRule(".ai-message-body .markdown-code-icon svg")).toContain("width: 14px;");
     expect(cssRule(".ai-message-body .markdown-code-icon svg")).toContain("overflow: hidden;");
@@ -638,7 +646,13 @@ describe("App", () => {
     expect(stylesCss).toContain('.ai-message-body .markdown-code-copy-button[data-copy-state="copied"] .markdown-code-icon-check {\n  display: inline-flex;\n}');
     expect(cssRule(".ai-chat-composer")).toContain("position: sticky;");
     expect(cssRule(".ai-chat-composer")).toContain("bottom: 0;");
-    expect(stylesCss).toContain(".ai-chat-composer textarea {\n  grid-column: 1;\n  resize: vertical;\n  min-height: 114px;");
+    expect(stylesCss).toContain(".ai-chat-composer textarea {\n  grid-column: 1;\n  resize: vertical;\n  min-height: 114px;\n  font-size: 16px;\n}");
+    expect(cssRule(".ai-message-copy")).not.toContain("var(--ai-chat-");
+    expect(cssRule(".ai-chat-model-selection")).toContain("font-size: 11px;");
+    expect(cssRule(".ai-chat-model-selection")).not.toContain("var(--ai-chat-");
+    expect(cssRule(".ai-chat-action-rail .icon-button")).not.toContain("var(--ai-chat-");
+    expect(cssRule(".ai-chat-empty p")).not.toContain("var(--ai-chat-");
+    expect(cssRule(".ai-chat-error")).not.toContain("var(--ai-chat-");
   });
 
   it("defines Reader layout density through app-shell custom properties", () => {
@@ -1355,9 +1369,13 @@ describe("App", () => {
     expect(screen.queryByText("Show source metadata")).toBeNull();
     expect(screen.queryByText("Displays heading navigation in the right panel when the active file has markdown headings.")).toBeNull();
 
-    expect((screen.getByRole("button", { name: "×1" }) as HTMLButtonElement).getAttribute("aria-pressed")).toBe("true");
-    expect(screen.getByRole("button", { name: "×1.5" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "×2" })).toBeTruthy();
+    const readerScale = screen.getByRole("group", { name: "Reader text scale" });
+    const aiChatScale = screen.getByRole("group", { name: "AI Chat text scale" });
+    expect((within(readerScale).getByRole("button", { name: "×1" }) as HTMLButtonElement).getAttribute("aria-pressed")).toBe("true");
+    expect((within(aiChatScale).getByRole("button", { name: "×1" }) as HTMLButtonElement).getAttribute("aria-pressed")).toBe("true");
+    expect(within(readerScale).getByRole("button", { name: "×1.5" })).toBeTruthy();
+    expect(within(aiChatScale).getByRole("button", { name: "×2" })).toBeTruthy();
+    expect(screen.getByText("Applies to sent user and AI messages only.")).toBeTruthy();
     expect((screen.getByRole("button", { name: "Comfortable" }) as HTMLButtonElement).getAttribute("aria-pressed")).toBe("true");
     expect(screen.getByRole("button", { name: "Compact" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Focused" })).toBeTruthy();
@@ -1366,7 +1384,8 @@ describe("App", () => {
     expect((screen.getByRole("button", { name: "Dark" }) as HTMLButtonElement).getAttribute("aria-pressed")).toBe("true");
     expect(document.querySelector(".settings-shell")?.getAttribute("data-color-mode")).toBe("dark");
 
-    fireEvent.click(screen.getByRole("button", { name: "×2" }));
+    fireEvent.click(within(readerScale).getByRole("button", { name: "×2" }));
+    fireEvent.click(within(aiChatScale).getByRole("button", { name: "×1.5" }));
     fireEvent.click(screen.getByRole("button", { name: "Compact" }));
     expect((screen.getByRole("button", { name: "Compact" }) as HTMLButtonElement).getAttribute("aria-pressed")).toBe("true");
     expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
@@ -1380,6 +1399,7 @@ describe("App", () => {
     const storedCompactSettings = JSON.parse(window.localStorage.getItem("readerWiki.basicSettings.v1") || "{}") as Record<string, unknown>;
     expect(storedCompactSettings.layout).toBe("compact");
     expect(storedCompactSettings.readerFontScale).toBe(2);
+    expect(storedCompactSettings.aiChatFontScale).toBe(1.5);
     expect(storedCompactSettings.colorMode).toBe("dark");
     const viewerBody = document.querySelector(".viewer-body") as HTMLElement | null;
     expect(viewerBody?.style.getPropertyValue("--reader-font-scale")).toBe("2");
@@ -1389,6 +1409,16 @@ describe("App", () => {
     expect((document.querySelector(".sidebar") as HTMLElement | null)?.getAttribute("style") || "").not.toContain("--reader-");
     expect((document.querySelector(".right-panel") as HTMLElement | null)?.getAttribute("style") || "").not.toContain("--reader-");
 
+    fireEvent.click(screen.getByRole("tab", { name: "AI Chat" }));
+    const aiChatPanel = screen.getByRole("tabpanel", { name: "AI Chat" });
+    expect(aiChatPanel.style.getPropertyValue("--ai-chat-body-font-size")).toBe("24px");
+    expect(aiChatPanel.style.getPropertyValue("--ai-chat-h1-font-size")).toBe("30px");
+    expect(aiChatPanel.style.getPropertyValue("--ai-chat-h2-font-size")).toBe("25.5px");
+    expect(aiChatPanel.style.getPropertyValue("--ai-chat-h3-font-size")).toBe("22.5px");
+    expect(aiChatPanel.style.getPropertyValue("--ai-chat-inline-code-font-size")).toBe("22.8px");
+    expect(aiChatPanel.style.getPropertyValue("--ai-chat-pre-font-size")).toBe("19.5px");
+    expect(aiChatPanel.getAttribute("style") || "").not.toContain("--reader-");
+
     fireEvent.click(screen.getByRole("button", { name: "Source" }));
     expect(await screen.findByLabelText("Source")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "api.ts" }));
@@ -1396,7 +1426,9 @@ describe("App", () => {
     expect(cssRule(".code-viewer")).toContain("font-size: var(--reader-code-font-size, 13px);");
 
     fireEvent.click(openSettingsButton());
-    expect((screen.getByRole("button", { name: "×2" }) as HTMLButtonElement).getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(screen.getByRole("tab", { name: "Basic" }));
+    expect((within(screen.getByRole("group", { name: "Reader text scale" })).getByRole("button", { name: "×2" }) as HTMLButtonElement).getAttribute("aria-pressed")).toBe("true");
+    expect((within(screen.getByRole("group", { name: "AI Chat text scale" })).getByRole("button", { name: "×1.5" }) as HTMLButtonElement).getAttribute("aria-pressed")).toBe("true");
     expect((screen.getByRole("button", { name: "Dark" }) as HTMLButtonElement).getAttribute("aria-pressed")).toBe("true");
     expect((screen.getByRole("button", { name: "Compact" }) as HTMLButtonElement).getAttribute("aria-pressed")).toBe("true");
     fireEvent.click(screen.getByRole("button", { name: "Focused" }));
@@ -2474,12 +2506,24 @@ describe("App", () => {
     expect(await screen.findByRole("heading", { name: "Settings" })).toBeTruthy();
     fireEvent.click(screen.getByRole("tab", { name: "AI Chat" }));
     await activateReadyCliEntry();
+    fireEvent.click(screen.getByRole("tab", { name: "Basic" }));
+    const aiChatScale = screen.getByRole("group", { name: "AI Chat text scale" });
+    fireEvent.click(within(aiChatScale).getByRole("button", { name: "×2" }));
 
     fireEvent.click(screen.getByRole("button", { name: "Back to viewer" }));
     fireEvent.click(await screen.findByRole("tab", { name: "AI Chat" }));
     const messageInput = screen.getByLabelText("AI Chat message") as HTMLTextAreaElement;
+    const aiChatTabPanel = screen.getByRole("tabpanel", { name: "AI Chat" });
     const aiChatPanel = document.querySelector(".ai-chat-panel") as HTMLElement;
+    expect(aiChatTabPanel.style.getPropertyValue("--ai-chat-body-font-size")).toBe("32px");
+    expect(aiChatTabPanel.style.getPropertyValue("--ai-chat-h1-font-size")).toBe("40px");
+    expect(aiChatTabPanel.style.getPropertyValue("--ai-chat-h2-font-size")).toBe("34px");
+    expect(aiChatTabPanel.style.getPropertyValue("--ai-chat-h3-font-size")).toBe("30px");
+    expect(aiChatTabPanel.style.getPropertyValue("--ai-chat-inline-code-font-size")).toBe("30.4px");
+    expect(aiChatTabPanel.style.getPropertyValue("--ai-chat-pre-font-size")).toBe("26px");
     expect(aiChatPanel).toBeTruthy();
+    expect(messageInput.placeholder).toBe("Message AI Chat");
+    expect(messageInput.closest(".ai-message-body")).toBeNull();
     expect(aiChatPanel.querySelector(".ai-chat-status")).toBeNull();
     expect(within(aiChatPanel).queryByText("Codex CLI")).toBeNull();
     expect(within(aiChatPanel).queryByText("codex / medium")).toBeNull();
@@ -2542,17 +2586,44 @@ describe("App", () => {
     fireEvent.click(screen.getByRole("tab", { name: "Outline" }));
     fireEvent.click(screen.getByRole("tab", { name: "AI Chat" }));
     expect(screen.getAllByText("codexCli says the active file says hello.").length).toBeGreaterThan(0);
+    const restoredAIChatTabPanel = screen.getByRole("tabpanel", { name: "AI Chat" });
+    const restoredAIChatPanel = document.querySelector(".ai-chat-panel") as HTMLElement;
+    const restoredSelectedModel = within(restoredAIChatPanel).getByLabelText("AI Chat model selection");
+    const restoredMessageInput = within(restoredAIChatPanel).getByLabelText("AI Chat message");
+    expect(restoredAIChatTabPanel.style.getPropertyValue("--ai-chat-body-font-size")).toBe("32px");
+    expect(restoredAIChatTabPanel.style.getPropertyValue("--ai-chat-pre-font-size")).toBe("26px");
+    expect(restoredMessageInput.closest(".ai-message-body")).toBeNull();
     const userMessage = document.querySelector(".ai-message.user") as HTMLElement;
     const aiMessage = document.querySelector(".ai-message.assistant") as HTMLElement;
-    expect(within(userMessage).getByText("You").className).toContain("ai-message-role-chip");
-    expect(within(aiMessage).getByText("AI").className).toContain("ai-message-role-chip");
-    expect(userMessage.querySelector(".ai-message-footer .ai-message-copy")).toBeTruthy();
+    const userMessageBody = userMessage.querySelector(".ai-message-body") as HTMLElement;
+    const aiMessageBody = aiMessage.querySelector(".ai-message-body") as HTMLElement;
+    const userRoleChip = within(userMessage).getByText("You");
+    const aiRoleChip = within(aiMessage).getByText("AI");
+    const userMessageCopy = userMessage.querySelector(".ai-message-footer .ai-message-copy") as HTMLElement;
+    const aiMessageCopy = aiMessage.querySelector(".ai-message-footer .ai-message-copy") as HTMLElement;
+    expect(restoredAIChatTabPanel.contains(userMessageBody)).toBe(true);
+    expect(restoredAIChatTabPanel.contains(aiMessageBody)).toBe(true);
+    expect(userRoleChip.className).toContain("ai-message-role-chip");
+    expect(aiRoleChip.className).toContain("ai-message-role-chip");
+    expect(userRoleChip.closest(".ai-message-body")).toBeNull();
+    expect(aiRoleChip.closest(".ai-message-body")).toBeNull();
+    expect(userMessageCopy).toBeTruthy();
+    expect(userMessageCopy.closest(".ai-message-body")).toBeNull();
     expect(userMessage.querySelector(".ai-message-header .ai-message-copy")).toBeNull();
-    expect(aiMessage.querySelector(".ai-message-footer .ai-message-copy")).toBeTruthy();
+    expect(aiMessageCopy).toBeTruthy();
+    expect(aiMessageCopy.closest(".ai-message-body")).toBeNull();
     expect(aiMessage.querySelector(".ai-message-header .ai-message-copy")).toBeNull();
     expect(aiMessage.querySelector(".task-list-checkbox")).toBeTruthy();
     const aiCodeCopyButton = within(aiMessage).getByRole("button", { name: "Copy code block" }) as HTMLButtonElement;
     const aiCodeWrapButton = within(aiMessage).getByRole("button", { name: "Wrap code block" }) as HTMLButtonElement;
+    const aiCodeBlock = aiMessage.querySelector(".markdown-code-block") as HTMLElement;
+    const aiCodeToolbar = aiMessage.querySelector(".markdown-code-block-toolbar") as HTMLElement;
+    expect(aiMessageBody.contains(aiCodeBlock)).toBe(true);
+    expect(aiMessageBody.contains(aiCodeToolbar)).toBe(true);
+    expect(aiCodeCopyButton.closest(".ai-message-body")).toBe(aiMessageBody);
+    expect(aiCodeWrapButton.closest(".ai-message-body")).toBe(aiMessageBody);
+    expect(restoredSelectedModel.closest(".ai-message-body")).toBeNull();
+    expect(restoredAIChatPanel.querySelector(".ai-chat-action-rail")?.closest(".ai-message-body")).toBeNull();
     expect(aiCodeCopyButton.dataset.copyState).toBe("idle");
     expect(aiCodeCopyButton.querySelector(".markdown-code-icon-copy")).toBeTruthy();
     expect(aiCodeCopyButton.querySelector(".markdown-code-icon-check")).toBeTruthy();

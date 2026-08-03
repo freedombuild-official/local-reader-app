@@ -2503,14 +2503,17 @@ a.memo-live-markdown-link:focus-visible {
 .ai-message-body {
   max-width: none;
   min-width: 0;
+  font-size: var(--ai-chat-body-font-size, 16px);
   overflow-x: hidden;
   overflow-wrap: anywhere;
 }
 .ai-message-body > :first-child { margin-top: 0; }
 .ai-message-body > :last-child { margin-bottom: 0; }
-.ai-message-body h1 { font-size: 20px; margin: 14px 0 8px; }
-.ai-message-body h2 { font-size: 17px; margin: 14px 0 7px; }
-.ai-message-body h3 { font-size: 15px; margin: 12px 0 6px; }
+.ai-message-body h1 { font-size: var(--ai-chat-h1-font-size, 20px); margin: 14px 0 8px; }
+.ai-message-body h2 { font-size: var(--ai-chat-h2-font-size, 17px); margin: 14px 0 7px; }
+.ai-message-body h3 { font-size: var(--ai-chat-h3-font-size, 15px); margin: 12px 0 6px; }
+.ai-message-body code { font-size: var(--ai-chat-inline-code-font-size, 15.2px); }
+.ai-message-body pre { font-size: var(--ai-chat-pre-font-size, 13px); }
 .ai-message-body .markdown-code-block,
 .ai-message-body .markdown-table-scroll {
   min-width: 0;
@@ -2530,6 +2533,7 @@ a.memo-live-markdown-link:focus-visible {
   width: 28px;
   height: 28px;
   border-radius: 6px;
+  font-size: 16px;
   line-height: 1;
   padding: 0;
   overflow: hidden;
@@ -2582,6 +2586,7 @@ a.memo-live-markdown-link:focus-visible {
   grid-column: 1;
   resize: vertical;
   min-height: 114px;
+  font-size: 16px;
 }
 .ai-chat-model-selection {
   grid-column: 1 / -1;

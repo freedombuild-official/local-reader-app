@@ -283,6 +283,7 @@ export function App() {
   const httpDeliveryActiveCount = httpDeliveryStatus.items.length;
   const repositoryReloading = Boolean(activeRepoId && repositoryReloadingRepoId === activeRepoId);
   const readerTypographyStyle = useMemo(() => buildReaderTypographyStyle(basicSettings.readerFontScale), [basicSettings.readerFontScale]);
+  const aiChatTypographyStyle = useMemo(() => buildAIChatTypographyStyle(basicSettings.aiChatFontScale), [basicSettings.aiChatFontScale]);
   const aiModelBehavior = useMemo(() => activeAIModelBehavior(aiSettings), [aiSettings]);
   const aiPathSendReady = Boolean(activeAIChatTarget(aiSettings));
   const aiChatSession = activeRepoId ? aiChatSessionsByRepo[activeRepoId] || defaultAIChatSession : defaultAIChatSession;
@@ -1146,6 +1147,7 @@ export function App() {
         onHeadingSelect={scrollToHeading}
         memoText={memoText}
         onMemoTextChange={setMemoText}
+        aiChatTypographyStyle={aiChatTypographyStyle}
         aiSettings={aiSettings}
         aiChatSession={aiChatSession}
         aiChatSessionKey={aiChatSessionKey}
@@ -1724,6 +1726,19 @@ export function buildReaderTypographyStyle(scale: ReaderFontScale): CSSPropertie
   } as CSSProperties;
 }
 
+export function buildAIChatTypographyStyle(scale: ReaderFontScale): CSSProperties {
+  const normalizedScale = normalizeReaderFontScale(scale);
+  return {
+    "--ai-chat-font-scale": String(normalizedScale),
+    "--ai-chat-body-font-size": scaledPx(16, normalizedScale),
+    "--ai-chat-h1-font-size": scaledPx(20, normalizedScale),
+    "--ai-chat-h2-font-size": scaledPx(17, normalizedScale),
+    "--ai-chat-h3-font-size": scaledPx(15, normalizedScale),
+    "--ai-chat-inline-code-font-size": scaledPx(15.2, normalizedScale),
+    "--ai-chat-pre-font-size": scaledPx(13, normalizedScale),
+  } as CSSProperties;
+}
+
 function scaledPx(baseSize: number, scale: ReaderFontScale): string {
   return `${Number((baseSize * normalizeReaderFontScale(scale)).toFixed(2))}px`;
 }
@@ -1970,7 +1985,7 @@ function HttpDeliveryPanel({ status, stoppingItemIds, error, onStop }: {
   );
 }
 
-function RightPanel({ mode, onModeChange, file, outline, onHeadingSelect, memoText, onMemoTextChange, aiSettings, aiChatSession, aiChatSessionKey, onAIChatSessionChange, onNewAIChat, onAIReadinessFailure, onRepositoryChanged, aiModelBehavior, activeRepoId, activeRepoRevision, rootTreeNodes, onOpenSettings }: {
+function RightPanel({ mode, onModeChange, file, outline, onHeadingSelect, memoText, onMemoTextChange, aiChatTypographyStyle, aiSettings, aiChatSession, aiChatSessionKey, onAIChatSessionChange, onNewAIChat, onAIReadinessFailure, onRepositoryChanged, aiModelBehavior, activeRepoId, activeRepoRevision, rootTreeNodes, onOpenSettings }: {
   mode: RightPanelMode;
   onModeChange: (mode: RightPanelMode) => void;
   file: FileResponse | null;
@@ -1978,6 +1993,7 @@ function RightPanel({ mode, onModeChange, file, outline, onHeadingSelect, memoTe
   onHeadingSelect: (headingId: string) => void;
   memoText: string;
   onMemoTextChange: (value: string) => void;
+  aiChatTypographyStyle: CSSProperties;
   aiSettings: AISettingsState;
   aiChatSession: AIChatSessionState;
   aiChatSessionKey: number;
@@ -2069,6 +2085,7 @@ function RightPanel({ mode, onModeChange, file, outline, onHeadingSelect, memoTe
             role="tabpanel"
             aria-labelledby={rightPanelTabDomId("aiChat")}
             tabIndex={0}
+            style={aiChatTypographyStyle}
           >
             <Suspense fallback={<p className="state-text">Loading AI Chat...</p>}>
               <LazyAIChatPanel
