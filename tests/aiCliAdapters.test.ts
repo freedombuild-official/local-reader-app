@@ -466,8 +466,8 @@ describe("AI CLI process boundary", () => {
     });
   });
 
-  it("does not expose stdout, stderr, or an exit code when a CLI process fails", async () => {
-    const result = runAICommand(process.execPath, ["-e", "process.stdout.write('RAW_STDOUT_SENTINEL'); process.stderr.write('RAW_STDERR_SENTINEL'); process.exit(7)"], {
+  it.each([1, 7])("does not expose stdout, stderr, or exit code %s when a CLI process fails by default", async (exitCode) => {
+    const result = runAICommand(process.execPath, ["-e", `process.stdout.write('RAW_STDOUT_SENTINEL'); process.stderr.write('RAW_STDERR_SENTINEL'); process.exit(${exitCode})`], {
       cwd: process.cwd(),
       env: process.env,
       timeoutMs: 5_000,
@@ -477,7 +477,18 @@ describe("AI CLI process boundary", () => {
     expect(error?.message).toBe("The CLI could not complete the request. Check readiness and try again.");
     expect(error?.message).not.toContain("RAW_STDOUT_SENTINEL");
     expect(error?.message).not.toContain("RAW_STDERR_SENTINEL");
-    expect(error?.message).not.toContain("7");
+    expect(error?.message).not.toContain(String(exitCode));
+  });
+
+  it("returns stdout when a fixed internal caller explicitly allows exit code 1", async () => {
+    const result = await runAICommand(process.execPath, ["-e", "process.stdout.write('{\"loggedIn\":false}'); process.exit(1)"], {
+      cwd: process.cwd(),
+      env: process.env,
+      timeoutMs: 5_000,
+      maxBuffer: 1024,
+      allowedExitCodes: [0, 1],
+    });
+    expect(result).toEqual({ stdout: '{"loggedIn":false}', stderr: "" });
   });
 
   it("marks a missing CLI subcommand without exposing its raw output", async () => {

@@ -24,6 +24,7 @@ import {
 } from "../server/aiCliSetup.js";
 import { JsonRpcRemoteError, type CodexAppServerConnection } from "../server/codexAppServerClient.js";
 import type { CodexModelCatalog } from "../server/aiCliCatalog.js";
+import type { AICommandOptions } from "../server/aiCliAdapters.js";
 import type { LoadClaudeAgentSdkCatalogOptions } from "../server/claudeAgentSdkCatalog.js";
 import { HttpError } from "../server/errors.js";
 import type { AICliEntryKind, AICliModelCatalog } from "../server/types.js";
@@ -944,6 +945,49 @@ describe("CLI provider normalization and lazy defaults", () => {
     expect(parseClaudeAuthenticationStatus('{"authenticated":false}')).toBe(false);
     expect(() => parseClaudeAuthenticationStatus('{"status":"yes"}')).toThrow(/boolean login state/u);
     expect(() => parseClaudeAuthenticationStatus("not-json")).toThrow(/invalid authentication status/u);
+  });
+
+  it("treats Claude auth status exit code 1 with loggedIn false as login required", async () => {
+    const executable: ResolvedAiCliExecutable = { binary: "/mock/bin/claude", argvPrefix: [], identityPath: "/mock/bin/claude" };
+    const loadClaudeCatalog = vi.fn(async () => { throw new Error("Catalog must not load while Claude is logged out."); });
+    const runner = vi.fn(async (_binary: string, args: string[], options: AICommandOptions) => {
+      if (args.includes("--version")) {
+        expect(options.allowedExitCodes).toBeUndefined();
+        return { stdout: "2.1.207\n", stderr: "" };
+      }
+      if (args.includes("--help")) {
+        expect(options.allowedExitCodes).toBeUndefined();
+        return { stdout: "Usage: claude --effort", stderr: "" };
+      }
+      if (args.includes("status")) {
+        expect(args).toEqual(["auth", "status", "--json"]);
+        expect(options.allowedExitCodes).toEqual([0, 1]);
+        return { stdout: '{"loggedIn":false}\n', stderr: "" };
+      }
+      throw new Error("Unexpected Claude setup command.");
+    });
+    const claude = createClaudeAiCliSetupProvider("/tmp/reader-wiki", {
+      runner,
+      locateExecutable: vi.fn(async () => executable),
+      inspectManagedExecutable: vi.fn(async () => mockManagedIdentity("claudeCli", executable)),
+      loadClaudeCatalog,
+    });
+    const inspection = await claude.inspect(new AbortController().signal);
+    expect(inspection.authenticated).toBe(false);
+    expect(inspection.catalog).toBeUndefined();
+    expect(loadClaudeCatalog).not.toHaveBeenCalled();
+
+    const service = new AiCliSetupService({
+      providers: { codexCli: new FakeProvider("codexCli", [readyInspection("codexCli")]), claudeCli: claude },
+    });
+
+    await expect(service.inspect("claudeCli")).resolves.toMatchObject({
+      phase: "loginRequired",
+      authentication: { state: "idle" },
+      catalog: undefined,
+    });
+    expect(loadClaudeCatalog).not.toHaveBeenCalled();
+    await service.shutdown();
   });
 
   it("constructs default providers without invoking CLI, SDK, app-server, or network seams", async () => {

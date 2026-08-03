@@ -40,6 +40,7 @@ const INSPECTION_TIMEOUT_MS = 20_000;
 const AUTHENTICATION_TIMEOUT_MS = 10 * 60 * 1_000;
 const UPDATE_TIMEOUT_MS = 3 * 60 * 1_000;
 const MAX_OUTPUT_BYTES = 256 * 1_024;
+const CLAUDE_AUTH_STATUS_ALLOWED_EXIT_CODES = [0, 1] as const;
 
 export type AiCliSetupErrorCode =
   | "invalidEntry"
@@ -1077,7 +1078,7 @@ abstract class DefaultAiCliProvider implements AiCliSetupProvider {
     return this.executable;
   }
 
-  protected async run(executable: ResolvedAiCliExecutable, args: string[], signal: AbortSignal, timeoutMs: number) {
+  protected async run(executable: ResolvedAiCliExecutable, args: string[], signal: AbortSignal, timeoutMs: number, allowedExitCodes?: readonly number[]) {
     this.assertStableProcessTreeSupported();
     return this.runner(executable.binary, [...executable.argvPrefix, ...args], {
       cwd: this.packageRoot,
@@ -1085,11 +1086,12 @@ abstract class DefaultAiCliProvider implements AiCliSetupProvider {
       timeoutMs,
       maxBuffer: MAX_OUTPUT_BYTES,
       signal,
+      ...(allowedExitCodes ? { allowedExitCodes } : {}),
     });
   }
 
-  protected async runPinned(executable: ResolvedAiCliExecutable, args: string[], signal: AbortSignal, timeoutMs: number) {
-    return this.withPinnedExecution(executable, (current) => this.run(current, args, signal, timeoutMs));
+  protected async runPinned(executable: ResolvedAiCliExecutable, args: string[], signal: AbortSignal, timeoutMs: number, allowedExitCodes?: readonly number[]) {
+    return this.withPinnedExecution(executable, (current) => this.run(current, args, signal, timeoutMs, allowedExitCodes));
   }
 
   protected async withPinnedExecution<T>(
@@ -1486,7 +1488,13 @@ class ClaudeAiCliSetupProvider extends DefaultAiCliProvider {
     }
     let authenticated: boolean;
     try {
-      const status = await this.runPinned(executable, ["auth", "status", "--json"], signal, INSPECTION_TIMEOUT_MS);
+      const status = await this.runPinned(
+        executable,
+        ["auth", "status", "--json"],
+        signal,
+        INSPECTION_TIMEOUT_MS,
+        CLAUDE_AUTH_STATUS_ALLOWED_EXIT_CODES,
+      );
       authenticated = parseClaudeAuthenticationStatus(status.stdout);
     } catch (error) {
       if (looksLikeMissingCommand(error)) {

@@ -56,6 +56,7 @@ export type AICommandOptions = {
   timeoutMs: number;
   maxBuffer: number;
   signal?: AbortSignal;
+  allowedExitCodes?: readonly number[];
 };
 
 export type AICommandResult = {
@@ -187,6 +188,7 @@ export async function requestRepoWriteAIChatCompletion(request: RepoWriteChatReq
 
 export async function runAICommand(binary: string, args: string[], options: AICommandOptions): Promise<AICommandResult> {
   if (options.signal?.aborted) throw new HttpError(499, "CLI request was canceled.");
+  const allowedExitCodes = options.allowedExitCodes ?? [0];
   const launch = await resolveAICommandLaunch(binary, args, {
     env: options.env,
     cwd: options.cwd,
@@ -239,7 +241,7 @@ export async function runAICommand(binary: string, args: string[], options: AICo
         return;
       }
       const result = { stdout, stderr };
-      if (code !== 0) {
+      if (code === null || !allowedExitCodes.includes(code)) {
         const rawFailure = [stdout, stderr].filter(Boolean).join("\n");
         finishReject(new HttpError(
           502,
