@@ -824,6 +824,108 @@ describe("createMemoLiveMarkdownEditor", () => {
     expect(view.state.selection.main.anchor).toBe(anchor);
   });
 
+  it("preserves hanging indent during composition and remeasures after it ends", async () => {
+    const markdown = "- parent text that can wrap\n  1. nested child text";
+    const { editor, host, view } = fixture(markdown);
+    const hangingIndentProperty = "--memo-live-markdown-list-hanging-indent";
+    const currentIndents = () =>
+      renderedListMarkerLines(host).map((line) =>
+        line.style.getPropertyValue(hangingIndentProperty),
+      );
+    const coordinateAtPosition = (
+      position: number,
+      indents: readonly number[],
+    ): { left: number } | null => {
+      const lines = renderedListMarkerLines(host);
+      expect(lines).toHaveLength(indents.length);
+      for (const [index, line] of lines.entries()) {
+        const lineFrom = Number(
+          line.getAttribute("data-memo-list-line-from"),
+        );
+        const contentOffset = Number(
+          line.getAttribute("data-memo-list-content-offset"),
+        );
+        if (position === lineFrom) {
+          return { left: 10 };
+        }
+        if (position === lineFrom + contentOffset) {
+          return { left: 10 + (indents[index] ?? 0) };
+        }
+      }
+      return null;
+    };
+    const anchor = markdown.indexOf("nested") + 3;
+    const insertionPoint = markdown.indexOf("\n");
+    view.dispatch({ selection: { anchor } });
+    const createRangeSpy = vi.spyOn(document, "createRange").mockReturnValue({
+      getClientRects: () => [],
+    } as unknown as Range);
+    const requestMeasureSpy = vi
+      .spyOn(view, "requestMeasure")
+      .mockImplementation((spec?: unknown) => {
+        if (
+          spec !== undefined &&
+          typeof spec === "object" &&
+          spec !== null &&
+          "read" in spec &&
+          "write" in spec
+        ) {
+          const typedSpec = spec as {
+            read: (currentView: EditorView) => unknown;
+            write: (value: unknown) => void;
+          };
+          typedSpec.write(typedSpec.read(view));
+        }
+      });
+    let measuredIndents: readonly number[] = [12, 18];
+    const coordsAtPosSpy = vi
+      .spyOn(view, "coordsAtPos")
+      .mockImplementation(
+        (pos) =>
+          coordinateAtPosition(pos, measuredIndents) as ReturnType<
+            EditorView["coordsAtPos"]
+          >,
+      );
+
+    editor.requestMeasure();
+    expect(currentIndents()).toEqual(["12px", "18px"]);
+
+    const inputState = (view as unknown as {
+      inputState: { composing: number };
+    }).inputState;
+    inputState.composing = 1;
+    view.dispatch({
+      changes: { from: insertionPoint, insert: "語" },
+      userEvent: "input.type.compose",
+    });
+    coordsAtPosSpy.mockReturnValue(null as ReturnType<EditorView["coordsAtPos"]>);
+
+    editor.requestMeasure();
+
+    expect(currentIndents()).toEqual(["12px", "18px"]);
+    measuredIndents = [14, 20];
+    coordsAtPosSpy.mockImplementation(
+      (pos) =>
+        coordinateAtPosition(pos, measuredIndents) as ReturnType<
+          EditorView["coordsAtPos"]
+        >,
+    );
+    inputState.composing = 0;
+    view.contentDOM.dispatchEvent(
+      new CompositionEvent("compositionend", { bubbles: true }),
+    );
+    await flushMicrotasks();
+
+    expect(currentIndents()).toEqual(["14px", "20px"]);
+    expect(editor.getMarkdown()).toBe(
+      `${markdown.slice(0, insertionPoint)}語${markdown.slice(insertionPoint)}`,
+    );
+    expect(view.state.selection.main.anchor).toBe(anchor + 1);
+    createRangeSpy.mockRestore();
+    requestMeasureSpy.mockRestore();
+    coordsAtPosSpy.mockRestore();
+  });
+
   it("keeps the list hanging-indent stylesheet contract", () => {
     const rule = cssRule(".cm-line.memo-live-markdown-list-marker-line");
 

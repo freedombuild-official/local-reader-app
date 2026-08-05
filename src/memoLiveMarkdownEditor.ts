@@ -65,7 +65,13 @@ interface SourceRange {
 
 interface ListHangingIndentMeasurement {
   line: HTMLElement;
+  cacheKey: string;
   indent: number;
+}
+
+interface ListHangingIndentMeasurementBatch {
+  measurements: readonly ListHangingIndentMeasurement[];
+  refreshCache: boolean;
 }
 
 interface TableCellModel {
@@ -113,6 +119,7 @@ const emptyReferenceDefinitions: ReferenceDefinitions = new Map();
 const listMarkerLineClassName = "memo-live-markdown-list-marker-line";
 const listLineFromAttribute = "data-memo-list-line-from";
 const listContentOffsetAttribute = "data-memo-list-content-offset";
+const listIndentCacheKeyAttribute = "data-memo-list-indent-key";
 const listHangingIndentProperty =
   "--memo-live-markdown-list-hanging-indent";
 
@@ -3016,6 +3023,7 @@ function buildLiveDecorations(
           class: listMarkerLineClassName,
           [listLineFromAttribute]: String(line.from),
           [listContentOffsetAttribute]: String(prefix.source.length),
+          [listIndentCacheKeyAttribute]: prefix.source,
         },
       }).range(line.from),
     );
@@ -3437,20 +3445,30 @@ function buildLiveDecorations(
 
 class ListHangingIndentMonitor {
   private destroyed = false;
+  private indentByCacheKey = new Map<string, number>();
   private styledLines = new Set<HTMLElement>();
+  private wasComposing = false;
 
   constructor(view: EditorView) {
     this.requestMeasurement(view);
   }
 
   update(update: ViewUpdate): void {
+    if (update.view.composing) {
+      this.wasComposing = true;
+      return;
+    }
+
     if (
+      this.wasComposing ||
       update.docChanged ||
       update.viewportChanged ||
       update.geometryChanged
     ) {
       this.requestMeasurement(update.view);
     }
+
+    this.wasComposing = false;
   }
 
   docViewUpdate(view: EditorView): void {
@@ -3463,23 +3481,38 @@ class ListHangingIndentMonitor {
     }
     view.requestMeasure({
       key: this,
-      read: (currentView): readonly ListHangingIndentMeasurement[] => {
+      read: (currentView): ListHangingIndentMeasurementBatch => {
         const measurements: ListHangingIndentMeasurement[] = [];
+        const lines = currentView.contentDOM.querySelectorAll<HTMLElement>(
+          `.cm-line.${listMarkerLineClassName}[${listLineFromAttribute}][${listContentOffsetAttribute}][${listIndentCacheKeyAttribute}]`,
+        );
+        if (currentView.composing) {
+          for (const line of lines) {
+            const cacheKey = line.getAttribute(listIndentCacheKeyAttribute);
+            if (cacheKey === null) {
+              continue;
+            }
+            const indent = this.indentByCacheKey.get(cacheKey);
+            if (indent !== undefined) {
+              measurements.push({ line, cacheKey, indent });
+            }
+          }
+          return { measurements, refreshCache: false };
+        }
         const probeRange = currentView.dom.ownerDocument.createRange();
         if (typeof probeRange.getClientRects !== "function") {
-          return measurements;
+          return { measurements, refreshCache: false };
         }
-        const lines = currentView.contentDOM.querySelectorAll<HTMLElement>(
-          `.cm-line.${listMarkerLineClassName}[${listLineFromAttribute}][${listContentOffsetAttribute}]`,
-        );
         for (const line of lines) {
           const lineFrom = Number(line.getAttribute(listLineFromAttribute));
           const contentOffset = Number(
             line.getAttribute(listContentOffsetAttribute),
           );
+          const cacheKey = line.getAttribute(listIndentCacheKeyAttribute);
           if (
             !Number.isSafeInteger(lineFrom) ||
             !Number.isSafeInteger(contentOffset) ||
+            cacheKey === null ||
             lineFrom < 0 ||
             contentOffset < 1 ||
             lineFrom > currentView.state.doc.length
@@ -3503,11 +3536,15 @@ class ListHangingIndentMonitor {
           if (!Number.isFinite(indent) || indent < 0) {
             continue;
           }
-          measurements.push({ line, indent });
+          measurements.push({
+            line,
+            cacheKey,
+            indent,
+          });
         }
-        return measurements;
+        return { measurements, refreshCache: true };
       },
-      write: (measurements) => {
+      write: ({ measurements, refreshCache }) => {
         if (this.destroyed) {
           return;
         }
@@ -3526,6 +3563,11 @@ class ListHangingIndentMonitor {
           }
         }
         this.styledLines = nextStyledLines;
+        if (refreshCache) {
+          this.indentByCacheKey = new Map(
+            measurements.map(({ cacheKey, indent }) => [cacheKey, indent]),
+          );
+        }
       },
     });
   }
