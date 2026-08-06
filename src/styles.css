@@ -382,6 +382,16 @@ main:is(.app-shell, .settings-shell) {
   opacity: 1;
 }
 .tree-name { overflow: visible; text-overflow: clip; white-space: nowrap; }
+.tree-row.git-ignored:not(.selected) .tree-chevron,
+.tree-row.git-ignored:not(.selected) .tree-icon,
+.tree-row.git-ignored:not(.selected) .tree-name {
+  color: #7d8b91;
+}
+.tree-row.git-ignored.selected .tree-chevron,
+.tree-row.git-ignored.selected .tree-icon,
+.tree-row.git-ignored.selected .tree-name {
+  color: inherit;
+}
 .path-context-menu {
   position: fixed;
   z-index: 30;
@@ -3009,6 +3019,12 @@ a.memo-live-markdown-link:focus-visible {
 .app-shell[data-color-mode="dark"] .tree-row.selected .tree-chevron,
 .app-shell[data-color-mode="dark"] .tree-row.selected .tree-icon {
   color: var(--rw-dark-icon-strong);
+}
+
+.app-shell[data-color-mode="dark"] .tree-row.git-ignored:not(.selected) .tree-chevron,
+.app-shell[data-color-mode="dark"] .tree-row.git-ignored:not(.selected) .tree-icon,
+.app-shell[data-color-mode="dark"] .tree-row.git-ignored:not(.selected) .tree-name {
+  color: var(--rw-dark-muted-soft);
 }
 
 .app-shell[data-color-mode="dark"] .icon-button.repo-action-button,

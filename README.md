@@ -335,6 +335,7 @@ At narrow browser widths, the right panel moves below the reader, and the worksp
 - **Collapse all folders** closes every expanded folder except the root. It does not close file tabs.
 - Long trees support horizontal scrolling and keep ancestor folders visible at the top. Select a sticky ancestor to jump back to its position.
 - Git markers show `new`, `changed`, `deleted`, and binary changes. Changed text lines are also marked in the source viewer.
+- Visible files and folders that Git currently ignores use muted names, icons, and folder arrows. Tracked files that happen to match an ignore rule are not muted, and paths in the repository configuration's `excludes` list remain hidden.
 - A deleted tracked text file can still show its last `HEAD` content when Git can provide it.
 - Very large trees may stop at a safe limit and show a partial-tree warning instead of exhausting the computer.
 
@@ -712,7 +713,7 @@ Select **Reload repository**. Local Reader App does not continuously watch the r
 
 ### Git change markers do not appear
 
-Confirm that Git is installed, the registered folder is a Git working tree, and `git status` works there. Basic file viewing continues when Git information is unavailable.
+Confirm that Git is installed, the registered folder is a Git working tree, and `git status` works there. The muted ignored-file state follows Git's own `git check-ignore` result; tracked files are intentionally not muted. If either Git command fails, Local Reader App continues basic file viewing without the unavailable Git decoration.
 
 ### AI readiness fails
 

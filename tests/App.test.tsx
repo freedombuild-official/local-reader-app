@@ -13,16 +13,16 @@ const stylesCss = readFileSync(path.join(process.cwd(), "src/styles.css"), "utf8
 const repoRevisions = { docs: "revision-docs-v1", alt: "revision-alt-v1" } as const;
 
 const treeNodes = [
-  { name: "docs", path: "docs", type: "directory", extension: "", gitStatus: "changed" },
+  { name: "docs", path: "docs", type: "directory", extension: "", gitStatus: "changed", gitIgnored: true },
   { name: "very-long-directory-name-with-many-segments", path: "very-long-directory-name-with-many-segments", type: "directory", extension: "" },
   { name: "AGENTS.md", path: "AGENTS.md", type: "file", extension: ".md" },
-  { name: "README.md", path: "README.md", type: "file", extension: ".md", gitStatus: "changed" },
+  { name: "README.md", path: "README.md", type: "file", extension: ".md", gitStatus: "changed", gitIgnored: true },
   { name: "image.png", path: "image.png", type: "file", extension: ".png" },
   { name: "paper.pdf", path: "paper.pdf", type: "file", extension: ".pdf" },
   { name: "archive.zip", path: "archive.zip", type: "file", extension: ".zip" },
   { name: "guide.md", path: "guide.md", type: "file", extension: ".md" },
   { name: "api.ts", path: "api.ts", type: "file", extension: ".ts" },
-  { name: "notes.txt", path: "notes.txt", type: "file", extension: ".txt" },
+  { name: "notes.txt", path: "notes.txt", type: "file", extension: ".txt", gitIgnored: true },
   { name: "page.html", path: "page.html", type: "file", extension: ".html" },
   { name: "extra.md", path: "extra.md", type: "file", extension: ".md" },
 ];
@@ -689,6 +689,17 @@ describe("App", () => {
     expect(stylesCss).toContain(".app-shell,\n  .app-shell.layout-compact,\n  .app-shell.layout-focused {\n    --rw-sidebar-padding-y: var(--rw-mobile-sidebar-padding-y);");
   });
 
+  it("styles only ignored tree labels and icons while preserving selected and dark mode colors", () => {
+    expect(stylesCss).toContain(".tree-row.git-ignored:not(.selected) .tree-chevron,");
+    expect(stylesCss).toContain(".tree-row.git-ignored:not(.selected) .tree-name {");
+    expect(stylesCss).toContain("color: #7d8b91;");
+    expect(stylesCss).toContain(".tree-row.git-ignored.selected .tree-name {");
+    expect(stylesCss).toContain("color: inherit;");
+    expect(stylesCss).toContain('.app-shell[data-color-mode="dark"] .tree-row.git-ignored:not(.selected) .tree-name {');
+    expect(stylesCss).toContain("color: var(--rw-dark-muted-soft);");
+    expect(cssRule(".tree-diff-marker.changed")).toContain("background: var(--git-changed);");
+  });
+
   it("keeps Settings rail and main as independent scroll containers", () => {
     expect(cssRule(".settings-shell")).toContain("height: 100vh;");
     expect(cssRule(".settings-shell")).toContain("overflow: hidden;");
@@ -915,6 +926,35 @@ describe("App", () => {
     fireEvent.keyDown(copyAbsolute, { key: "Escape" });
     await waitFor(() => expect(screen.queryByRole("menu", { name: "README.md path actions" })).toBeNull());
     await waitFor(() => expect(document.activeElement).toBe(readmeRow));
+  });
+
+  it("exposes Git ignored state on normal, selected, and sticky tree rows", async () => {
+    render(<App />);
+    expect(await screen.findByRole("heading", { name: "Hello" })).toBeTruthy();
+
+    const ignoredRow = screen.getByRole("button", { name: "notes.txt" });
+    expect(ignoredRow.classList.contains("git-ignored")).toBe(true);
+    expect(ignoredRow.getAttribute("data-git-ignored")).toBe("true");
+    const ignoredDescriptionId = ignoredRow.getAttribute("aria-describedby");
+    expect(document.getElementById(ignoredDescriptionId || "")?.textContent).toContain("Ignored by Git.");
+
+    const selectedRow = screen.getByRole("button", { name: "README.md" });
+    expect(selectedRow.classList.contains("selected")).toBe(true);
+    expect(selectedRow.classList.contains("git-ignored")).toBe(true);
+    expect(selectedRow.querySelector(".tree-diff-marker")?.getAttribute("data-git-status")).toBe("changed");
+    const selectedDescription = document.getElementById(selectedRow.getAttribute("aria-describedby") || "")?.textContent || "";
+    expect(selectedDescription).toContain("Git status: changed.");
+    expect(selectedDescription).toContain("Ignored by Git.");
+
+    fireEvent.click(screen.getByRole("button", { name: "docs" }));
+    expect(await screen.findByRole("button", { name: "inside.md" })).toBeTruthy();
+    const treeSection = document.querySelector(".tree-section") as HTMLElement;
+    Object.defineProperty(treeSection, "scrollTop", { value: 31, configurable: true });
+    fireEvent.scroll(treeSection);
+    const stickyRow = screen.getByRole("button", { name: "Jump to docs" });
+    expect(stickyRow.classList.contains("git-ignored")).toBe(true);
+    expect(stickyRow.getAttribute("data-git-ignored")).toBe("true");
+    expect(document.getElementById(stickyRow.getAttribute("aria-describedby") || "")?.textContent).toContain("Ignored by Git.");
   });
 
   it("uses roving file tabs with tabpanel relations and keyboard tab-menu focus management", async () => {

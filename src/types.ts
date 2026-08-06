@@ -13,6 +13,7 @@ export type TreeNode = {
   type: "directory" | "file";
   extension: string;
   gitStatus?: DiffStatus;
+  gitIgnored?: boolean;
 };
 
 export type TreeSnapshot = Record<string, TreeNode[]>;

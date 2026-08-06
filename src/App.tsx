@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type MutableRefObject } from "react";
+import { Fragment, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type MutableRefObject } from "react";
 import {
   BookOpen,
   Braces,
@@ -74,6 +74,7 @@ type FileTreeStickyItem = {
   name: string;
   depth: number;
   iconKind: TreeIconKind;
+  gitIgnored?: boolean;
 };
 
 const MAX_FILE_TABS = 5;
@@ -1201,19 +1202,20 @@ function TreeView({
         <ul className="tree tree-list-column">
           {rows.map((row, rowIndex) => {
             const { node, depth, isExpanded, isSelected, iconKind } = row;
-            const gitStatusDescriptionId = node.gitStatus ? `tree-git-status-${rowIndex}` : undefined;
+            const treeDescriptionId = node.gitStatus || node.gitIgnored ? `tree-description-${rowIndex}` : undefined;
             return (
               <li key={node.path}>
                 <button
                   type="button"
-                  className={`tree-row ${node.type}${isSelected ? " selected" : ""}`}
+                  className={`tree-row ${node.type}${node.gitIgnored ? " git-ignored" : ""}${isSelected ? " selected" : ""}`}
                   data-icon-kind={iconKind}
+                  data-git-ignored={node.gitIgnored ? "true" : undefined}
                   data-tree-path={node.path}
                   data-tree-depth={depth}
                   data-tree-index={rowIndex}
                   style={treeRowStyle(depth)}
                   aria-expanded={node.type === "directory" ? isExpanded : undefined}
-                  aria-describedby={gitStatusDescriptionId}
+                  aria-describedby={treeDescriptionId}
                   onClick={() => (node.type === "directory" ? onToggleDirectory(node.path) : onOpenFile(node.path))}
                   onContextMenu={(event) => onOpenPathMenu(node, event)}
                 >
@@ -1224,9 +1226,10 @@ function TreeView({
                   <TreeIcon kind={iconKind} className="tree-icon" />
                   <span className="tree-name">{node.name}</span>
                 </button>
-                {node.gitStatus ? (
-                  <span id={gitStatusDescriptionId} className="visually-hidden">
-                    Git status: {gitStatusLabel(node.gitStatus)}
+                {treeDescriptionId ? (
+                  <span id={treeDescriptionId} className="visually-hidden">
+                    {node.gitStatus ? `Git status: ${gitStatusLabel(node.gitStatus)}. ` : ""}
+                    {node.gitIgnored ? "Ignored by Git." : ""}
                   </span>
                 ) : null}
               </li>
@@ -1253,7 +1256,7 @@ function collectFileTreeRows(nodes: TreeNode[], treeCache: TreeCache, expanded: 
         iconKind,
       });
       if (node.type !== "directory" || !isExpanded) return;
-      visit(treeCache[node.path] || [], depth + 1, [...ancestors, { path: node.path, name: node.name, depth, iconKind }]);
+      visit(treeCache[node.path] || [], depth + 1, [...ancestors, { path: node.path, name: node.name, depth, iconKind, gitIgnored: node.gitIgnored }]);
     });
   }
   visit(nodes, 0, []);
@@ -1274,29 +1277,36 @@ function FileTreeStickyAncestors({ items, horizontalScrollLeft, onJump }: {
     <div className="tree-sticky-layer" aria-label="Current file tree ancestors">
       <div className="tree-sticky-scrollport">
         <div className="tree-sticky-column" style={{ "--tree-scroll-left": `${horizontalScrollLeft}px` } as CSSProperties}>
-          {items.map((item) => (
-            <button
-              key={item.path}
-              type="button"
-              className="tree-row tree-sticky-row directory"
-              data-tree-path={item.path}
-              style={treeRowStyle(item.depth)}
-              aria-label={`Jump to ${item.name}`}
-              title={`Jump to ${item.name}`}
-              onClick={(event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                onJump(item.path);
-              }}
-            >
-              <span className="tree-diff-marker" aria-hidden="true" />
-              <span className="tree-chevron" aria-hidden="true">
-                <ChevronDown size={11} />
-              </span>
-              <TreeIcon kind={item.iconKind} className="tree-icon" />
-              <span className="tree-name">{item.name}</span>
-            </button>
-          ))}
+          {items.map((item, itemIndex) => {
+            const gitIgnoredDescriptionId = item.gitIgnored ? `tree-sticky-description-${itemIndex}` : undefined;
+            return (
+              <Fragment key={item.path}>
+                <button
+                  type="button"
+                  className={`tree-row tree-sticky-row directory${item.gitIgnored ? " git-ignored" : ""}`}
+                  data-git-ignored={item.gitIgnored ? "true" : undefined}
+                  data-tree-path={item.path}
+                  style={treeRowStyle(item.depth)}
+                  aria-label={`Jump to ${item.name}`}
+                  aria-describedby={gitIgnoredDescriptionId}
+                  title={`Jump to ${item.name}`}
+                  onClick={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    onJump(item.path);
+                  }}
+                >
+                  <span className="tree-diff-marker" aria-hidden="true" />
+                  <span className="tree-chevron" aria-hidden="true">
+                    <ChevronDown size={11} />
+                  </span>
+                  <TreeIcon kind={item.iconKind} className="tree-icon" />
+                  <span className="tree-name">{item.name}</span>
+                </button>
+                {gitIgnoredDescriptionId ? <span id={gitIgnoredDescriptionId} className="visually-hidden">Ignored by Git.</span> : null}
+              </Fragment>
+            );
+          })}
         </div>
       </div>
     </div>

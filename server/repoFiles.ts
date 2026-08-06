@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import type { Dirent } from "node:fs";
 import { opendir, readFile, realpath, stat } from "node:fs/promises";
 import path from "node:path";
@@ -27,6 +27,7 @@ const DOCX_MIME_TYPE = "application/vnd.openxmlformats-officedocument.wordproces
 const GIT_MAX_BUFFER = 10 * 1024 * 1024;
 const GIT_SYNC_TIMEOUT_MS = 15_000;
 const GIT_READ_TIMEOUT_MS = 10_000;
+const GIT_IGNORE_MAX_OUTPUT_BYTES = 5 * 1024 * 1024;
 const TREE_DIRECTORY_MAX_ENTRIES = 5_000;
 const TREE_SNAPSHOT_MAX_NODES = 20_000;
 const TREE_SNAPSHOT_MAX_DEPTH = 32;
@@ -83,15 +84,34 @@ export async function readTree(repo: RepositoryConfig, inputPath: unknown): Prom
 
   addGitOnlyTreeNodes(nodesByPath, gitStatuses, target.relativePath, repo);
 
-  return sortTreeNodes(Array.from(nodesByPath.values()));
+  const nodes = sortTreeNodes(Array.from(nodesByPath.values()));
+  const gitIgnoredPaths = await readGitIgnoredPaths(repo.root, nodes.map((node) => node.path));
+  return markGitIgnoredNodes(nodes, gitIgnoredPaths);
 }
 
 export async function readTreeSnapshot(repo: RepositoryConfig): Promise<{ tree: TreeSnapshot; truncated: boolean; warnings: string[] }> {
   const gitStatuses = await readGitStatuses(repo);
   const rootRealPath = await realpath(repo.root);
   const snapshot: TreeSnapshot = {};
+  const gitIgnoreCandidatePaths: string[] = [];
   const budget: TreeSnapshotBudget = { startedAt: Date.now(), nodes: 0, serializedBytes: 0, truncated: false, warnings: [] };
-  await collectTreeSnapshot(repo, "", rootRealPath, rootRealPath, gitStatuses, snapshot, new Set(), budget, 0);
+  await collectTreeSnapshot(
+    repo,
+    "",
+    rootRealPath,
+    rootRealPath,
+    gitStatuses,
+    snapshot,
+    new Set(),
+    gitIgnoreCandidatePaths,
+    false,
+    budget,
+    0,
+  );
+  const gitIgnoredPaths = await readGitIgnoredPaths(repo.root, gitIgnoreCandidatePaths);
+  for (const [parentPath, nodes] of Object.entries(snapshot)) {
+    snapshot[parentPath] = markGitIgnoredNodes(nodes, gitIgnoredPaths);
+  }
   return { tree: snapshot, truncated: budget.truncated, warnings: Array.from(new Set(budget.warnings)) };
 }
 
@@ -251,6 +271,8 @@ async function collectTreeSnapshot(
   gitStatuses: Map<string, GitStatus>,
   snapshot: TreeSnapshot,
   visitedRealPaths: Set<string>,
+  gitIgnoreCandidatePaths: string[],
+  pathTraversesSymbolicLink: boolean,
   budget: TreeSnapshotBudget,
   depth: number,
 ): Promise<void> {
@@ -264,6 +286,7 @@ async function collectTreeSnapshot(
     return;
   }
   const nodesByPath = new Map<string, TreeNode>();
+  const symbolicLinkPaths = new Set<string>();
   if (parentRealPath) {
     if (visitedRealPaths.has(parentRealPath)) {
       snapshot[parentPath] = [];
@@ -279,6 +302,7 @@ async function collectTreeSnapshot(
     for (const entry of entries) {
       const childRelativePath = joinRelativePath(parentPath, entry.name);
       if (isExcludedPath(repo, childRelativePath)) continue;
+      if (entry.isSymbolicLink()) symbolicLinkPaths.add(childRelativePath);
 
       const childAbsolutePath = path.join(parentRealPath, entry.name);
       const childRealPath = await resolveChildRealPath(childAbsolutePath);
@@ -309,6 +333,10 @@ async function collectTreeSnapshot(
     truncateTreeSnapshot(budget, "Tree snapshot reached its node, byte, or time limit.");
   }
   snapshot[parentPath] = nodes;
+  // Git can check the symbolic-link entry itself, but aborts on descendants whose path traverses that link.
+  if (!pathTraversesSymbolicLink) {
+    gitIgnoreCandidatePaths.push(...nodes.map((node) => node.path));
+  }
 
   for (const node of nodes) {
     if (node.type !== "directory") continue;
@@ -317,7 +345,19 @@ async function collectTreeSnapshot(
       throw error;
     });
     if (!childRealPath && !hasGitChildStatus(gitStatuses, node.path)) continue;
-    await collectTreeSnapshot(repo, node.path, childRealPath, rootRealPath, gitStatuses, snapshot, visitedRealPaths, budget, depth + 1);
+    await collectTreeSnapshot(
+      repo,
+      node.path,
+      childRealPath,
+      rootRealPath,
+      gitStatuses,
+      snapshot,
+      visitedRealPaths,
+      gitIgnoreCandidatePaths,
+      pathTraversesSymbolicLink || symbolicLinkPaths.has(node.path),
+      budget,
+      depth + 1,
+    );
   }
 }
 
@@ -566,6 +606,99 @@ async function readGitStatuses(repo: RepositoryConfig): Promise<Map<string, GitS
   } catch {
     return new Map();
   }
+}
+
+type GitIgnoreReadOptions = {
+  timeoutMs?: number;
+  maxOutputBytes?: number;
+};
+
+export async function readGitIgnoredPaths(root: string, relativePaths: string[], options: GitIgnoreReadOptions = {}): Promise<Set<string>> {
+  const candidates = Array.from(new Set(relativePaths.map(normalizeGitRelativePath).filter(Boolean)));
+  if (!candidates.length) return new Set();
+
+  const candidateSet = new Set(candidates);
+  const timeoutMs = options.timeoutMs ?? GIT_READ_TIMEOUT_MS;
+  const maxOutputBytes = options.maxOutputBytes ?? GIT_IGNORE_MAX_OUTPUT_BYTES;
+
+  return new Promise((resolve) => {
+    let child: ReturnType<typeof spawn>;
+    try {
+      child = spawn(
+        "git",
+        ["-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false", "-C", root, "check-ignore", "-z", "--stdin"],
+        { env: GIT_READ_ENV, stdio: ["pipe", "pipe", "ignore"] },
+      );
+    } catch {
+      resolve(new Set());
+      return;
+    }
+    const gitStdin = child.stdin;
+    const gitStdout = child.stdout;
+    if (!gitStdin || !gitStdout) {
+      try {
+        child.kill();
+      } catch {
+        // The Git process is already unavailable. The tree remains readable.
+      }
+      resolve(new Set());
+      return;
+    }
+
+    let settled = false;
+    let outputBytes = 0;
+    const outputChunks: Buffer[] = [];
+    let timer: NodeJS.Timeout | undefined;
+
+    const settle = (failed: boolean) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      if (failed) {
+        try {
+          if (child.exitCode === null && !child.killed) child.kill();
+        } catch {
+          // The Git process is already unavailable. The tree remains readable.
+        }
+        resolve(new Set());
+        return;
+      }
+
+      const ignoredPaths = new Set<string>();
+      for (const rawPath of Buffer.concat(outputChunks).toString("utf8").split("\0")) {
+        const relativePath = normalizeGitRelativePath(rawPath);
+        if (relativePath && candidateSet.has(relativePath)) ignoredPaths.add(relativePath);
+      }
+      resolve(ignoredPaths);
+    };
+
+    child.once("error", () => settle(true));
+    gitStdin.once("error", () => settle(true));
+    gitStdout.once("error", () => settle(true));
+    gitStdout.on("data", (chunk: Buffer | string) => {
+      if (settled) return;
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      outputBytes += buffer.byteLength;
+      if (outputBytes > maxOutputBytes) {
+        settle(true);
+        return;
+      }
+      outputChunks.push(buffer);
+    });
+    child.once("close", (code, signal) => settle(code !== 0 || signal !== null));
+    timer = setTimeout(() => settle(true), timeoutMs);
+    timer.unref?.();
+
+    try {
+      gitStdin.end(Buffer.from(`${candidates.join("\0")}\0`, "utf8"));
+    } catch {
+      settle(true);
+    }
+  });
+}
+
+function markGitIgnoredNodes(nodes: TreeNode[], ignoredPaths: Set<string>): TreeNode[] {
+  return nodes.map((node) => ignoredPaths.has(node.path) && !node.gitStatus ? { ...node, gitIgnored: true } : node);
 }
 
 async function isGitWorkTree(root: string): Promise<boolean> {
